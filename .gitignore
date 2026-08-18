@@ -1,0 +1,24 @@
+# UE generated
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+Build/
+
+# IDE / project files
+.vscode/
+.idea/
+.vs/
+*.code-workspace
+compile_commands.json
+.cache/
+*.sln
+Makefile
+CMakeLists.txt
+*.pro
+*.pri
+.ignore
+
+# Crash/logs
+*.log
+crashinfo--*
