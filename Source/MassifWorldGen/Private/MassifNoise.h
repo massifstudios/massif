@@ -15,6 +15,10 @@ namespace MassifNoise
 	/** Standard fractional Brownian motion, roughly [-1, 1]. */
 	float Fractal(float X, float Y, uint32 Seed, int32 OctaveCount, float Lacunarity, float Gain);
 
-	/** Ridged multifractal in [0, 1]; high values form sharp ridge lines. */
-	float RidgedFractal(float X, float Y, uint32 Seed, int32 OctaveCount, float Lacunarity, float Gain);
+	/**
+	 * Ridged multifractal in [0, 1]; high values form ridge lines.
+	 * SharpnessExponent shapes each octave's ridge profile: 1.0 gives soft
+	 * rounded crests, 2.0 gives knife edges.
+	 */
+	float RidgedFractal(float X, float Y, uint32 Seed, int32 OctaveCount, float Lacunarity, float Gain, float SharpnessExponent);
 }

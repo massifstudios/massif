@@ -27,14 +27,25 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 
 	/** Broad uplift features per map side; low values give few large massifs. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
-	float UpliftFrequency = 2.0f;
+	float UpliftFrequency = 1.5f;
 
 	/** Ridge features per map side. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
-	float RidgeFrequency = 6.0f;
+	float RidgeFrequency = 3.5f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
-	int32 RidgeOctaveCount = 8;
+	int32 RidgeOctaveCount = 4;
+
+	/** Ridge crest profile: 1.0 soft and rounded, 2.0 knife edges. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
+	float RidgeSharpness = 1.0f;
+
+	/** Medium-scale surface relief features per map side (spurs, gullies, knolls). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
+	float DetailFrequency = 24.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
+	float DetailAmplitudeMeters = 70.0f;
 
 	/** Domain warp displacement as a fraction of map size. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")

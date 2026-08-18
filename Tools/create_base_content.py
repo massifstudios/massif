@@ -14,10 +14,10 @@ ROCK_COLOR = (0.145, 0.135, 0.125)
 SNOW_COLOR = (0.905, 0.925, 0.965)
 GRASS_COLOR = (0.075, 0.145, 0.055)
 
-SNOW_LINE_METERS = 2100.0
-SNOW_BAND_METERS = 180.0
-GRASS_LINE_METERS = 1750.0
-GRASS_BAND_METERS = 250.0
+SNOW_LINE_METERS = 1500.0
+SNOW_BAND_METERS = 300.0
+GRASS_LINE_METERS = 1350.0
+GRASS_BAND_METERS = 200.0
 
 
 def create_level():
@@ -69,11 +69,11 @@ def make_flatness(material):
     connect(vertex_normal, "", mask_z, "")
 
     threshold = expr(material, unreal.MaterialExpressionSubtract, -1200, 100)
-    threshold.set_editor_property("const_b", 0.70)
+    threshold.set_editor_property("const_b", 0.62)
     connect(mask_z, "", threshold, "A")
 
     sharpen = expr(material, unreal.MaterialExpressionMultiply, -1000, 100)
-    sharpen.set_editor_property("const_b", 5.0)
+    sharpen.set_editor_property("const_b", 3.0)
     connect(threshold, "", sharpen, "A")
 
     saturate = expr(material, unreal.MaterialExpressionSaturate, -800, 100)
@@ -110,8 +110,8 @@ def color_constant(material, rgb, x, y):
 
 def create_material():
     if unreal.EditorAssetLibrary.does_asset_exist(MATERIAL_PATH):
-        unreal.log("Material already exists: " + MATERIAL_PATH)
-        return
+        unreal.EditorAssetLibrary.delete_asset(MATERIAL_PATH)
+        unreal.log("Deleted existing material for recreation: " + MATERIAL_PATH)
     asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
     material = asset_tools.create_asset(
         "M_Terrain", "/Game/Materials", unreal.Material, unreal.MaterialFactoryNew()

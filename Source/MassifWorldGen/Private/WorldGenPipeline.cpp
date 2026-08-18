@@ -10,6 +10,7 @@ namespace
 		FWorldGenConfig Config;
 		uint32 UpliftSeed = 0;
 		uint32 RidgeSeed = 0;
+		uint32 DetailSeed = 0;
 		uint32 WarpSeedX = 0;
 		uint32 WarpSeedY = 0;
 
@@ -19,6 +20,7 @@ namespace
 			const FMassifSeed Seed(static_cast<uint32>(InConfig.MasterSeed));
 			UpliftSeed = Seed.MakeChannelSeed(TEXT("WorldGen.Uplift"));
 			RidgeSeed = Seed.MakeChannelSeed(TEXT("WorldGen.Ridge"));
+			DetailSeed = Seed.MakeChannelSeed(TEXT("WorldGen.Detail"));
 			WarpSeedX = Seed.MakeChannelSeed(TEXT("WorldGen.WarpX"));
 			WarpSeedY = Seed.MakeChannelSeed(TEXT("WorldGen.WarpY"));
 		}
@@ -33,15 +35,22 @@ namespace
 
 			const float UpliftNoise = MassifNoise::Fractal(
 				WarpedX * Config.UpliftFrequency, WarpedY * Config.UpliftFrequency, UpliftSeed, 3, 2.0f, 0.5f);
-			const float Uplift = 0.5f + 0.5f * UpliftNoise;
+			const float Uplift = FMath::Clamp(0.5f + 0.5f * UpliftNoise, 0.0f, 1.0f);
 
 			const float Ridged = MassifNoise::RidgedFractal(
 				WarpedX * Config.RidgeFrequency, WarpedY * Config.RidgeFrequency,
-				RidgeSeed, Config.RidgeOctaveCount, 2.0f, 0.5f);
+				RidgeSeed, Config.RidgeOctaveCount, 2.0f, 0.5f, Config.RidgeSharpness);
 
-			const float Combined = Uplift * (0.35f + 0.65f * Ridged);
-			const float Shaped = FMath::Clamp(Combined, 0.0f, 1.0f) * EdgeFalloff(UnitX, UnitY);
-			return Config.MinAltitudeMeters + Shaped * (Config.MaxAltitudeMeters - Config.MinAltitudeMeters);
+			const float Relief = FMath::Clamp(Uplift * (0.30f + 0.70f * Ridged), 0.0f, 1.0f);
+			// Smoothstep widens valley floors and rounds summits while keeping mid-slope contrast.
+			const float Shaped = Relief * Relief * (3.0f - 2.0f * Relief) * EdgeFalloff(UnitX, UnitY);
+
+			const float DetailNoise = MassifNoise::Fractal(
+				WarpedX * Config.DetailFrequency, WarpedY * Config.DetailFrequency, DetailSeed, 5, 2.0f, 0.5f);
+			const float DetailMeters = DetailNoise * Config.DetailAmplitudeMeters * (0.6f + 0.4f * Shaped);
+
+			const float BaseAltitude = Config.MinAltitudeMeters + Shaped * (Config.MaxAltitudeMeters - Config.MinAltitudeMeters);
+			return FMath::Clamp(BaseAltitude + DetailMeters, Config.MinAltitudeMeters, Config.MaxAltitudeMeters);
 		}
 
 		float EdgeFalloff(float UnitX, float UnitY) const

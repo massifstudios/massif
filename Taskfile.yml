@@ -1,0 +1,39 @@
+version: '3'
+
+vars:
+  ENGINE: /mnt/storage/UnrealEngine/5.8.1
+  PROJECT: '{{.TASKFILE_DIR}}/Massif.uproject'
+
+tasks:
+  build:
+    desc: Compile Development Editor binaries
+    cmds:
+      - '{{.ENGINE}}/Engine/Build/BatchFiles/Linux/Build.sh MassifEditor Linux Development -project={{.PROJECT}} -NoHotReloadFromIDE'
+
+  test:
+    desc: Build, then run the Massif automation suite headless
+    deps: [build]
+    cmds:
+      - UnrealEditor-Cmd {{.PROJECT}} -ExecCmds="Automation RunTests Massif; Quit" -nullrhi -unattended -nosplash -log
+
+  run:
+    desc: 'Build, then run the game windowed. Optional seed: task run SEED=42'
+    deps: [build]
+    cmds:
+      - UnrealEditor {{.PROJECT}} -game -windowed -resx=1920 -resy=1080 {{if .SEED}}-MassifSeed={{.SEED}}{{end}}
+
+  editor:
+    desc: Open the project in the Unreal editor
+    cmds:
+      - UnrealEditor {{.PROJECT}}
+
+  screenshot:
+    desc: 'Offscreen debug screenshot to Saved/Screenshots. Optional: task screenshot SEED=42'
+    deps: [build]
+    cmds:
+      - UnrealEditor {{.PROJECT}} -game -RenderOffscreen -resx=1600 -resy=900 -MassifScreenshotAfter=30 {{if .SEED}}-MassifSeed={{.SEED}}{{end}}
+
+  content:
+    desc: Regenerate base content assets (L_Massif map, M_Terrain material)
+    cmds:
+      - UnrealEditor-Cmd {{.PROJECT}} -run=pythonscript -script={{.TASKFILE_DIR}}/Tools/create_base_content.py -unattended -nosplash -nullrhi

@@ -73,7 +73,7 @@ float MassifNoise::Fractal(float X, float Y, uint32 Seed, int32 OctaveCount, flo
 	return Sum / AmplitudeSum;
 }
 
-float MassifNoise::RidgedFractal(float X, float Y, uint32 Seed, int32 OctaveCount, float Lacunarity, float Gain)
+float MassifNoise::RidgedFractal(float X, float Y, uint32 Seed, int32 OctaveCount, float Lacunarity, float Gain, float SharpnessExponent)
 {
 	float Sum = 0.0f;
 	float Amplitude = 1.0f;
@@ -85,7 +85,7 @@ float MassifNoise::RidgedFractal(float X, float Y, uint32 Seed, int32 OctaveCoun
 	{
 		const float Noise = GradientNoise(X * Frequency, Y * Frequency, Seed + static_cast<uint32>(Octave) * 0x85EBCA6Bu);
 		float Ridge = 1.0f - FMath::Abs(Noise);
-		Ridge = Ridge * Ridge * RidgeWeight;
+		Ridge = FMath::Pow(Ridge, SharpnessExponent) * RidgeWeight;
 
 		Sum += Ridge * Amplitude;
 		AmplitudeSum += Amplitude;

@@ -69,17 +69,31 @@ void AMassifGameMode::ScheduleDebugScreenshot()
 		return;
 	}
 
-	FTimerHandle ScreenshotTimer;
-	GetWorldTimerManager().SetTimer(ScreenshotTimer, []()
+	FTimerHandle ProfileShotTimer;
+	GetWorldTimerManager().SetTimer(ProfileShotTimer, []()
 	{
-		FScreenshotRequest::RequestScreenshot(TEXT("MassifDebugShot"), false, false);
+		FScreenshotRequest::RequestScreenshot(TEXT("MassifShot_Profile"), false, false);
 	}, DelaySeconds, false);
+
+	FTimerHandle OverviewPoseTimer;
+	GetWorldTimerManager().SetTimer(OverviewPoseTimer, [this]()
+	{
+		APlayerController* PlayerController = GetWorld()->GetFirstPlayerController();
+		PlayerController->GetPawn()->SetActorLocation(FVector(0.0, 0.0, (SpawnAltitudeMeters + 2800.0) * 100.0));
+		PlayerController->SetControlRotation(FRotator(-55.0f, 90.0f, 0.0f));
+	}, DelaySeconds + 3.0f, false);
+
+	FTimerHandle OverviewShotTimer;
+	GetWorldTimerManager().SetTimer(OverviewShotTimer, []()
+	{
+		FScreenshotRequest::RequestScreenshot(TEXT("MassifShot_Overview"), false, false);
+	}, DelaySeconds + 6.0f, false);
 
 	FTimerHandle QuitTimer;
 	GetWorldTimerManager().SetTimer(QuitTimer, [this]()
 	{
 		GetWorld()->GetFirstPlayerController()->ConsoleCommand(TEXT("quit"));
-	}, DelaySeconds + 3.0f, false);
+	}, DelaySeconds + 9.0f, false);
 }
 
 void AMassifGameMode::SpawnEnvironmentActors()
@@ -115,7 +129,7 @@ void AMassifGameMode::GenerateWorldAndSpawnTerrain()
 		Config.MasterSeed, Config.Resolution, Config.Resolution,
 		FPlatformTime::Seconds() - GenerateStartSeconds, Result.ComputeHash());
 
-	SpawnAltitudeMeters = Config.MaxAltitudeMeters + 1200.0f;
+	SpawnAltitudeMeters = Config.MaxAltitudeMeters + 2200.0f;
 
 	AMassifTerrainManager* TerrainManager = GetWorld()->SpawnActor<AMassifTerrainManager>();
 	TerrainManager->Initialize(MakeShared<FWorldGenResult>(MoveTemp(Result)), LoadTerrainMaterial());
@@ -130,8 +144,8 @@ void AMassifGameMode::ConfigureSpectatorPawn()
 	}
 
 	APawn* Pawn = PlayerController->GetPawn();
-	Pawn->SetActorLocation(FVector(0.0, 0.0, SpawnAltitudeMeters * 100.0));
-	PlayerController->SetControlRotation(FRotator(-35.0f, 45.0f, 0.0f));
+	Pawn->SetActorLocation(FVector(0.0, -300000.0, SpawnAltitudeMeters * 100.0));
+	PlayerController->SetControlRotation(FRotator(-22.0f, 90.0f, 0.0f));
 
 	UFloatingPawnMovement* Movement = Cast<UFloatingPawnMovement>(Pawn->GetMovementComponent());
 	if (Movement != nullptr)
