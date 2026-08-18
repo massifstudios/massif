@@ -88,7 +88,8 @@ Runs at new-game time, seed-driven, no hardcoded maps.
 
 ```
 MasterSeed
-  └► Base heightfield: ridged/uplift fractal noise (compute shader)
+  └► Base heightfield: ridged/uplift fractal noise (CPU, ParallelFor —
+     bit-deterministic on every platform and testable under -nullrhi)
        └► Hydraulic erosion passes (compute, pipe/virtual-pipes model)
             └► Thermal erosion passes (compute)
                  └► Derived masks (compute + CPU readback):

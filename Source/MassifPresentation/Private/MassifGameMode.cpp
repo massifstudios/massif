@@ -1,0 +1,143 @@
+#include "MassifGameMode.h"
+
+#include "Components/DirectionalLightComponent.h"
+#include "Components/SkyAtmosphereComponent.h"
+#include "Components/SkyLightComponent.h"
+#include "Engine/DirectionalLight.h"
+#include "Engine/ExponentialHeightFog.h"
+#include "Engine/SkyLight.h"
+#include "GameFramework/PawnMovementComponent.h"
+#include "GameFramework/FloatingPawnMovement.h"
+#include "GameFramework/SpectatorPawn.h"
+#include "Materials/MaterialInterface.h"
+#include "Terrain/MassifTerrainManager.h"
+#include "UObject/SoftObjectPath.h"
+#include "WorldGenPipeline.h"
+
+namespace
+{
+	TAutoConsoleVariable<int32> CVarMassifSeed(
+		TEXT("massif.Seed"), 1337,
+		TEXT("Master seed for world generation. Takes effect on level restart."));
+
+	TAutoConsoleVariable<int32> CVarMassifWorldGenResolution(
+		TEXT("massif.WorldGenResolution"), 4097,
+		TEXT("Heightfield samples per side; (value - 1) must be divisible by 256."));
+
+	/** -MassifScreenshotAfter=N: debug screenshot after N seconds, then quit. Command-line
+	 *  arg instead of a cvar because -ExecCmds runs only after GameMode::BeginPlay. */
+	float GetAutoScreenshotDelaySeconds()
+	{
+		float DelaySeconds = 0.0f;
+		FParse::Value(FCommandLine::Get(), TEXT("MassifScreenshotAfter="), DelaySeconds);
+		return DelaySeconds;
+	}
+
+	UMaterialInterface* LoadTerrainMaterial()
+	{
+		const FSoftObjectPath MaterialPath(TEXT("/Game/Materials/M_Terrain.M_Terrain"));
+		UMaterialInterface* Material = Cast<UMaterialInterface>(MaterialPath.TryLoad());
+		if (Material != nullptr)
+		{
+			return Material;
+		}
+
+		UE_LOG(LogTemp, Warning, TEXT("M_Terrain missing, falling back to WorldGridMaterial"));
+		return LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/EngineMaterials/WorldGridMaterial.WorldGridMaterial"));
+	}
+}
+
+AMassifGameMode::AMassifGameMode()
+{
+	DefaultPawnClass = ASpectatorPawn::StaticClass();
+}
+
+void AMassifGameMode::BeginPlay()
+{
+	Super::BeginPlay();
+	GenerateWorldAndSpawnTerrain();
+	SpawnEnvironmentActors();
+	ConfigureSpectatorPawn();
+	ScheduleDebugScreenshot();
+}
+
+void AMassifGameMode::ScheduleDebugScreenshot()
+{
+	const float DelaySeconds = GetAutoScreenshotDelaySeconds();
+	if (DelaySeconds <= 0.0f)
+	{
+		return;
+	}
+
+	FTimerHandle ScreenshotTimer;
+	GetWorldTimerManager().SetTimer(ScreenshotTimer, []()
+	{
+		FScreenshotRequest::RequestScreenshot(TEXT("MassifDebugShot"), false, false);
+	}, DelaySeconds, false);
+
+	FTimerHandle QuitTimer;
+	GetWorldTimerManager().SetTimer(QuitTimer, [this]()
+	{
+		GetWorld()->GetFirstPlayerController()->ConsoleCommand(TEXT("quit"));
+	}, DelaySeconds + 3.0f, false);
+}
+
+void AMassifGameMode::SpawnEnvironmentActors()
+{
+	UWorld* World = GetWorld();
+
+	ADirectionalLight* Sun = World->SpawnActor<ADirectionalLight>();
+	Sun->SetMobility(EComponentMobility::Movable);
+	Sun->SetActorRotation(FRotator(-40.0f, 25.0f, 0.0f));
+	UDirectionalLightComponent* SunComponent = CastChecked<UDirectionalLightComponent>(Sun->GetLightComponent());
+	SunComponent->SetAtmosphereSunLight(true);
+
+	World->SpawnActor<ASkyAtmosphere>();
+
+	ASkyLight* SkyLight = World->SpawnActor<ASkyLight>();
+	SkyLight->GetLightComponent()->SetMobility(EComponentMobility::Movable);
+	SkyLight->GetLightComponent()->bRealTimeCapture = true;
+	SkyLight->GetLightComponent()->MarkRenderStateDirty();
+
+	World->SpawnActor<AExponentialHeightFog>();
+}
+
+void AMassifGameMode::GenerateWorldAndSpawnTerrain()
+{
+	FWorldGenConfig Config;
+	Config.MasterSeed = CVarMassifSeed.GetValueOnGameThread();
+	Config.Resolution = CVarMassifWorldGenResolution.GetValueOnGameThread();
+	FParse::Value(FCommandLine::Get(), TEXT("MassifSeed="), Config.MasterSeed);
+
+	const double GenerateStartSeconds = FPlatformTime::Seconds();
+	FWorldGenResult Result = FWorldGenPipeline::Generate(Config);
+	UE_LOG(LogTemp, Display, TEXT("WorldGen: seed %d, %dx%d heightfield in %.2f s, hash %016llx"),
+		Config.MasterSeed, Config.Resolution, Config.Resolution,
+		FPlatformTime::Seconds() - GenerateStartSeconds, Result.ComputeHash());
+
+	SpawnAltitudeMeters = Config.MaxAltitudeMeters + 1200.0f;
+
+	AMassifTerrainManager* TerrainManager = GetWorld()->SpawnActor<AMassifTerrainManager>();
+	TerrainManager->Initialize(MakeShared<FWorldGenResult>(MoveTemp(Result)), LoadTerrainMaterial());
+}
+
+void AMassifGameMode::ConfigureSpectatorPawn()
+{
+	APlayerController* PlayerController = GetWorld()->GetFirstPlayerController();
+	if (PlayerController == nullptr || PlayerController->GetPawn() == nullptr)
+	{
+		return;
+	}
+
+	APawn* Pawn = PlayerController->GetPawn();
+	Pawn->SetActorLocation(FVector(0.0, 0.0, SpawnAltitudeMeters * 100.0));
+	PlayerController->SetControlRotation(FRotator(-35.0f, 45.0f, 0.0f));
+
+	UFloatingPawnMovement* Movement = Cast<UFloatingPawnMovement>(Pawn->GetMovementComponent());
+	if (Movement != nullptr)
+	{
+		Movement->MaxSpeed = 30000.0f;
+		Movement->Acceleration = 60000.0f;
+		Movement->Deceleration = 120000.0f;
+	}
+}

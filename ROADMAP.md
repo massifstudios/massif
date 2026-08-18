@@ -25,16 +25,16 @@ commit.
 ### M1 — Base Heightfield & Terrain View
 - `MassifCore`: master seed, `HashCombine` channel derivation, state
   hashing utilities (needed for worldgen determinism tests).
-- Ridged/uplift fractal noise heightfield (compute shader + CPU readback
-  into `FWorldGenResult`).
+- Ridged/uplift fractal noise heightfield (CPU, deterministic, into
+  `FWorldGenResult`).
 - Chunked terrain meshes via Geometry Script (`UDynamicMeshComponent`),
   distance LOD, World Partition registration. Free-fly management camera
   (pan/zoom/rotate).
 - Height/slope query API against `FWorldGenResult` (sim consumes this
   later without touching meshes).
-- **Verify:** test — same seed → identical heightfield hash (CPU stages);
-  small-res GPU smoke test; manual — fly over a plausible massif, seed
-  change gives a different mountain.
+- **Verify:** test — same seed → identical heightfield hash, different
+  seed → different hash, height/slope queries sane; manual — fly over a
+  plausible massif, seed change gives a different mountain.
 
 ### M2 — Deterministic Sim Core
 - `MassifSim`: `UMassifSimSubsystem`, `FMassifSimState`, fixed 10 Hz tick
