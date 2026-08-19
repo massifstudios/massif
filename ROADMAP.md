@@ -44,22 +44,27 @@ commit.
   command applied on tick boundary, not mid-frame; speed change alters
   tick count, not tick delta.
 
-### M3 — Erosion & Masks
-- Hydraulic erosion (virtual pipes) + thermal erosion compute passes.
-- Derived masks: flow accumulation, deposition, slope, altitude bands →
-  semantic masks (forest, river, scree, rock face, buildable).
-- Debug visualization mode to view each mask on the terrain.
-- **Verify:** same-machine reproducibility test (two runs, same seed,
-  identical output hash); manual — valleys, drainage lines, scree below
-  rock faces look geologically plausible.
+### M3 — Erosion (GPU) 
+- Hydraulic erosion (virtual pipes model) + thermal erosion as compute
+  shader passes over the generated heightfield, results read back into
+  `FWorldGenResult`. Skipped gracefully under `-nullrhi`.
+- Erosion parameters in `FWorldGenConfig` (iteration counts, rain,
+  sediment capacity, talus angle).
+- **Verify:** GPU reproducibility test (two runs, same seed, identical
+  hash; auto-skips headless); CPU-stage tests unchanged; manual —
+  drainage gullies, smoothed flanks, sediment-flattened valley floors.
 
-### M4 — PCG Vegetation & Ground Cover
-- PCG graphs consuming semantic masks: forests (placeholder conifers),
-  river/stream decoration, scree fields, rock scatter.
-- Buildable-mask debug overlay.
-- **Verify:** manual — forests respect altitude/slope/river masks;
-  regeneration with same seed places identical instances; headless suite
-  still green (PCG is presentation-side).
+### M4 — Masks, Textured Terrain & PCG Forests
+- Derived masks from eroded terrain: flow accumulation, deposition,
+  slope → semantic masks (river, scree, forest, rock face, buildable);
+  debug visualization mode per mask.
+- Terrain material with real PBR texture sets (Polyhaven, CC0: rock,
+  snow, grass, scree) — triplanar, slope/altitude/mask blended.
+- PCG forests from the forest mask with realistic conifer models
+  (Polyhaven/CC0 or AI-generated), density by altitude to treeline,
+  deterministic per seed.
+- **Verify:** manual — masks match geology, forests and textures read
+  naturally; headless suite still green.
 
 ### M5 — Snow: Sim Grid + Visual Prototype
 - `FSnowGrid` in sim: snowfall and altitude/temperature-driven melt on

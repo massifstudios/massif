@@ -1,0 +1,299 @@
+// Hydraulic (virtual pipes, Mei et al. 2007) and thermal erosion kernels.
+// All heights/water in meters, cell size in meters, one thread per cell.
+
+#include "/Engine/Public/Platform.ush"
+
+Texture2D<float> TerrainIn;
+Texture2D<float> WaterIn;
+Texture2D<float> SedimentIn;
+Texture2D<float4> FluxIn;
+Texture2D<float2> VelocityIn;
+
+RWTexture2D<float> TerrainOut;
+RWTexture2D<float> WaterOut;
+RWTexture2D<float> SedimentOut;
+RWTexture2D<float4> FluxOut;
+RWTexture2D<float2> VelocityOut;
+
+uint2 GridSize;
+float CellSizeMeters;
+float DeltaTime;
+float RainRate;
+float EvaporationRate;
+float PipeCrossSection;
+float Gravity;
+float SedimentCapacityFactor;
+float DissolveRate;
+float DepositRate;
+float TalusTangent;
+float ThermalRate;
+float MaxWaterSpeed;
+float MaxErosionPerStep;
+float FluxDamping;
+
+static const int2 NeighborOffsets[4] =
+{
+	int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1)
+};
+
+bool IsInside(int2 Cell)
+{
+	return Cell.x >= 0 && Cell.y >= 0 && Cell.x < (int)GridSize.x && Cell.y < (int)GridSize.y;
+}
+
+// ---------------------------------------------------------------------------
+// Pass 1: rain.
+[numthreads(8, 8, 1)]
+void AddWaterCS(uint3 ThreadId : SV_DispatchThreadID)
+{
+	if (ThreadId.x >= GridSize.x || ThreadId.y >= GridSize.y)
+	{
+		return;
+	}
+	WaterOut[ThreadId.xy] = WaterIn[ThreadId.xy] + RainRate * DeltaTime;
+}
+
+// ---------------------------------------------------------------------------
+// Pass 2: outflow flux through virtual pipes (x = left, y = right, z = down, w = up).
+[numthreads(8, 8, 1)]
+void ComputeFluxCS(uint3 ThreadId : SV_DispatchThreadID)
+{
+	if (ThreadId.x >= GridSize.x || ThreadId.y >= GridSize.y)
+	{
+		return;
+	}
+	const int2 Cell = int2(ThreadId.xy);
+	const float SurfaceHeight = TerrainIn[Cell] + WaterIn[Cell];
+	const float4 OldFlux = FluxIn[Cell];
+
+	float4 NewFlux;
+	UNROLL
+	for (int Dir = 0; Dir < 4; ++Dir)
+	{
+		const int2 Neighbor = Cell + NeighborOffsets[Dir];
+		float HeightDifference;
+		if (IsInside(Neighbor))
+		{
+			HeightDifference = SurfaceHeight - (TerrainIn[Neighbor] + WaterIn[Neighbor]);
+		}
+		else
+		{
+			// Open boundary: water drains off the map edge.
+			HeightDifference = WaterIn[Cell];
+		}
+		const float Accelerated = OldFlux[Dir] * FluxDamping + DeltaTime * PipeCrossSection * Gravity * HeightDifference / CellSizeMeters;
+		NewFlux[Dir] = max(0.0f, Accelerated);
+	}
+
+	// Scale down so total outflow never exceeds the water in the cell.
+	const float TotalOutflow = NewFlux.x + NewFlux.y + NewFlux.z + NewFlux.w;
+	const float WaterVolume = WaterIn[Cell] * CellSizeMeters * CellSizeMeters;
+	if (TotalOutflow * DeltaTime > WaterVolume && TotalOutflow > 0.0f)
+	{
+		NewFlux *= WaterVolume / (TotalOutflow * DeltaTime);
+	}
+	FluxOut[Cell] = NewFlux;
+}
+
+// ---------------------------------------------------------------------------
+// Pass 3: water level and velocity from flux divergence.
+[numthreads(8, 8, 1)]
+void UpdateWaterCS(uint3 ThreadId : SV_DispatchThreadID)
+{
+	if (ThreadId.x >= GridSize.x || ThreadId.y >= GridSize.y)
+	{
+		return;
+	}
+	const int2 Cell = int2(ThreadId.xy);
+	const float4 Outflow = FluxIn[Cell];
+
+	float4 Inflow = float4(0, 0, 0, 0);
+	// Inflow from left neighbor's right pipe, right neighbor's left pipe, etc.
+	const int2 LeftCell = Cell + NeighborOffsets[0];
+	const int2 RightCell = Cell + NeighborOffsets[1];
+	const int2 DownCell = Cell + NeighborOffsets[2];
+	const int2 UpCell = Cell + NeighborOffsets[3];
+	Inflow.x = IsInside(LeftCell) ? FluxIn[LeftCell].y : 0.0f;
+	Inflow.y = IsInside(RightCell) ? FluxIn[RightCell].x : 0.0f;
+	Inflow.z = IsInside(DownCell) ? FluxIn[DownCell].w : 0.0f;
+	Inflow.w = IsInside(UpCell) ? FluxIn[UpCell].z : 0.0f;
+
+	const float CellArea = CellSizeMeters * CellSizeMeters;
+	const float TotalInflow = Inflow.x + Inflow.y + Inflow.z + Inflow.w;
+	const float TotalOutflow = Outflow.x + Outflow.y + Outflow.z + Outflow.w;
+	const float OldWater = WaterIn[Cell];
+	const float NewWater = max(0.0f, OldWater + DeltaTime * (TotalInflow - TotalOutflow) / CellArea);
+	WaterOut[Cell] = NewWater;
+
+	// Average water flow through the cell per axis drives sediment transport.
+	const float FlowX = 0.5f * (Inflow.x - Outflow.x + Outflow.y - Inflow.y);
+	const float FlowY = 0.5f * (Inflow.z - Outflow.z + Outflow.w - Inflow.w);
+	const float AverageDepth = max(0.01f, 0.5f * (OldWater + NewWater));
+	float2 Velocity = float2(FlowX, FlowY) / (AverageDepth * CellSizeMeters);
+	const float Speed = length(Velocity);
+	if (Speed > MaxWaterSpeed)
+	{
+		Velocity *= MaxWaterSpeed / Speed;
+	}
+	VelocityOut[Cell] = Velocity;
+}
+
+// ---------------------------------------------------------------------------
+// Pass 4: erosion / deposition against transport capacity.
+[numthreads(8, 8, 1)]
+void ErodeDepositCS(uint3 ThreadId : SV_DispatchThreadID)
+{
+	if (ThreadId.x >= GridSize.x || ThreadId.y >= GridSize.y)
+	{
+		return;
+	}
+	const int2 Cell = int2(ThreadId.xy);
+
+	// Local slope from central differences of terrain height.
+	const int2 LeftCell = int2(max(Cell.x - 1, 0), Cell.y);
+	const int2 RightCell = int2(min(Cell.x + 1, (int)GridSize.x - 1), Cell.y);
+	const int2 DownCell = int2(Cell.x, max(Cell.y - 1, 0));
+	const int2 UpCell = int2(Cell.x, min(Cell.y + 1, (int)GridSize.y - 1));
+	const float GradientX = (TerrainIn[RightCell] - TerrainIn[LeftCell]) / (2.0f * CellSizeMeters);
+	const float GradientY = (TerrainIn[UpCell] - TerrainIn[DownCell]) / (2.0f * CellSizeMeters);
+	const float SlopeSine = sqrt(GradientX * GradientX + GradientY * GradientY)
+		/ sqrt(1.0f + GradientX * GradientX + GradientY * GradientY);
+
+	const float Speed = length(VelocityIn[Cell]);
+	// Cells with almost no water must not erode: fade capacity in over the first centimeters of depth.
+	const float DepthFactor = saturate(WaterIn[Cell] / 0.05f);
+	const float Capacity = SedimentCapacityFactor * max(0.05f, SlopeSine) * Speed * DepthFactor;
+
+	const float OldSediment = SedimentIn[Cell];
+	float NewTerrain = TerrainIn[Cell];
+	float NewSediment = OldSediment;
+	if (OldSediment < Capacity)
+	{
+		const float Dissolved = min(DissolveRate * (Capacity - OldSediment), MaxErosionPerStep);
+		NewTerrain -= Dissolved;
+		NewSediment += Dissolved;
+	}
+	else
+	{
+		const float Deposited = min(DepositRate * (OldSediment - Capacity), MaxErosionPerStep);
+		NewTerrain += Deposited;
+		NewSediment -= Deposited;
+	}
+	TerrainOut[Cell] = NewTerrain;
+	SedimentOut[Cell] = NewSediment;
+}
+
+// ---------------------------------------------------------------------------
+// Pass 5: semi-Lagrangian sediment advection.
+[numthreads(8, 8, 1)]
+void AdvectSedimentCS(uint3 ThreadId : SV_DispatchThreadID)
+{
+	if (ThreadId.x >= GridSize.x || ThreadId.y >= GridSize.y)
+	{
+		return;
+	}
+	const int2 Cell = int2(ThreadId.xy);
+	const float2 Velocity = VelocityIn[Cell];
+	const float2 SourcePosition = float2(Cell) - Velocity * DeltaTime / CellSizeMeters;
+
+	const int2 Base = int2(floor(SourcePosition));
+	const float2 Fraction = SourcePosition - float2(Base);
+	float Total = 0.0f;
+	float WeightSum = 0.0f;
+	UNROLL
+	for (int OffsetY = 0; OffsetY <= 1; ++OffsetY)
+	{
+		UNROLL
+		for (int OffsetX = 0; OffsetX <= 1; ++OffsetX)
+		{
+			const int2 Sample = Base + int2(OffsetX, OffsetY);
+			if (!IsInside(Sample))
+			{
+				continue;
+			}
+			const float Weight = (OffsetX ? Fraction.x : 1.0f - Fraction.x) * (OffsetY ? Fraction.y : 1.0f - Fraction.y);
+			Total += SedimentIn[Sample] * Weight;
+			WeightSum += Weight;
+		}
+	}
+	SedimentOut[Cell] = WeightSum > 0.0f ? Total / WeightSum : 0.0f;
+}
+
+// ---------------------------------------------------------------------------
+// Pass 6: evaporation.
+[numthreads(8, 8, 1)]
+void EvaporateCS(uint3 ThreadId : SV_DispatchThreadID)
+{
+	if (ThreadId.x >= GridSize.x || ThreadId.y >= GridSize.y)
+	{
+		return;
+	}
+	WaterOut[ThreadId.xy] = WaterIn[ThreadId.xy] * max(0.0f, 1.0f - EvaporationRate * DeltaTime);
+}
+
+// ---------------------------------------------------------------------------
+// Thermal pass A: material outflow to lower neighbors past the talus angle.
+[numthreads(8, 8, 1)]
+void ThermalFluxCS(uint3 ThreadId : SV_DispatchThreadID)
+{
+	if (ThreadId.x >= GridSize.x || ThreadId.y >= GridSize.y)
+	{
+		return;
+	}
+	const int2 Cell = int2(ThreadId.xy);
+	const float Height = TerrainIn[Cell];
+
+	float4 Outflow = float4(0, 0, 0, 0);
+	float TotalDrop = 0.0f;
+	float MaxDrop = 0.0f;
+	UNROLL
+	for (int Dir = 0; Dir < 4; ++Dir)
+	{
+		const int2 Neighbor = Cell + NeighborOffsets[Dir];
+		if (!IsInside(Neighbor))
+		{
+			continue;
+		}
+		const float Drop = Height - TerrainIn[Neighbor];
+		if (Drop > TalusTangent * CellSizeMeters)
+		{
+			Outflow[Dir] = Drop;
+			TotalDrop += Drop;
+			MaxDrop = max(MaxDrop, Drop);
+		}
+	}
+	if (TotalDrop > 0.0f)
+	{
+		// Move a fraction of the largest over-talus drop per step, split by drop size.
+		// Independent of the hydraulic time step; ThermalRate < 1 keeps it stable.
+		const float MovedVolume = ThermalRate * 0.5f * (MaxDrop - TalusTangent * CellSizeMeters);
+		Outflow *= MovedVolume / TotalDrop;
+	}
+	FluxOut[Cell] = Outflow;
+}
+
+// ---------------------------------------------------------------------------
+// Thermal pass B: apply thermal in/outflow.
+[numthreads(8, 8, 1)]
+void ThermalApplyCS(uint3 ThreadId : SV_DispatchThreadID)
+{
+	if (ThreadId.x >= GridSize.x || ThreadId.y >= GridSize.y)
+	{
+		return;
+	}
+	const int2 Cell = int2(ThreadId.xy);
+	const float4 Outflow = FluxIn[Cell];
+
+	float Inflow = 0.0f;
+	const int2 LeftCell = Cell + NeighborOffsets[0];
+	const int2 RightCell = Cell + NeighborOffsets[1];
+	const int2 DownCell = Cell + NeighborOffsets[2];
+	const int2 UpCell = Cell + NeighborOffsets[3];
+	Inflow += IsInside(LeftCell) ? FluxIn[LeftCell].y : 0.0f;
+	Inflow += IsInside(RightCell) ? FluxIn[RightCell].x : 0.0f;
+	Inflow += IsInside(DownCell) ? FluxIn[DownCell].w : 0.0f;
+	Inflow += IsInside(UpCell) ? FluxIn[UpCell].z : 0.0f;
+
+	const float TotalOutflow = Outflow.x + Outflow.y + Outflow.z + Outflow.w;
+	TerrainOut[Cell] = TerrainIn[Cell] + Inflow - TotalOutflow;
+}

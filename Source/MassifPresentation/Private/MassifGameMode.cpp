@@ -12,6 +12,7 @@
 #include "Materials/MaterialInterface.h"
 #include "Terrain/MassifTerrainManager.h"
 #include "UObject/SoftObjectPath.h"
+#include "WorldGenDebugExport.h"
 #include "WorldGenPipeline.h"
 
 namespace
@@ -128,6 +129,28 @@ void AMassifGameMode::GenerateWorldAndSpawnTerrain()
 	UE_LOG(LogTemp, Display, TEXT("WorldGen: seed %d, %dx%d heightfield in %.2f s, hash %016llx"),
 		Config.MasterSeed, Config.Resolution, Config.Resolution,
 		FPlatformTime::Seconds() - GenerateStartSeconds, Result.ComputeHash());
+
+	float MaxNeighborDeltaMeters = 0.0f;
+	for (int32 Index = 0; Index + 1 < Result.HeightMeters.Num(); ++Index)
+	{
+		const bool bRowEnd = (Index % Result.Resolution) + 1 == Result.Resolution;
+		if (!bRowEnd)
+		{
+			MaxNeighborDeltaMeters = FMath::Max(MaxNeighborDeltaMeters,
+				FMath::Abs(Result.HeightMeters[Index + 1] - Result.HeightMeters[Index]));
+		}
+	}
+	UE_LOG(LogTemp, Display, TEXT("WorldGen sanity: max neighbor height delta %.1f m"), MaxNeighborDeltaMeters);
+
+	if (FParse::Param(FCommandLine::Get(), TEXT("MassifExportWorldGen")))
+	{
+		const FString ExportDirectory = FPaths::ProjectSavedDir() / TEXT("WorldGenDebug");
+		const bool bExported = FWorldGenDebugExport::SaveHeightfieldPngs(Result, ExportDirectory);
+		UE_LOG(LogTemp, Display, TEXT("WorldGen debug export %s: %s"),
+			bExported ? TEXT("written to") : TEXT("FAILED for"), *ExportDirectory);
+		FPlatformMisc::RequestExit(false);
+		return;
+	}
 
 	SpawnAltitudeMeters = Config.MaxAltitudeMeters + 2200.0f;
 

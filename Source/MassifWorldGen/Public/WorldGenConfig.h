@@ -54,4 +54,38 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	/** Fraction of the map edge over which height falls off to keep borders low. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
 	float EdgeFalloffFraction = 0.12f;
+
+	/** Hydraulic erosion simulation steps; 0 disables erosion entirely. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Erosion")
+	int32 HydraulicIterationCount = 600;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Erosion")
+	int32 ThermalIterationCount = 200;
+
+	/** Simulation step in seconds. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Erosion")
+	float ErosionDeltaTime = 0.02f;
+
+	/** Rainfall in meters of water per cell per second. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Erosion")
+	float RainRate = 0.008f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Erosion")
+	float EvaporationRate = 0.02f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Erosion")
+	float SedimentCapacityFactor = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Erosion")
+	float DissolveRate = 0.12f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Erosion")
+	float DepositRate = 0.3f;
+
+	/** Angle of repose for thermal erosion, degrees. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Erosion")
+	float TalusAngleDegrees = 34.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Erosion")
+	float ThermalRate = 0.5f;
 };

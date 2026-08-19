@@ -1,5 +1,6 @@
 #include "WorldGenPipeline.h"
 
+#include "GpuErosion.h"
 #include "MassifNoise.h"
 #include "MassifSeed.h"
 
@@ -86,6 +87,16 @@ FWorldGenResult FWorldGenPipeline::Generate(const FWorldGenConfig& Config)
 			Row[PixelX] = Sampler.SampleAltitude(static_cast<float>(PixelX) * UnitStep, UnitY);
 		}
 	});
+
+	const bool bWantsErosion = Config.HydraulicIterationCount > 0 || Config.ThermalIterationCount > 0;
+	if (bWantsErosion && FMassifGpuErosion::CanRun())
+	{
+		const double ErosionStartSeconds = FPlatformTime::Seconds();
+		const bool bEroded = FMassifGpuErosion::Run(Config, Result.HeightMeters);
+		UE_LOG(LogTemp, Display, TEXT("WorldGen erosion: %s in %.2f s (%d hydraulic, %d thermal iterations)"),
+			bEroded ? TEXT("applied") : TEXT("FAILED"), FPlatformTime::Seconds() - ErosionStartSeconds,
+			Config.HydraulicIterationCount, Config.ThermalIterationCount);
+	}
 
 	return Result;
 }
