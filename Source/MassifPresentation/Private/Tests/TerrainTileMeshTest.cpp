@@ -1,4 +1,5 @@
 #include "DynamicMesh/DynamicMesh3.h"
+#include "DynamicMesh/DynamicMeshAttributeSet.h"
 #include "MassifTerrainField.h"
 #include "Misc/AutomationTest.h"
 #include "Terrain/MassifTerrainTileMesh.h"
@@ -65,6 +66,46 @@ bool FTerrainTileMeshTest::RunTest(const FString& Parameters)
 		if (EdgeVertices.A < GridVertexCount && EdgeVertices.B < GridVertexCount)
 		{
 			AddError(TEXT("Terrain surface has an open boundary edge without a skirt"));
+			return false;
+		}
+	}
+
+	// Every skirt vertex must carry the normal of the boundary vertex directly
+	// above it, or the skirt walls shade as smears unrelated to the ground.
+	TMap<int32, FVector3f> VertexNormals;
+	const UE::Geometry::FDynamicMeshNormalOverlay* NormalOverlay = Mesh->Attributes()->PrimaryNormals();
+	for (const int32 TriangleId : Mesh->TriangleIndicesItr())
+	{
+		const UE::Geometry::FIndex3i Triangle = Mesh->GetTriangle(TriangleId);
+		const UE::Geometry::FIndex3i Elements = NormalOverlay->GetTriangle(TriangleId);
+		for (int32 Corner = 0; Corner < 3; ++Corner)
+		{
+			VertexNormals.Add(Triangle[Corner], NormalOverlay->GetElement(Elements[Corner]));
+		}
+	}
+
+	TMap<TPair<int64, int64>, int32> GridVertexByPlanPosition;
+	for (int32 VertexId = 0; VertexId < GridVertexCount; ++VertexId)
+	{
+		const FVector3d Position = Mesh->GetVertex(VertexId);
+		GridVertexByPlanPosition.Add(
+			TPair<int64, int64>(FMath::RoundToInt64(Position.X), FMath::RoundToInt64(Position.Y)), VertexId);
+	}
+
+	for (int32 VertexId = GridVertexCount; VertexId < Mesh->MaxVertexID(); ++VertexId)
+	{
+		const FVector3d Position = Mesh->GetVertex(VertexId);
+		const int32* SourceVertexId = GridVertexByPlanPosition.Find(
+			TPair<int64, int64>(FMath::RoundToInt64(Position.X), FMath::RoundToInt64(Position.Y)));
+		if (SourceVertexId == nullptr)
+		{
+			AddError(FString::Printf(TEXT("Skirt vertex %d does not hang below any grid vertex"), VertexId));
+			return false;
+		}
+		if (!VertexNormals[VertexId].Equals(VertexNormals[*SourceVertexId], KINDA_SMALL_NUMBER))
+		{
+			AddError(FString::Printf(TEXT("Skirt vertex %d has normal %s but the vertex above it has %s"),
+				VertexId, *VertexNormals[VertexId].ToString(), *VertexNormals[*SourceVertexId].ToString()));
 			return false;
 		}
 	}

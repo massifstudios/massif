@@ -74,7 +74,33 @@ namespace
 		}
 	}
 
-	void AppendSkirts(FDynamicMesh3& Mesh, double SkirtDropCentimeters)
+	/**
+	 * Boundary edge vertices ordered against the interior triangle's winding, so
+	 * a skirt built along them stays manifold and faces outward. GetEdgeV orders
+	 * by vertex index, which says nothing about winding.
+	 */
+	UE::Geometry::FIndex2i OutwardEdgeVertices(const FDynamicMesh3& Mesh, int32 EdgeId)
+	{
+		const UE::Geometry::FIndex2i EdgeVertices = Mesh.GetEdgeV(EdgeId);
+		const UE::Geometry::FIndex3i InteriorTriangle = Mesh.GetTriangle(Mesh.GetEdgeT(EdgeId).A);
+		for (int32 Corner = 0; Corner < 3; ++Corner)
+		{
+			const bool bInteriorRunsAToB =
+				InteriorTriangle[Corner] == EdgeVertices.A && InteriorTriangle[(Corner + 1) % 3] == EdgeVertices.B;
+			if (bInteriorRunsAToB)
+			{
+				return UE::Geometry::FIndex2i(EdgeVertices.B, EdgeVertices.A);
+			}
+		}
+		return EdgeVertices;
+	}
+
+	/**
+	 * Returns, for every vertex in the mesh, the grid vertex its normal comes
+	 * from: grid vertices map to themselves, skirt vertices to the boundary
+	 * vertex they hang from.
+	 */
+	TArray<int32> AppendSkirts(FDynamicMesh3& Mesh, double SkirtDropCentimeters)
 	{
 		TArray<int32> BoundaryEdges;
 		for (const int32 EdgeId : Mesh.BoundaryEdgeIndicesItr())
@@ -82,33 +108,30 @@ namespace
 			BoundaryEdges.Add(EdgeId);
 		}
 
+		TArray<int32> NormalSourceVertices;
+		NormalSourceVertices.SetNumUninitialized(Mesh.MaxVertexID() + 4 * BoundaryEdges.Num());
+		for (const int32 VertexId : Mesh.VertexIndicesItr())
+		{
+			NormalSourceVertices[VertexId] = VertexId;
+		}
+
 		for (const int32 EdgeId : BoundaryEdges)
 		{
-			UE::Geometry::FIndex2i EdgeVertices = Mesh.GetEdgeV(EdgeId);
-			// GetEdgeV order is by vertex index, not winding. The skirt has to run
-			// against the interior triangle's direction to stay manifold and face
-			// outward, so flip when the interior already runs A to B.
-			const UE::Geometry::FIndex3i InteriorTriangle = Mesh.GetTriangle(Mesh.GetEdgeT(EdgeId).A);
-			for (int32 Corner = 0; Corner < 3; ++Corner)
-			{
-				const bool bInteriorRunsAToB =
-					InteriorTriangle[Corner] == EdgeVertices.A && InteriorTriangle[(Corner + 1) % 3] == EdgeVertices.B;
-				if (bInteriorRunsAToB)
-				{
-					Swap(EdgeVertices.A, EdgeVertices.B);
-				}
-			}
-
+			const UE::Geometry::FIndex2i EdgeVertices = OutwardEdgeVertices(Mesh, EdgeId);
 			const FVector3d PositionA = Mesh.GetVertex(EdgeVertices.A);
 			const FVector3d PositionB = Mesh.GetVertex(EdgeVertices.B);
 			const int32 DroppedA = Mesh.AppendVertex(PositionA - FVector3d(0, 0, SkirtDropCentimeters));
 			const int32 DroppedB = Mesh.AppendVertex(PositionB - FVector3d(0, 0, SkirtDropCentimeters));
+			NormalSourceVertices[DroppedA] = EdgeVertices.A;
+			NormalSourceVertices[DroppedB] = EdgeVertices.B;
 			Mesh.AppendTriangle(EdgeVertices.A, EdgeVertices.B, DroppedB);
 			Mesh.AppendTriangle(EdgeVertices.A, DroppedB, DroppedA);
 		}
+		NormalSourceVertices.SetNum(Mesh.MaxVertexID());
+		return NormalSourceVertices;
 	}
 
-	void WriteGridNormals(FDynamicMesh3& Mesh, const FTileHeightGrid& Grid, int32 GridVertexCount)
+	void WriteGridNormals(FDynamicMesh3& Mesh, const FTileHeightGrid& Grid, const TArray<int32>& NormalSourceVertices)
 	{
 		Mesh.EnableAttributes();
 		FDynamicMeshNormalOverlay* NormalOverlay = Mesh.Attributes()->PrimaryNormals();
@@ -119,9 +142,7 @@ namespace
 		VertexToElement.SetNumUninitialized(Mesh.MaxVertexID());
 		for (const int32 VertexId : Mesh.VertexIndicesItr())
 		{
-			// Skirt vertices reuse the boundary normal of the vertex above them,
-			// which the grid lookup clamps to.
-			const int32 GridIndex = FMath::Min(VertexId, GridVertexCount - 1);
+			const int32 GridIndex = NormalSourceVertices[VertexId];
 			VertexToElement[VertexId] = NormalOverlay->AppendElement(
 				GridNormal(Grid, GridIndex % VerticesPerSide, GridIndex / VerticesPerSide));
 		}
@@ -155,10 +176,9 @@ TSharedPtr<FDynamicMesh3> MassifTerrainTileMesh::BuildTileMesh(
 	}
 	AppendGridTriangles(*Mesh, QuadsPerSide);
 
-	const int32 GridVertexCount = Mesh->VertexCount();
 	const double SkirtDropMeters = 4.0 + 2.0 * Grid.SpacingMeters;
-	AppendSkirts(*Mesh, SkirtDropMeters * MetersToCentimeters);
-	WriteGridNormals(*Mesh, Grid, GridVertexCount);
+	const TArray<int32> NormalSourceVertices = AppendSkirts(*Mesh, SkirtDropMeters * MetersToCentimeters);
+	WriteGridNormals(*Mesh, Grid, NormalSourceVertices);
 
 	return Mesh;
 }
