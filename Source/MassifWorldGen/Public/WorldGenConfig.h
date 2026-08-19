@@ -179,6 +179,65 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
 	float RidgeBlendMeters = 400.0f;
 
+	/** Spacing of the fluvial bake grid; 128 m over 150 km is ~1.4 M cells and tens of MB. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
+	float BakeCellSizeMeters = 128.0f;
+
+	/** Solve iterations before the surface is taken as quasi-steady. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
+	int32 BakeMaxIterationCount = 60;
+
+	/** Largest height change per iteration below which the solve stops early. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
+	float BakeConvergenceMeters = 0.5f;
+
+	/**
+	 * Erodibility and step size folded into one coefficient: the implicit
+	 * update uses F = factor * area^exponent / distance. Higher cuts channels
+	 * flatter and reaches steady state in fewer iterations.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
+	float BakeStreamPowerFactor = 0.5f;
+
+	/** Exponent on drained area in the stream power law. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
+	float BakeDrainageExponent = 0.5f;
+
+	/** Uplift added per iteration on a range axis; basins get none. This is what erosion works against. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
+	float BakeUpliftMetersPerStep = 15.0f;
+
+	/** 0..1 blend towards the four-neighbour mean each iteration, for softer interfluves. 0 disables. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
+	float BakeHillslopeSmoothing = 0.0f;
+
+	/** Drained area above which a cell counts as a channel and joins the river polylines. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
+	float RiverDrainageAreaThresholdSquareMeters = 4.0e6f;
+
+	/**
+	 * Channel cross-section from drained area, hydraulic-geometry style: floor
+	 * half width, side fade width and cut depth each scale with sqrt(area)
+	 * under a hard cap. The caps bound how far a carve query has to look.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Channels")
+	float ChannelWidthPerSqrtArea = 0.004f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Channels")
+	float ChannelMaxFloorHalfWidthMeters = 120.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Channels")
+	float ChannelSideWidthPerSqrtArea = 0.008f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Channels")
+	float ChannelMaxSideWidthMeters = 200.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Channels")
+	float ChannelDepthPerSqrtArea = 0.003f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Channels")
+	float ChannelNotchDepthCapMeters = 40.0f;
+
 	/** Gully scales the erosion filter cuts, coarsest first; 0 leaves the macro surface bare. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
 	int32 GullyOctaveCount = 6;
