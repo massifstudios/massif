@@ -50,7 +50,7 @@ void AMassifTerrainManager::ResetField(TSharedPtr<const FMassifTerrainField> InF
 	// Depth at which one more split would put vertices closer than the finest
 	// spacing worth rendering. 20 km with 64-quad tiles bottoms out around
 	// depth 11, or 15 cm between vertices.
-	const double WorldSizeMeters = Field->GetConfig().WorldSizeMeters;
+	const double WorldSizeMeters = Field->GetWorldSizeMeters();
 	MaxTreeDepth = 0;
 	double VertexSpacingMeters = WorldSizeMeters / TileQuadCount;
 	while (VertexSpacingMeters > FinestVertexSpacingMeters && MaxTreeDepth < 24)
@@ -65,7 +65,7 @@ void AMassifTerrainManager::ResetField(TSharedPtr<const FMassifTerrainField> InF
 
 TUniquePtr<AMassifTerrainManager::FQuadNode> AMassifTerrainManager::MakeNode(int32 Depth, int32 GridX, int32 GridY)
 {
-	const double WorldSizeMeters = Field->GetConfig().WorldSizeMeters;
+	const double WorldSizeMeters = Field->GetWorldSizeMeters();
 	const double SizeMeters = WorldSizeMeters / static_cast<double>(1 << Depth);
 
 	TUniquePtr<FQuadNode> Node = MakeUnique<FQuadNode>();

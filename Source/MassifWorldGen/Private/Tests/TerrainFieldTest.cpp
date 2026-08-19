@@ -1,70 +1,58 @@
-#include "MassifNoise.h"
+#include "MassifHeightmap.h"
 #include "MassifTerrainField.h"
 #include "Misc/AutomationTest.h"
 
 namespace
 {
-	/** A world small enough to build in a test, keeping the scale relationships of the real one. */
-	FWorldGenConfig MakeFieldTestConfig(int32 MasterSeed)
-	{
-		FWorldGenConfig Config;
-		Config.MasterSeed = MasterSeed;
-		Config.WorldSizeMeters = 24000.0f;
-		Config.RangeSpacingMeters = 9000.0f;
-		Config.RangeWarpWavelengthMeters = 12000.0f;
-		Config.RangeWarpMeters = 2500.0f;
-		return Config;
-	}
+	constexpr int32 FieldTestSide = 256;
+	constexpr double FieldTestSpacingMeters = 2.0;
+	constexpr double FieldTestFallPerSampleMeters = 1.5;
 
-	double TotalGullyDepthMeters(const FWorldGenConfig& Config)
+	TSharedRef<const FMassifTerrainField> MakeTestField()
 	{
-		double TotalMeters = 0.0;
-		double DepthMeters = Config.LargestGullyDepthMeters;
-		for (int32 Octave = 0; Octave < Config.GullyOctaveCount; ++Octave)
+		TArray<double> Altitudes;
+		Altitudes.Reserve(FieldTestSide * FieldTestSide);
+		for (int32 Row = 0; Row < FieldTestSide; ++Row)
 		{
-			TotalMeters += DepthMeters;
-			DepthMeters *= Config.GullyDepthGain;
+			for (int32 Column = 0; Column < FieldTestSide; ++Column)
+			{
+				// A flank falling east, with a ridge running across it, so
+				// normals point somewhere specific and slope varies.
+				Altitudes.Add(1500.0
+					- Column * FieldTestFallPerSampleMeters
+					+ 180.0 * FMath::Sin(Row * FieldTestSpacingMeters / 150.0));
+			}
 		}
-		return TotalMeters;
+		return MakeShared<const FMassifTerrainField>(
+			FMassifHeightmap::FromAltitudes(Altitudes, FieldTestSide, FieldTestSide, FieldTestSpacingMeters));
 	}
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainFieldChunkIndependenceTest,
-	"Massif.WorldGen.TerrainField.ChunkIndependence",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainFieldExtentTest,
+	"Massif.WorldGen.TerrainField.Extent",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
 
-bool FTerrainFieldChunkIndependenceTest::RunTest(const FString& Parameters)
+bool FTerrainFieldExtentTest::RunTest(const FString& Parameters)
 {
-	const FMassifTerrainField Field(MakeFieldTestConfig(1337));
-	const double Spacing = 4.0;
-	const FVector2d TileOrigin(-3200.0, 1100.0);
+	const TSharedRef<const FMassifTerrainField> Field = MakeTestField();
 
-	// The property the whole streaming scheme rests on: a tile evaluated on its
-	// own has to come out bit-identical to the same tile evaluated as part of
-	// something larger, and in any order. Anything cached between samples that
-	// depends on what was sampled before shows up here and nowhere else.
-	TArray<double> Alone;
-	Alone.Reserve(16 * 16);
-	for (int32 StepY = 0; StepY < 16; ++StepY)
+	TestEqual(TEXT("World size comes from the imported window"),
+		Field->GetWorldSizeMeters(), FieldTestSide * FieldTestSpacingMeters);
+	TestTrue(TEXT("Altitude band is non-empty"),
+		Field->GetMaxAltitudeMeters() > Field->GetMinAltitudeMeters());
+
+	// The quadtree measures its root tile against the world size, so ground has
+	// to exist over the whole of it, corners included.
+	const double HalfSizeMeters = Field->GetWorldSizeMeters() * 0.5;
+	for (int32 Step = 0; Step <= 32; ++Step)
 	{
-		for (int32 StepX = 0; StepX < 16; ++StepX)
+		const double Fraction = Step / 32.0;
+		const FVector2d Position(
+			-HalfSizeMeters + Fraction * 2.0 * HalfSizeMeters,
+			HalfSizeMeters - Fraction * 2.0 * HalfSizeMeters);
+		if (!FMath::IsFinite(Field->SampleHeightMeters(Position, 4.0)))
 		{
-			Alone.Add(Field.SampleHeightMeters(TileOrigin + FVector2d(StepX * Spacing, StepY * Spacing), Spacing));
-		}
-	}
-
-	// Same points, walked backwards, with far-away samples interleaved.
-	for (int32 Index = Alone.Num() - 1; Index >= 0; --Index)
-	{
-		const int32 StepX = Index % 16;
-		const int32 StepY = Index / 16;
-		Field.SampleHeightMeters(FVector2d(7000.0 - Index * 13.0, -5400.0 + Index * 7.0), 32.0);
-
-		const double Interleaved = Field.SampleHeightMeters(TileOrigin + FVector2d(StepX * Spacing, StepY * Spacing), Spacing);
-		if (Interleaved != Alone[Index])
-		{
-			AddError(FString::Printf(TEXT("Sample at tile cell (%d, %d) changed with evaluation order: %.9f then %.9f"),
-				StepX, StepY, Alone[Index], Interleaved));
+			AddError(FString::Printf(TEXT("No ground at (%.1f, %.1f)"), Position.X, Position.Y));
 			return false;
 		}
 	}
@@ -72,205 +60,35 @@ bool FTerrainFieldChunkIndependenceTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainFieldLodAgreementTest,
-	"Massif.WorldGen.TerrainField.LodAgreement",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainFieldNormalTest,
+	"Massif.WorldGen.TerrainField.Normal",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
 
-bool FTerrainFieldLodAgreementTest::RunTest(const FString& Parameters)
+bool FTerrainFieldNormalTest::RunTest(const FString& Parameters)
 {
-	const FWorldGenConfig Config = MakeFieldTestConfig(1337);
-	const FMassifTerrainField Field(Config);
-	const double AllowedMeters = TotalGullyDepthMeters(Config);
+	const TSharedRef<const FMassifTerrainField> Field = MakeTestField();
 
-	// A coarse sampling drops the octaves it cannot resolve, so it may differ
-	// from a fine one, but only by what those octaves could have carried. A
-	// bigger gap than that means the two are describing different ground, and
-	// clipmap rings meeting at a boundary would show a step.
-	double WorstDifference = 0.0;
-	for (int32 Step = 0; Step < 400; ++Step)
+	// The surface falls 1.5 m per 2 m eastward, so the normal leans west and
+	// the slope is the arctangent of that gradient. A sign error here is what
+	// makes foliage and placement validation read the ground backwards.
+	const double ExpectedSlopeDegrees = FMath::RadiansToDegrees(
+		FMath::Atan(FieldTestFallPerSampleMeters / FieldTestSpacingMeters));
+	double WorstSlopeErrorDegrees = 0.0;
+
+	for (int32 Step = 0; Step < 24; ++Step)
 	{
-		const FVector2d Position(-4000.0 + Step * 17.0, 2200.0 - Step * 11.0);
-		const double Fine = Field.SampleHeightMeters(Position, 1.0);
-		const double Coarse = Field.SampleHeightMeters(Position, 64.0);
-		WorstDifference = FMath::Max(WorstDifference, FMath::Abs(Fine - Coarse));
-	}
-	TestTrue(FString::Printf(TEXT("Coarse and fine samplings agree within the dropped octaves (%.1f m of %.1f m)"),
-		WorstDifference, AllowedMeters), WorstDifference <= AllowedMeters);
+		const FVector2d Position(-90.0 + Step * 3.0, 0.0);
+		const FVector3d Normal = Field->SampleNormal(Position, FieldTestSpacingMeters);
 
-	// Octave count must fall as spacing grows, and the finest kept must fade
-	// rather than switch, or the rings step where they meet.
-	float FinestWeight = 1.0f;
-	const int32 FineOctaves = Field.OctavesForSpacing(1.0, FinestWeight);
-	const int32 CoarseOctaves = Field.OctavesForSpacing(64.0, FinestWeight);
-	TestTrue(FString::Printf(TEXT("Coarse sampling drops octaves (%d at 1 m, %d at 64 m)"), FineOctaves, CoarseOctaves),
-		CoarseOctaves < FineOctaves);
+		TestTrue(TEXT("Normal is unit length"), FMath::IsNearlyEqual(Normal.Length(), 1.0, 1.0e-6));
+		TestTrue(TEXT("Normal points upward"), Normal.Z > 0.0);
+		TestTrue(TEXT("Normal leans west, away from the falling side"), Normal.X > 0.0);
 
-	double PreviousWeightedCount = -1.0;
-	for (double Spacing = 1.0; Spacing < 200.0; Spacing *= 1.15)
-	{
-		float Weight = 1.0f;
-		const double WeightedCount = Field.OctavesForSpacing(Spacing, Weight) - 1.0 + Weight;
-		if (PreviousWeightedCount >= 0.0 && WeightedCount > PreviousWeightedCount + 0.001)
-		{
-			AddError(FString::Printf(TEXT("Detail rose with spacing at %.2f m: %.3f octaves after %.3f"),
-				Spacing, WeightedCount, PreviousWeightedCount));
-			return false;
-		}
-		PreviousWeightedCount = WeightedCount;
+		const double SlopeDegrees = Field->SampleSlopeDegrees(Position, FieldTestSpacingMeters);
+		WorstSlopeErrorDegrees = FMath::Max(WorstSlopeErrorDegrees, FMath::Abs(SlopeDegrees - ExpectedSlopeDegrees));
 	}
 
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainFieldSurfaceTest,
-	"Massif.WorldGen.TerrainField.Surface",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
-
-bool FTerrainFieldSurfaceTest::RunTest(const FString& Parameters)
-{
-	const FWorldGenConfig Config = MakeFieldTestConfig(1337);
-	const FMassifTerrainField Field(Config);
-
-	// Tearing and pitting are what every failed version of the erosion filter
-	// produced, and both are invisible in a single sample. Sweeping a patch at
-	// the spacing the ground will actually be built at catches them.
-	const double Spacing = 2.0;
-	const int32 Side = 200;
-	TArray<double> Heights;
-	Heights.SetNumUninitialized(Side * Side);
-	for (int32 StepY = 0; StepY < Side; ++StepY)
-	{
-		for (int32 StepX = 0; StepX < Side; ++StepX)
-		{
-			Heights[StepY * Side + StepX] = Field.SampleHeightMeters(
-				FVector2d(-1000.0 + StepX * Spacing, 600.0 + StepY * Spacing), Spacing);
-		}
-	}
-
-	// A pit only counts when it is deep enough to be a hollow the ground cannot
-	// drain, not a centimetre dimple the stripe filter leaves on smooth slopes.
-	const double PitDepthFloorMeters = 0.25;
-	double MaxNeighborDelta = 0.0;
-	int32 PitCount = 0;
-	for (int32 StepY = 1; StepY < Side - 1; ++StepY)
-	{
-		for (int32 StepX = 1; StepX < Side - 1; ++StepX)
-		{
-			const int32 Index = StepY * Side + StepX;
-			const double Height = Heights[Index];
-			MaxNeighborDelta = FMath::Max(MaxNeighborDelta, FMath::Abs(Heights[Index + 1] - Height));
-			MaxNeighborDelta = FMath::Max(MaxNeighborDelta, FMath::Abs(Heights[Index + Side] - Height));
-			const double LowestNeighbor = FMath::Min(
-				FMath::Min(Heights[Index - 1], Heights[Index + 1]),
-				FMath::Min(Heights[Index - Side], Heights[Index + Side]));
-			PitCount += LowestNeighbor - Height > PitDepthFloorMeters;
-		}
-	}
-
-	const double PitFraction = static_cast<double>(PitCount) / static_cast<double>(Side * Side);
-	AddInfo(FString::Printf(TEXT("Max step %.1f m over %.0f m, %.3f%% pits"), MaxNeighborDelta, Spacing, 100.0 * PitFraction));
-	// Sharp gully creases on a steep base flank legitimately reach ~80 degrees
-	// between 2 m samples; a torn stripe pattern jumps by tens of meters. The
-	// bound sits between the two.
-	TestTrue(FString::Printf(TEXT("No cliffs between adjacent samples (%.1f m over %.0f m)"), MaxNeighborDelta, Spacing),
-		MaxNeighborDelta < 16.0);
-	TestTrue(FString::Printf(TEXT("Surface is not pitted (%.3f%%)"), 100.0 * PitFraction), PitFraction < 0.005);
-
-	for (const double Height : Heights)
-	{
-		if (!FMath::IsFinite(Height) || Height < Config.MinAltitudeMeters || Height > Config.MaxAltitudeMeters)
-		{
-			AddError(FString::Printf(TEXT("Height %f outside the configured altitude range"), Height));
-			return false;
-		}
-	}
-
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainFieldPrecisionTest,
-	"Massif.WorldGen.TerrainField.Precision",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
-
-bool FTerrainFieldPrecisionTest::RunTest(const FString& Parameters)
-{
-	// A float lattice coordinate 75 km out resolves only a fraction of a fine
-	// noise cell, so detail would quietly flatten with distance from the origin.
-	// Same noise, same wavelength, near the origin and far from it: the fine
-	// structure has to be as strong in both.
-	const double Wavelength = 2.0;
-	auto FineDetailRange = [Wavelength](double OffsetMeters)
-	{
-		float Lowest = TNumericLimits<float>::Max();
-		float Highest = TNumericLimits<float>::Lowest();
-		for (int32 Step = 0; Step < 512; ++Step)
-		{
-			const double Position = OffsetMeters + Step * 0.25;
-			const float Value = MassifNoise::GradientNoise(Position / Wavelength, 0.5, 12345u);
-			Lowest = FMath::Min(Lowest, Value);
-			Highest = FMath::Max(Highest, Value);
-		}
-		return Highest - Lowest;
-	};
-
-	const float NearOrigin = FineDetailRange(0.0);
-	const float FarOut = FineDetailRange(75000.0);
-	TestTrue(FString::Printf(TEXT("Detail survives 75 km from the origin (%.3f near, %.3f far)"), NearOrigin, FarOut),
-		FarOut > NearOrigin * 0.9f);
-
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainFieldKnobsTest,
-	"Massif.WorldGen.TerrainField.Knobs",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
-
-bool FTerrainFieldKnobsTest::RunTest(const FString& Parameters)
-{
-	// The live-tuning loop rebuilds the field with changed filter knobs; a knob
-	// change has to reach the ground somewhere or the sliders are dead.
-	const FWorldGenConfig Config = MakeFieldTestConfig(1337);
-	const FMassifTerrainField Baseline(Config);
-
-	FWorldGenConfig DeeperGullies = Config;
-	DeeperGullies.LargestGullyDepthMeters *= 2.0f;
-	const FMassifTerrainField Deeper(DeeperGullies);
-
-	bool bKnobChangeReachedGround = false;
-	for (int32 Step = 0; Step < 64; ++Step)
-	{
-		const FVector2d Position(-2000.0 + Step * 61.0, 900.0 - Step * 37.0);
-		bKnobChangeReachedGround |=
-			Deeper.SampleHeightMeters(Position, 2.0) != Baseline.SampleHeightMeters(Position, 2.0);
-	}
-	TestTrue(TEXT("Deeper gullies make different ground"), bKnobChangeReachedGround);
-
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainFieldDeterminismTest,
-	"Massif.WorldGen.TerrainField.Determinism",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
-
-bool FTerrainFieldDeterminismTest::RunTest(const FString& Parameters)
-{
-	const FMassifTerrainField FirstRun(MakeFieldTestConfig(1337));
-	const FMassifTerrainField SecondRun(MakeFieldTestConfig(1337));
-	const FMassifTerrainField OtherSeed(MakeFieldTestConfig(99));
-
-	bool bDifferedFromOtherSeed = false;
-	for (int32 Step = 0; Step < 64; ++Step)
-	{
-		const FVector2d Position(-2000.0 + Step * 61.0, 900.0 - Step * 37.0);
-		const double First = FirstRun.SampleHeightMeters(Position, 2.0);
-		if (First != SecondRun.SampleHeightMeters(Position, 2.0))
-		{
-			AddError(FString::Printf(TEXT("Same seed gave different ground at (%.0f, %.0f)"), Position.X, Position.Y));
-			return false;
-		}
-		bDifferedFromOtherSeed |= First != OtherSeed.SampleHeightMeters(Position, 2.0);
-	}
-	TestTrue(TEXT("A different seed makes different ground"), bDifferedFromOtherSeed);
-
+	TestTrue(FString::Printf(TEXT("Slope matches the surface gradient (%.3f deg off %.3f deg)"),
+		WorstSlopeErrorDegrees, ExpectedSlopeDegrees), WorstSlopeErrorDegrees < 1.0);
 	return true;
 }

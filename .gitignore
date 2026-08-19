@@ -28,3 +28,10 @@ Content/Textures/PolyHaven/
 
 # Poly Haven downloads: re-fetchable via Tools/fetch_polyhaven_models.py
 Content/Models/PolyHaven/
+
+# Imported elevation models: re-fetchable via Tools/fetch_tirol_dem.py
+Data/Terrain/
+
+# Python tool caches
+Tools/__pycache__/
+Tools/florasynth/node_modules/

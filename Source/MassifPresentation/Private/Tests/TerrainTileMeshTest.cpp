@@ -1,22 +1,9 @@
 #include "DynamicMesh/DynamicMesh3.h"
 #include "DynamicMesh/DynamicMeshAttributeSet.h"
 #include "MassifTerrainField.h"
+#include "MassifTestTerrain.h"
 #include "Misc/AutomationTest.h"
 #include "Terrain/MassifTerrainTileMesh.h"
-
-namespace
-{
-	FWorldGenConfig MakeTileTestConfig()
-	{
-		FWorldGenConfig Config;
-		Config.MasterSeed = 1337;
-		Config.WorldSizeMeters = 24000.0f;
-		Config.RangeSpacingMeters = 9000.0f;
-		Config.RangeWarpWavelengthMeters = 12000.0f;
-		Config.RangeWarpMeters = 2500.0f;
-		return Config;
-	}
-}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainTileMeshTest,
 	"Massif.Presentation.TerrainTileMesh",
@@ -24,13 +11,13 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainTileMeshTest,
 
 bool FTerrainTileMeshTest::RunTest(const FString& Parameters)
 {
-	const FMassifTerrainField Field(MakeTileTestConfig());
+	const TSharedRef<const FMassifTerrainField> Field = MassifTestTerrain::MakeField();
 	const FVector2d TileCenterMeters(-1500.0, 800.0);
 	const double TileSizeMeters = 128.0;
 	const int32 QuadsPerSide = 64;
 
 	const TSharedPtr<UE::Geometry::FDynamicMesh3> Mesh =
-		MassifTerrainTileMesh::BuildTileMesh(Field, TileCenterMeters, TileSizeMeters, QuadsPerSide);
+		MassifTerrainTileMesh::BuildTileMesh(*Field, TileCenterMeters, TileSizeMeters, QuadsPerSide);
 	if (!Mesh.IsValid())
 	{
 		AddError(TEXT("Tile mesh build returned nothing"));
@@ -49,7 +36,7 @@ bool FTerrainTileMeshTest::RunTest(const FString& Parameters)
 	{
 		const FVector3d LocalCentimeters = Mesh->GetVertex(VertexId);
 		const FVector2d WorldMeters = TileCenterMeters + FVector2d(LocalCentimeters.X, LocalCentimeters.Y) / 100.0;
-		const double ExpectedMeters = Field.SampleHeightMeters(WorldMeters, SpacingMeters);
+		const double ExpectedMeters = Field->SampleHeightMeters(WorldMeters, SpacingMeters);
 		if (!FMath::IsNearlyEqual(LocalCentimeters.Z / 100.0, ExpectedMeters, 0.001))
 		{
 			AddError(FString::Printf(TEXT("Vertex %d is at %.4f m where the field says %.4f m"),

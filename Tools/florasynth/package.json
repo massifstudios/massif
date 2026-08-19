@@ -1,0 +1,14 @@
+{
+  "name": "massif-florasynth-export",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Headless batch export of Florasynth tree models for Massif",
+  "type": "commonjs",
+  "scripts": {
+    "login": "node export_trees.js login",
+    "export": "node export_trees.js export"
+  },
+  "dependencies": {
+    "playwright": "^1.55.0"
+  }
+}

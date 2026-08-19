@@ -9,86 +9,23 @@
 #include "GameFramework/PawnMovementComponent.h"
 #include "GameFramework/FloatingPawnMovement.h"
 #include "GameFramework/SpectatorPawn.h"
-#include "Components/InputComponent.h"
-#include "Engine/GameViewportClient.h"
 #include "Foliage/MassifFoliageManager.h"
+#include "MassifHeightmap.h"
 #include "MassifTerrainField.h"
-#include "MassifTuningPanel.h"
 #include "Materials/MaterialInterface.h"
+#include "Misc/Paths.h"
 #include "Terrain/MassifTerrainManager.h"
 #include "UObject/SoftObjectPath.h"
-#include "Widgets/Layout/SBox.h"
-#include "WorldGenDebugExport.h"
-#include "WorldGenPipeline.h"
 
 namespace
 {
 	TAutoConsoleVariable<int32> CVarMassifSeed(
 		TEXT("massif.Seed"), 1337,
-		TEXT("Master seed for world generation. Takes effect on level restart."));
+		TEXT("Master seed for scattered content. Takes effect on level restart."));
 
-	TAutoConsoleVariable<int32> CVarMassifWorldGenResolution(
-		TEXT("massif.WorldGenResolution"), 4097,
-		TEXT("Heightfield samples per side; (value - 1) must be divisible by 256."));
-
-	// Erosion-filter knobs, live: a change rebuilds the terrain field once the
-	// value has settled. Defaults mirror FWorldGenConfig.
-	TAutoConsoleVariable<float> CVarMassifGullyDepth(
-		TEXT("massif.Gully.Depth"), 300.0f,
-		TEXT("Largest gully depth in meters — overall erosion-filter strength."));
-
-	TAutoConsoleVariable<float> CVarMassifGullyWavelength(
-		TEXT("massif.Gully.Wavelength"), 1800.0f,
-		TEXT("Spacing of the coarsest gullies in meters."));
-
-	TAutoConsoleVariable<float> CVarMassifGullyBranchStrength(
-		TEXT("massif.Gully.BranchStrength"), 0.5f,
-		TEXT("Gully weight: stripe amplitude and how strongly coarse gullies steer finer ones."));
-
-	TAutoConsoleVariable<float> CVarMassifGullyRidgeRounding(
-		TEXT("massif.Gully.RidgeRounding"), 0.1f,
-		TEXT("1 rounded cosine ridge, 0 pinched straight-sided edge."));
-
-	TAutoConsoleVariable<float> CVarMassifGullyCreaseRounding(
-		TEXT("massif.Gully.CreaseRounding"), 0.0f,
-		TEXT("1 rounded gully floor, 0 pinched crease."));
-
-	TAutoConsoleVariable<float> CVarMassifGullySlopeReference(
-		TEXT("massif.Gully.SlopeReference"), 0.35f,
-		TEXT("Surface gradient at which gullies cut to full depth."));
-
-	bool bMassifRegenerateRequested = false;
-
-	FAutoConsoleCommand CmdMassifRegenerate(
-		TEXT("massif.Regenerate"),
-		TEXT("Rebuild the terrain field, picking up massif.Seed."),
-		FConsoleCommandDelegate::CreateLambda([]()
-		{
-			bMassifRegenerateRequested = true;
-		}));
-
-	void ApplyGullyKnobCVars(FWorldGenConfig& Config)
-	{
-		Config.LargestGullyDepthMeters = CVarMassifGullyDepth.GetValueOnGameThread();
-		Config.LargestGullyWavelengthMeters = CVarMassifGullyWavelength.GetValueOnGameThread();
-		Config.GullyBranchStrength = CVarMassifGullyBranchStrength.GetValueOnGameThread();
-		Config.GullyRidgeRounding = CVarMassifGullyRidgeRounding.GetValueOnGameThread();
-		Config.GullyCreaseRounding = CVarMassifGullyCreaseRounding.GetValueOnGameThread();
-		Config.GullySlopeReference = CVarMassifGullySlopeReference.GetValueOnGameThread();
-	}
-
-	bool SameGullyKnobs(const FWorldGenConfig& Left, const FWorldGenConfig& Right)
-	{
-		return Left.LargestGullyDepthMeters == Right.LargestGullyDepthMeters
-			&& Left.LargestGullyWavelengthMeters == Right.LargestGullyWavelengthMeters
-			&& Left.GullyBranchStrength == Right.GullyBranchStrength
-			&& Left.GullyRidgeRounding == Right.GullyRidgeRounding
-			&& Left.GullyCreaseRounding == Right.GullyCreaseRounding
-			&& Left.GullySlopeReference == Right.GullySlopeReference;
-	}
-
-	/** Long enough that dragging a value in steps triggers one rebuild, not one per step. */
-	constexpr double GullyRebuildDebounceSeconds = 0.5;
+	TAutoConsoleVariable<FString> CVarMassifDem(
+		TEXT("massif.Dem"), TEXT("oetztal"),
+		TEXT("Elevation model under Data/Terrain, without the .massifdem suffix."));
 
 	/** Gap between posing the spectator and shooting, so the quadtree can stream the new view in. */
 	constexpr float DebugScreenshotSettleSeconds = 3.0f;
@@ -105,6 +42,20 @@ namespace
 		float DelaySeconds = 0.0f;
 		FParse::Value(FCommandLine::Get(), TEXT("MassifScreenshotAfter="), DelaySeconds);
 		return DelaySeconds;
+	}
+
+	uint32 GetMasterSeed()
+	{
+		int32 MasterSeed = CVarMassifSeed.GetValueOnGameThread();
+		FParse::Value(FCommandLine::Get(), TEXT("MassifSeed="), MasterSeed);
+		return static_cast<uint32>(MasterSeed);
+	}
+
+	FString GetHeightmapPath()
+	{
+		FString DemName = CVarMassifDem.GetValueOnGameThread();
+		FParse::Value(FCommandLine::Get(), TEXT("MassifDem="), DemName);
+		return FPaths::ProjectDir() / TEXT("Data/Terrain") / DemName + TEXT(".massifdem");
 	}
 
 	UMaterialInterface* LoadTerrainMaterial()
@@ -124,105 +75,43 @@ namespace
 AMassifGameMode::AMassifGameMode()
 {
 	DefaultPawnClass = ASpectatorPawn::StaticClass();
-	PrimaryActorTick.bCanEverTick = true;
 }
 
 void AMassifGameMode::BeginPlay()
 {
 	Super::BeginPlay();
-	GenerateWorldAndSpawnTerrain();
+	LoadTerrainAndSpawnManagers();
 	SpawnEnvironmentActors();
 	ConfigureSpectatorPawn();
 	ScheduleDebugScreenshot();
 }
 
-void AMassifGameMode::Tick(float DeltaSeconds)
+void AMassifGameMode::LoadTerrainAndSpawnManagers()
 {
-	Super::Tick(DeltaSeconds);
-	if (!TerrainField.IsValid() || TerrainManager == nullptr)
-	{
-		return;
-	}
-
-	if (bMassifRegenerateRequested)
-	{
-		bMassifRegenerateRequested = false;
-		PendingKnobsSinceSeconds = -1.0;
-		RebuildTerrainField(MakeWorldGenConfig());
-		return;
-	}
-
-	PollGullyKnobs();
-}
-
-void AMassifGameMode::PollGullyKnobs()
-{
-	FWorldGenConfig Desired = TerrainField->GetConfig();
-	ApplyGullyKnobCVars(Desired);
-	if (SameGullyKnobs(Desired, TerrainField->GetConfig()))
-	{
-		PendingKnobsSinceSeconds = -1.0;
-		return;
-	}
-
-	const double NowSeconds = FPlatformTime::Seconds();
-	const bool bKnobsMovedAgain = PendingKnobsSinceSeconds < 0.0 || !SameGullyKnobs(Desired, PendingKnobConfig);
-	if (bKnobsMovedAgain)
-	{
-		PendingKnobConfig = Desired;
-		PendingKnobsSinceSeconds = NowSeconds;
-	}
-	if (NowSeconds - PendingKnobsSinceSeconds < GullyRebuildDebounceSeconds)
-	{
-		return;
-	}
-
-	PendingKnobsSinceSeconds = -1.0;
-	RebuildTerrainField(Desired);
-}
-
-void AMassifGameMode::ToggleTuningPanel()
-{
-	UGameViewportClient* Viewport = GetWorld()->GetGameViewport();
-	APlayerController* PlayerController = GetWorld()->GetFirstPlayerController();
-	if (Viewport == nullptr || PlayerController == nullptr)
-	{
-		return;
-	}
-
-	if (bTuningPanelVisible)
-	{
-		Viewport->RemoveViewportWidgetContent(TuningPanel.ToSharedRef());
-		PlayerController->SetShowMouseCursor(false);
-		PlayerController->SetInputMode(FInputModeGameOnly());
-		bTuningPanelVisible = false;
-		return;
-	}
-
-	if (!TuningPanel.IsValid())
-	{
-		TuningPanel = SNew(SBox).HAlign(HAlign_Left).VAlign(VAlign_Top).Padding(FMargin(20.0f))
-		[
-			SNew(SBox).WidthOverride(430.0f)
-			[
-				SNew(SMassifTuningPanel)
-			]
-		];
-	}
-	Viewport->AddViewportWidgetContent(TuningPanel.ToSharedRef());
-	PlayerController->SetShowMouseCursor(true);
-	PlayerController->SetInputMode(FInputModeGameAndUI());
-	bTuningPanelVisible = true;
-}
-
-void AMassifGameMode::RebuildTerrainField(const FWorldGenConfig& Config)
-{
+	const FString HeightmapPath = GetHeightmapPath();
 	const double StartSeconds = FPlatformTime::Seconds();
-	TSharedPtr<const FMassifTerrainField> NewField = MakeShared<const FMassifTerrainField>(Config);
-	TerrainField = NewField;
-	TerrainManager->ResetField(NewField);
-	FoliageManager->ResetField(NewField, Config.MasterSeed);
-	UE_LOG(LogTemp, Display, TEXT("Terrain field rebuilt in %.2f s"), FPlatformTime::Seconds() - StartSeconds);
+
+	FString LoadError;
+	TSharedPtr<const FMassifHeightmap> Heightmap = FMassifHeightmap::LoadFromFile(HeightmapPath, LoadError);
+	if (!Heightmap.IsValid())
+	{
+		UE_LOG(LogTemp, Error, TEXT("Terrain: %s. Fetch one with Tools/fetch_tirol_dem.py."), *LoadError);
+		return;
+	}
+
+	TerrainField = MakeShared<const FMassifTerrainField>(Heightmap.ToSharedRef());
+	UE_LOG(LogTemp, Display, TEXT("Terrain: %s, %.0f m across, altitude %.0f-%.0f m, %d mips, loaded in %.2f s"),
+		*Heightmap->GetSourceInfo().Label, TerrainField->GetWorldSizeMeters(),
+		TerrainField->GetMinAltitudeMeters(), TerrainField->GetMaxAltitudeMeters(),
+		Heightmap->GetMipCount(), FPlatformTime::Seconds() - StartSeconds);
+
+	SpawnAltitudeMeters = static_cast<float>(TerrainField->GetMaxAltitudeMeters()) + 2200.0f;
+
+	TerrainManager = GetWorld()->SpawnActor<AMassifTerrainManager>();
+	TerrainManager->Initialize(TerrainField, LoadTerrainMaterial());
+
+	FoliageManager = GetWorld()->SpawnActor<AMassifFoliageManager>();
+	FoliageManager->Initialize(TerrainField, GetMasterSeed());
 }
 
 void AMassifGameMode::SchedulePosedScreenshot(
@@ -246,7 +135,7 @@ void AMassifGameMode::SchedulePosedScreenshot(
 void AMassifGameMode::ScheduleDebugScreenshot()
 {
 	const float DelaySeconds = GetAutoScreenshotDelaySeconds();
-	if (DelaySeconds <= 0.0f)
+	if (DelaySeconds <= 0.0f || !TerrainField.IsValid())
 	{
 		return;
 	}
@@ -295,73 +184,6 @@ void AMassifGameMode::SpawnEnvironmentActors()
 	World->SpawnActor<AExponentialHeightFog>();
 }
 
-void AMassifGameMode::ExportWorldGenDebug(const FWorldGenConfig& Config)
-{
-	FWorldGenResult Result = FWorldGenPipeline::Generate(Config);
-
-	float MaxNeighborDeltaMeters = 0.0f;
-	for (int32 Index = 0; Index + 1 < Result.HeightMeters.Num(); ++Index)
-	{
-		const bool bRowEnd = (Index % Result.Resolution) + 1 == Result.Resolution;
-		if (!bRowEnd)
-		{
-			MaxNeighborDeltaMeters = FMath::Max(MaxNeighborDeltaMeters,
-				FMath::Abs(Result.HeightMeters[Index + 1] - Result.HeightMeters[Index]));
-		}
-	}
-	float LowestMeters = TNumericLimits<float>::Max();
-	float HighestMeters = TNumericLimits<float>::Lowest();
-	for (const float HeightMeters : Result.HeightMeters)
-	{
-		LowestMeters = FMath::Min(LowestMeters, HeightMeters);
-		HighestMeters = FMath::Max(HighestMeters, HeightMeters);
-	}
-
-	const int32 LocalMinimumCount = Result.CountLocalMinima();
-	UE_LOG(LogTemp, Display, TEXT("WorldGen sanity: altitude %.0f-%.0f m, max neighbor height delta %.1f m, %d pits (%.3f%% of cells)"),
-		LowestMeters, HighestMeters, MaxNeighborDeltaMeters, LocalMinimumCount,
-		100.0f * static_cast<float>(LocalMinimumCount) / static_cast<float>(Result.HeightMeters.Num()));
-
-	const FString ExportDirectory = FPaths::ProjectSavedDir() / TEXT("WorldGenDebug");
-	const bool bExported = FWorldGenDebugExport::SaveHeightfieldPngs(Result, ExportDirectory);
-	UE_LOG(LogTemp, Display, TEXT("WorldGen debug export %s: %s"),
-		bExported ? TEXT("written to") : TEXT("FAILED for"), *ExportDirectory);
-	FPlatformMisc::RequestExit(false);
-}
-
-FWorldGenConfig AMassifGameMode::MakeWorldGenConfig() const
-{
-	FWorldGenConfig Config;
-	Config.MasterSeed = CVarMassifSeed.GetValueOnGameThread();
-	Config.Resolution = CVarMassifWorldGenResolution.GetValueOnGameThread();
-	FParse::Value(FCommandLine::Get(), TEXT("MassifSeed="), Config.MasterSeed);
-	ApplyGullyKnobCVars(Config);
-	return Config;
-}
-
-void AMassifGameMode::GenerateWorldAndSpawnTerrain()
-{
-	const FWorldGenConfig Config = MakeWorldGenConfig();
-	if (FParse::Param(FCommandLine::Get(), TEXT("MassifExportWorldGen")))
-	{
-		ExportWorldGenDebug(Config);
-		return;
-	}
-
-	const double FieldStartSeconds = FPlatformTime::Seconds();
-	TerrainField = MakeShared<const FMassifTerrainField>(Config);
-	UE_LOG(LogTemp, Display, TEXT("WorldGen: seed %d, terrain field over %.0f m built in %.2f s"),
-		Config.MasterSeed, Config.WorldSizeMeters, FPlatformTime::Seconds() - FieldStartSeconds);
-
-	SpawnAltitudeMeters = Config.MaxAltitudeMeters + 2200.0f;
-
-	TerrainManager = GetWorld()->SpawnActor<AMassifTerrainManager>();
-	TerrainManager->Initialize(TerrainField, LoadTerrainMaterial());
-
-	FoliageManager = GetWorld()->SpawnActor<AMassifFoliageManager>();
-	FoliageManager->Initialize(TerrainField, Config.MasterSeed);
-}
-
 void AMassifGameMode::ConfigureSpectatorPawn()
 {
 	APlayerController* PlayerController = GetWorld()->GetFirstPlayerController();
@@ -373,15 +195,6 @@ void AMassifGameMode::ConfigureSpectatorPawn()
 	APawn* Pawn = PlayerController->GetPawn();
 	Pawn->SetActorLocation(FVector(0.0, -300000.0, SpawnAltitudeMeters * 100.0));
 	PlayerController->SetControlRotation(FRotator(-22.0f, 90.0f, 0.0f));
-
-	if (PlayerController->InputComponent != nullptr)
-	{
-		PlayerController->InputComponent->BindKey(EKeys::F1, IE_Pressed, this, &AMassifGameMode::ToggleTuningPanel);
-	}
-	if (GEngine != nullptr)
-	{
-		GEngine->AddOnScreenDebugMessage(INDEX_NONE, 10.0f, FColor::White, TEXT("F1: terrain tuning panel"));
-	}
 
 	UFloatingPawnMovement* Movement = Cast<UFloatingPawnMovement>(Pawn->GetMovementComponent());
 	if (Movement != nullptr)

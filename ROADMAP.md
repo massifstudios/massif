@@ -3,9 +3,8 @@
 Current phase: **Phase 1 — Playable Winter Core**. Everything not listed
 under Phase 1 is out of scope until this file says otherwise.
 
-Phase 1 goal, end to end: enter a seed → generated massif with snow →
-place one lift and one slope → guest NPCs arrive, queue, ride up, ski
-down, repeat.
+Phase 1 goal, end to end: imported massif with snow → place one lift and one
+slope → guest NPCs arrive, queue, ride up, ski down, repeat.
 
 Each milestone must be runnable/testable in isolation, compile clean
 (Development Editor), pass the automation suite, and end in a pushed
@@ -153,6 +152,42 @@ milestone, per-tile from the sampled surface.
 - **Verify:** tests — field contract suite still green without the bake;
   knob changes reach the ground. Manual — fly-through; filter fidelity
   against the reference article is the active tuning question.
+- **Superseded by M5e.** The filter tuned convincingly at gully scale but
+  never at valley scale, and no setting made ground a resort could be built
+  in. Procedural macro relief is abandoned; terrain is imported.
+
+### M5e — Imported Terrain
+Procedural macro relief is abandoned. Three attempts (M3, M4b, M5d) never
+produced valleys that read as a real massif or that a resort could be built
+in; the world is now a real 20 × 20 km window of Tirol, refined from there.
+See ARCHITECTURE §5.
+
+- `Tools/fetch_tirol_dem.py`: fetches the Land Tirol laserscan terrain model
+  (CC BY 4.0) over a lat/lon window from its WCS, mosaics the request tiles,
+  and writes a `.massifdem` plus a hillshade preview. Pure stdlib + numpy, no
+  GDAL. Checks the window against the state boundary with one coarse request
+  before spending a full download on ground that is not there.
+- `FMassifHeightmap`: `.massifdem` loading, mip chain, Catmull-Rom sampling
+  with mip blending. `FMassifTerrainField` keeps its API and becomes the layer
+  stack over it.
+- Deleted: uplift field, fractal base relief, the analytic erosion filter,
+  `FWorldGenResult`/`FWorldGenPipeline`/`FWorldGenConfig`, the debug
+  heightfield export, and the F1 gully-tuning panel with its `massif.Gully.*`
+  cvars — the knobs tuned a surface that no longer exists.
+- **Verify:** tests — sample fidelity against the source altitudes, chunk
+  independence, LOD agreement and continuity across mip boundaries, border
+  behaviour, `.massifdem` format round-trip; all against an in-memory
+  heightmap, so a bare checkout stays green. Manual — 20 km of the Ötztal at
+  Sölden, 1168–3757 m, loads in 0.3 s and renders. **Done.**
+
+### M5f — Geological Refinement (next)
+Erosion over the imported surface: smooth scanner artefacts, cut detail below
+the 2 m source resolution, age the ground. Runs once at import over a finite
+grid and emits another `.massifdem` — a preprocessing step on measured data,
+never a solve in the query path (ARCHITECTURE §5.1.1).
+
+Diffusion-generated terrain (Infinite Diffusion) enters the same pipeline at
+the same point, through the same format.
 
 ### M6 — Masks, Textured Terrain & PCG Forests
 - Derived masks from eroded terrain: flow accumulation, deposition,

@@ -1,16 +1,12 @@
 #include "Foliage/MassifFoliageScatter.h"
 #include "Foliage/MassifFoliageSpecies.h"
 #include "MassifTerrainField.h"
+#include "MassifTestTerrain.h"
 #include "Misc/AutomationTest.h"
 
 namespace
 {
-	FWorldGenConfig MakeScatterTestConfig()
-	{
-		FWorldGenConfig Config;
-		Config.MasterSeed = 4711;
-		return Config;
-	}
+	constexpr uint32 ScatterTestSeed = 4711;
 
 	/** Tiles over a strip of the massif, enough that some of them land inside a species' band. */
 	constexpr int32 ScannedTilesPerSide = 6;
@@ -23,10 +19,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFoliageScatterTest,
 
 bool FFoliageScatterTest::RunTest(const FString& Parameters)
 {
-	const FWorldGenConfig Config = MakeScatterTestConfig();
-	const FMassifTerrainField Field(Config);
+	const TSharedRef<const FMassifTerrainField> Field = MassifTestTerrain::MakeField();
 	const FMassifFoliageSpecies& Species = MassifFoliage::Species[0];
-	const uint32 SpeciesSeed = MassifFoliageScatter::MakeSpeciesSeed(Config.MasterSeed, Species.Name);
+	const uint32 SpeciesSeed = MassifFoliageScatter::MakeSpeciesSeed(ScatterTestSeed, Species.Name);
 
 	int32 TotalInstanceCount = 0;
 	TArray<MassifFoliageScatter::FInstance> Instances;
@@ -34,7 +29,7 @@ bool FFoliageScatterTest::RunTest(const FString& Parameters)
 	{
 		const int32 TileX = TileIndex % ScannedTilesPerSide;
 		const int32 TileY = TileIndex / ScannedTilesPerSide;
-		MassifFoliageScatter::ScatterTile(Field, Species, SpeciesSeed, TileX, TileY, Instances);
+		MassifFoliageScatter::ScatterTile(*Field, Species, SpeciesSeed, TileX, TileY, Instances);
 		TotalInstanceCount += Instances.Num();
 
 		// Every plant stands on ground its species accepts, inside its own tile.
@@ -59,7 +54,7 @@ bool FFoliageScatterTest::RunTest(const FString& Parameters)
 					Instance.LocationMeters.Z, Species.MinAltitudeMeters, Species.MaxAltitudeMeters));
 				return false;
 			}
-			const double SlopeDegrees = Field.SampleSlopeDegrees(PositionMeters, GroundSampleSpacingMeters);
+			const double SlopeDegrees = Field->SampleSlopeDegrees(PositionMeters, GroundSampleSpacingMeters);
 			if (SlopeDegrees > Species.MaxSlopeDegrees)
 			{
 				AddError(FString::Printf(TEXT("Instance on %.1f deg ground exceeds the %.1f deg limit"),
@@ -83,8 +78,8 @@ bool FFoliageScatterTest::RunTest(const FString& Parameters)
 	// time the camera revisits it.
 	TArray<MassifFoliageScatter::FInstance> First;
 	TArray<MassifFoliageScatter::FInstance> Second;
-	MassifFoliageScatter::ScatterTile(Field, Species, SpeciesSeed, 3, 2, First);
-	MassifFoliageScatter::ScatterTile(Field, Species, SpeciesSeed, 3, 2, Second);
+	MassifFoliageScatter::ScatterTile(*Field, Species, SpeciesSeed, 3, 2, First);
+	MassifFoliageScatter::ScatterTile(*Field, Species, SpeciesSeed, 3, 2, Second);
 	if (First.Num() != Second.Num())
 	{
 		AddError(FString::Printf(TEXT("Rescattering the same tile gave %d then %d instances"),
@@ -106,7 +101,7 @@ bool FFoliageScatterTest::RunTest(const FString& Parameters)
 	// A different seed has to move the forest, or the seed is not reaching it.
 	TArray<MassifFoliageScatter::FInstance> OtherSeed;
 	MassifFoliageScatter::ScatterTile(
-		Field, Species, MassifFoliageScatter::MakeSpeciesSeed(Config.MasterSeed + 1, Species.Name), 3, 2, OtherSeed);
+		*Field, Species, MassifFoliageScatter::MakeSpeciesSeed(ScatterTestSeed + 1, Species.Name), 3, 2, OtherSeed);
 	const bool bMoved = OtherSeed.Num() != First.Num()
 		|| (First.Num() > 0 && !OtherSeed[0].LocationMeters.Equals(First[0].LocationMeters, 0.001));
 	TestTrue(TEXT("A different master seed scatters differently"), bMoved);

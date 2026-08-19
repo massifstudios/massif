@@ -72,10 +72,12 @@ and `MassifCore` tests must pass headless.
 - **Determinism test contract:** hash of `FMassifSimState` after N ticks
   from a given seed is identical across runs. An automation test enforces
   this for every sim system as it lands.
-- **Terrain and determinism.** The terrain field (§5) is CPU-only and
-  seed-driven. No gameplay-relevant value comes from a GPU pass. Compute
-  shaders may mirror the field for rendering, but their results are never
-  read back into sim.
+- **Terrain and determinism.** The terrain field (§5) is CPU-only and reads
+  a fixed imported elevation model, so it is deterministic by construction —
+  the same file gives the same ground on every machine, with none of the
+  float-reproducibility exposure a computed surface carries. No
+  gameplay-relevant value comes from a GPU pass. Compute shaders may mirror
+  the field for rendering, but their results are never read back into sim.
 - **Sim samples the terrain field only at fixed, named spacings.** The
   field is LOD-dependent by design, so sampling it at view LOD would make
   sim state depend on where the camera is. Sim therefore uses named
@@ -83,22 +85,41 @@ and `MassifCore` tests must pass headless.
   placement validation, `SimSurveySpacing` (4 m) for wide-area scans — and
   never a spacing derived from camera distance. Presentation samples freely
   at whatever LOD it needs.
-- The whole world is playable. Terrain holds no grids at all: every
-  sample is evaluated on demand from position and seed — 20 km at 25 cm
-  would already be 6.4 × 10^9 cells if materialised.
-- **Consequence, accepted:** terrain is no longer frozen into the save, so
-  a save carried to a machine whose float math differs would sit on
-  near-identical rather than identical ground. Single-player and offline,
-  so this only matters for shared saves, which is not a feature. Shared
-  *seeds* reproduce the same world on the same hardware class and a
-  near-identical world elsewhere. A bit-exact cross-platform
-  implementation stays out of scope.
+- The whole world is playable, and the elevation model covers all of it.
+- **Consequence, accepted:** the elevation model is a build asset, not save
+  data. A save records which model it was built on (§9); loading it against a
+  different or missing one is a hard error, not a silent regeneration onto
+  different ground.
 
 ## 5. World Generation
 
-Seed-driven, no hardcoded maps. Terrain is a **pure function of world
-position** — no grid, no solve — so every query is deterministic and
-order-independent:
+**Terrain macro shape is imported, not generated.** Procedural macro relief was
+tried three ways — GPU erosion (M3), a fluvial stream-power bake (M4b), and the
+analytic erosion filter alone (M5d) — and none produced valleys that read as a
+real massif or that a ski resort could be built in. Real mountains are the
+output of processes no per-point function reproduces, and public elevation data
+for the Alps is free, accurate and already exactly what the game wants.
+
+The world is therefore a real 20 × 20 km window of Tirol, imported once from
+the Land Tirol airborne-laserscan terrain model (CC BY 4.0) by
+`Tools/fetch_tirol_dem.py`, and refined from there:
+
+```
+1. Imported elevation model — macro and meso shape. Measured ground.
+2. Geological refinement — erosion passes over the imported surface, to
+   smooth scanner artefacts and cut detail below the source resolution.
+   Open; not yet built.
+3. Sub-meter — material displacement, normal maps, scattered rock, scree
+   and vegetation, snow deformation. Not heightfield.
+```
+
+Diffusion-generated terrain (Infinite Diffusion) is the other intended source
+for the same pipeline: it produces the same kind of artefact — a heightmap with
+real macro structure — and enters at layer 1 through the same `.massifdem`
+format, so nothing downstream distinguishes a generated massif from a measured
+one. Seeds no longer select a world shape; they select scattered content.
+
+The query API is unchanged, and stays the single way anything reads the ground:
 
 ```
 Height(FVector2d WorldMeters, double SampleSpacingMeters) → double meters
@@ -110,50 +131,56 @@ centimeter detail budget on coordinate error before any terrain is
 evaluated — and doubles keep the field API stable if the extent grows
 again. Seeds and noise lattices stay integer; only positions widen.
 
-`SampleSpacingMeters` selects how far down the octave stack to evaluate:
-detail finer than roughly twice the spacing is skipped, and the finest
-octave included is faded in smoothly rather than switched on, so a coarse
-sample and a fine sample of the same point agree.
-
-At the world extent in §12 no full-resolution grid can exist — 20 km at
-1 cm is 4 × 10^12 samples — so on-demand evaluation is not an
-optimisation here, it is the only representation that works.
+`SampleSpacingMeters` selects which mip of the elevation model answers, and
+the two levels around it are blended, so a coarse sample and a fine sample of
+the same point agree instead of stepping where clipmap rings meet. Distant
+tiles read a filtered surface rather than aliasing the finest one.
 
 The whole world is playable. Nothing is scoped to a sub-region: what is
 scoped instead is *residency*, since anything needing neighbours or
 persistence lives in tiles that come and go around player activity
 (§5.5).
 
-### 5.1 Layers
+### 5.1 The elevation model
 
-Each is a pure function of position and the master seed:
+`FMassifHeightmap` holds the imported surface. One `.massifdem` file per
+world: a 192-byte header, then uint16 samples quantised over the window's own
+altitude band, row-major, row 0 north. 20 km at 2 m is 10 000² samples,
+200 MB, and a mip chain built at load takes that to about 270 MB resident —
+small enough to hold outright, so no streaming or memory mapping is needed at
+this resolution.
 
-```
-MasterSeed
-  └► 0. Uplift field — where ranges and basins sit. Warped ridged noise
-        at 5–15 km. Sets the continental shape: the crest ceiling the
-        base relief lerps toward.
-     1. Base relief — a few fractal octaves under the filter, lerping
-        between base level and the uplift ceiling. Where the valleys
-        between the ranges run.
-     2. Erosion filter — the terrain below the base wavelength, after
-        Rune Skovbo Johansen's "Fast and Gorgeous Erosion Filter"
-        (2026): gradient-aligned stripe octaves, each dragging the next
-        finer one sideways so gullies branch. O(1) per point.
-     3. Sub-meter — material displacement, normal maps, scattered rock and
-        scree meshes, snow deformation. Not heightfield.
-```
+The header carries the source georeference (EPSG code, easting/northing of the
+window's north-west corner) so imports stay traceable and later overlays —
+orthophotos, cadastral data, real piste and lift lines — can be registered
+against the same ground.
 
-Every layer is analytic per point: no neighbours, no iteration, so any
-point at any resolution is evaluable in isolation. Grid erosion solves
-(the M3 GPU passes, the M4b–M5c fluvial bake) are deleted — git carries
-them; the filter-only pipeline replaced the bake because the solved
-macro relief never produced buildable, natural-looking valleys.
+Sampling is Catmull-Rom within a level and linear between levels. Both are
+pure functions of position, so the chunk-independence property the streaming
+scheme rests on is preserved by construction: no cache, no order dependence,
+no per-tile generation of terrain shape.
 
-Layer 4 is where centimeter-scale *appearance* comes from. Centimeter
-geometry is not a target: a 1 cm mesh over 50 × 50 m is 50 M triangles,
-and for a ski game the skiable surface is snow, which drapes over
-everything below roughly half a meter anyway.
+Quantisation: uint16 over a ~2600 m band is 4 cm, well under the source
+model's own vertical accuracy, and it halves the resident footprint against
+float32.
+
+Grid erosion solves (the M3 GPU passes, the M4b–M5c fluvial bake) and the
+procedural stack that replaced them (uplift field, fractal base relief, the
+analytic erosion filter) are all deleted — git carries them.
+
+Below the source resolution, appearance comes from material displacement and
+scattered meshes. Centimeter *geometry* is not a target: a 1 cm mesh over
+50 × 50 m is 50 M triangles, and for a ski game the skiable surface is snow,
+which drapes over everything below roughly half a meter anyway.
+
+### 5.1.1 Geological refinement (open)
+
+Erosion over the imported surface — smoothing scanner artefacts, cutting
+detail below the source resolution, aging the ground. Unlike the deleted
+worldgen solves this runs **once at import**, over a finite imported grid, and
+its output is another `.massifdem`. It is a preprocessing step on measured
+data, not part of the terrain definition, so it reintroduces no world-wide
+solve into a query path that must stay per-point.
 
 ### 5.2 Hydrology (open)
 
@@ -297,11 +324,13 @@ when cells change) with the deformation RT for close-range detail.
 
 ## 9. Save Games
 
-- Save = master seed + engine version tag + full `FMassifSimState` +
-  modified resident tiles (§5.4, compressed) + save format version.
-- No heightfield is saved. Terrain is a pure function of the seed and is
-  regenerated on demand, so save size scales with what the player has
-  built and touched, not with world area.
+- Save = master seed + elevation model name and content hash + engine version
+  tag + full `FMassifSimState` + modified resident tiles (§5.4, compressed) +
+  save format version.
+- No heightfield is saved. The elevation model is a build asset that ships
+  with the game; the save names it and records its hash, so a mismatch is
+  refused rather than silently loading a resort onto different ground. Save
+  size scales with what the player has built and touched, not with world area.
 - Custom version GUID (`FMassifCustomVersion`) from the first save-touching
   commit; every format change bumps it. During development, incompatible
   saves are invalidated (dev reset) unless migration is explicitly
@@ -316,17 +345,20 @@ when cells change) with the deformation RT for close-range detail.
   expected state delta), save/load round-trip (state hash equality).
 - Everything in `MassifSim`/`MassifCore` runs under `-nullrhi`. The terrain
   field is CPU-only and fully testable headless.
-- **Terrain field contract tests**, enforced as it lands:
+- **Terrain field contract tests**, enforced as it lands. They run against a
+  heightmap built in memory, never against a fetched elevation model, so the
+  suite passes on a bare checkout:
   - *Chunk independence:* a tile sampled on its own is bit-identical to
     the same tile sampled as part of a larger block. This is the property
     the whole streaming scheme rests on.
-  - *LOD agreement:* sampling a point at coarse and fine spacing differs
-    by less than the finest skipped octave's amplitude, with no step at a
-    ring boundary.
-  - *Surface sanity:* over a sampled region, no step between adjacent
-    samples exceeds a slope ceiling, and local minima stay below a
-    threshold — these are what catch tearing and pitting, which visual
-    inspection catches late and unreliably.
+  - *LOD agreement:* height is continuous in sample spacing, with no step at
+    a mip boundary, and a coarse sampling stays within the relief the levels
+    it drops could carry.
+  - *Sample fidelity:* at a sample centre, at the finest spacing, a query
+    returns the imported altitude to within the quantisation step. This is
+    what pins the field to the source data rather than to a resampling of it.
+  - *File format:* the `.massifdem` byte layout is a contract with the Python
+    import tool, so a hand-built file is parsed and malformed ones rejected.
 
 ## 11. Assets & Naming
 
@@ -342,16 +374,19 @@ when cells change) with the deformation RT for close-range detail.
 
 ## 12. World Scale (decided)
 
-- **Extent:** 20 × 20 km, finite, **playable throughout**. Finite because
-  rivers need real outlets: globally consistent drainage is worth more than
-  unbounded extent, and it is what lets large landforms come from real
-  drainage rather than from noise once hydrology returns. Kept small —
-  buildable valleys are the game, and 400 km² is already larger than the
-  largest real ski domains.
-- **Nothing terrain-shaped is saved.** No fine heightfield, no world-sized
-  arrays. What is scoped is residency, not area (§5.4).
+- **Extent:** 20 × 20 km, finite, **playable throughout**. Finite because the
+  world is an imported window of real ground. Kept small — buildable valleys
+  are the game, and 400 km² is already larger than the largest real ski
+  domains.
+- **Source resolution:** 2 m. The Tirol model is published at 50 cm, but
+  20 km at 50 cm is 3.2 GB of samples, and detail under 2 m is what the
+  refinement and material layers put back anyway. The import tool takes the
+  resolution as an argument, so this is a data decision, not a code one.
+- **Nothing terrain-shaped is saved.** The elevation model is a build asset
+  (§9). What is scoped is residency, not area (§5.4).
 - **Coordinates:** double precision throughout the field API. See §5.
-- **Altitude range:** valley floors ~500–900 m, peaks to ~3400 m.
+- **Altitude range:** set by the imported window. The current one (Ötztal,
+  Sölden) runs 1168–3757 m.
 - **Sim sampling:** fixed spacings only — 0.5 m for agent contact and
   placement validation, 4 m for wide-area scans. Never view-derived.
 - **Resident tiles:** 512 m square, 4 m cells (128² per tile) for masks and
@@ -362,9 +397,9 @@ when cells change) with the deformation RT for close-range detail.
   meshes, not geometry. Centimeter *geometry* is not a target: 1 cm over
   50 × 50 m is 50 M triangles, and snow drapes over everything under
   roughly half a meter regardless.
-- **No bake:** the terrain field holds no world-wide grids; the erosion
-  filter and base relief are evaluated per point. Live tuning of the
-  filter is a dev tool (F1 panel / massif.* cvars).
-- `FWorldGenResult` as a monolithic heightfield is retired. Its sim-facing
-  query API (`SampleHeightMeters`, `SampleSlopeDegrees`, `SampleNormal`)
-  survives on the terrain field, so §6–§8 are unaffected.
+- **World selection:** `massif.Dem` / `-MassifDem=` names a model under
+  `Data/Terrain`. Fetched models are gitignored and re-fetchable, so no
+  multi-hundred-megabyte binary enters the repository.
+- The sim-facing query API (`SampleHeightMeters`, `SampleSlopeDegrees`,
+  `SampleNormal`) is unchanged by the switch to imported terrain, so §6–§8
+  are unaffected.
