@@ -95,7 +95,7 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	 * how tall the solved mountains stand.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
-	float BakeUpliftMetersPerStep = 120.0f;
+	float BakeUpliftMetersPerStep = 170.0f;
 
 	/** Share of the uplift a basin floor keeps, so basins roll instead of relaxing dead flat. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
@@ -167,10 +167,10 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	float ChannelMaxSideWidthMeters = 300.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Channels")
-	float ChannelDepthPerSqrtArea = 0.0015f;
+	float ChannelDepthPerSqrtArea = 0.002f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Channels")
-	float ChannelNotchDepthCapMeters = 60.0f;
+	float ChannelNotchDepthCapMeters = 12.0f;
 
 	/** Gully scales the erosion filter cuts, coarsest first; 0 leaves the macro surface bare. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")

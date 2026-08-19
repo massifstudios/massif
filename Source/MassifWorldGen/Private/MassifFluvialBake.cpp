@@ -857,7 +857,7 @@ double FMassifFluvialBake::ChannelCutMeters(
 
 	// Hydraulic-geometry scaling: width and depth grow with the square root of
 	// the drained area, so a headwater stream scratches a notch and a trunk
-	// river cuts a broad floor, each capped by the channel config.
+	// river presses in a broad bed, each capped by the channel config.
 	const double SqrtArea = FMath::Sqrt(Node.DrainageAreaSquareMeters);
 	const double FloorHalfWidth = FMath::Min(
 		static_cast<double>(Config.ChannelWidthPerSqrtArea) * SqrtArea, static_cast<double>(Config.ChannelMaxFloorHalfWidthMeters));
@@ -868,18 +868,13 @@ double FMassifFluvialBake::ChannelCutMeters(
 		return 0.0;
 	}
 
-	// Down to the water, never deeper than the discharge supports, gone at the
-	// end of the side width. Zero where the water stands above the macro
-	// surface, so a channel can only ever lower ground.
-	const double WaterElevation = FMath::Lerp(Node.WaterElevationMeters, Downstream.WaterElevationMeters, AlongFraction);
-	const double DepthAvailable = MacroHeightMeters - WaterElevation;
-	if (DepthAvailable <= 0.0)
-	{
-		return 0.0;
-	}
-	const double DepthCap = FMath::Min(
+	// The cut is relative to the local macro surface, never down to an
+	// absolute water level: the bake's own valleys carry the elevations, and
+	// referencing the polyline's water here flickers the cut on and off
+	// wherever smoothing moved the surface relative to it — a dashed trench
+	// across the hillside instead of a stream bed.
+	const double DepthMeters = FMath::Min(
 		static_cast<double>(Config.ChannelDepthPerSqrtArea) * SqrtArea, static_cast<double>(Config.ChannelNotchDepthCapMeters));
-	const double DepthMeters = FMath::Min(DepthAvailable, DepthCap);
 	const double Side = FMath::Clamp((Distance - FloorHalfWidth) / FMath::Max(1.0, SideWidth), 0.0, 1.0);
 	const double Fade = 1.0 - Side * Side * (3.0 - 2.0 * Side);
 	return DepthMeters * Fade;
