@@ -15,10 +15,10 @@ namespace
 	struct FErosionState
 	{
 		/** Sideways displacement the coarser gullies have dragged this point by. */
-		float DragMeters = 0.0f;
+		double DragMeters = 0.0;
 		float FadeTarget = 0.0f;
 		float Mask = 1.0f;
-		float CutMeters = 0.0f;
+		double CutMeters = 0.0;
 	};
 
 	float EaseOut(float Value)
@@ -51,12 +51,12 @@ namespace
 	}
 
 	/** Stripe phase origin for one cell, jittered so neighbouring cells never line up. */
-	FVector2f CellPivot(int32 CellX, int32 CellY, float CellSizeMeters, uint32 Seed)
+	FVector2d CellPivot(int64 CellX, int64 CellY, double CellSizeMeters, uint32 Seed)
 	{
 		const FVector2f Jitter = MassifNoise::CellPoint(CellX, CellY, Seed);
-		return FVector2f(
-			(static_cast<float>(CellX) + Jitter.X) * CellSizeMeters,
-			(static_cast<float>(CellY) + Jitter.Y) * CellSizeMeters);
+		return FVector2d(
+			(static_cast<double>(CellX) + Jitter.X) * CellSizeMeters,
+			(static_cast<double>(CellY) + Jitter.Y) * CellSizeMeters);
 	}
 
 	/**
@@ -64,12 +64,12 @@ namespace
 	 * themselves run down it. Ground flat enough to have no direction is masked
 	 * out anyway, so any fixed fallback will do.
 	 */
-	FVector2f AcrossFlowDirection(FVector2f Slope)
+	FVector2d AcrossFlowDirection(FVector2d Slope)
 	{
-		const FVector2f Perpendicular = FVector2f(-Slope.Y, Slope.X).GetSafeNormal();
+		const FVector2d Perpendicular = FVector2d(-Slope.Y, Slope.X).GetSafeNormal();
 		if (Perpendicular.IsNearlyZero())
 		{
-			return FVector2f(1.0f, 0.0f);
+			return FVector2d(1.0, 0.0);
 		}
 		return Perpendicular;
 	}
@@ -86,16 +86,16 @@ namespace
 	 * variation in lets gullies fade in and out along their length.
 	 */
 	FStripeSample SampleStripes(
-		FVector2f PositionMeters, float DragMeters, float WavelengthMeters, float CellSizeMeters,
+		FVector2d PositionMeters, double DragMeters, double WavelengthMeters, double CellSizeMeters,
 		uint32 Seed, FMassifMacroSlopeSampler SampleMacroSlope)
 	{
-		const float CellSpaceX = PositionMeters.X / CellSizeMeters;
-		const float CellSpaceY = PositionMeters.Y / CellSizeMeters;
-		const int32 LowCellX = FMath::FloorToInt32(CellSpaceX);
-		const int32 LowCellY = FMath::FloorToInt32(CellSpaceY);
-		const float FadeX = FMath::SmoothStep(0.0f, 1.0f, CellSpaceX - static_cast<float>(LowCellX));
-		const float FadeY = FMath::SmoothStep(0.0f, 1.0f, CellSpaceY - static_cast<float>(LowCellY));
-		const float RadiansPerMeter = 2.0f * UE_PI / WavelengthMeters;
+		const double CellSpaceX = PositionMeters.X / CellSizeMeters;
+		const double CellSpaceY = PositionMeters.Y / CellSizeMeters;
+		const int64 LowCellX = static_cast<int64>(FMath::FloorToDouble(CellSpaceX));
+		const int64 LowCellY = static_cast<int64>(FMath::FloorToDouble(CellSpaceY));
+		const float FadeX = FMath::SmoothStep(0.0f, 1.0f, static_cast<float>(CellSpaceX - static_cast<double>(LowCellX)));
+		const float FadeY = FMath::SmoothStep(0.0f, 1.0f, static_cast<float>(CellSpaceY - static_cast<double>(LowCellY)));
+		const double RadiansPerMeter = 2.0 * UE_DOUBLE_PI / WavelengthMeters;
 
 		float CosineSum = 0.0f;
 		float SineSum = 0.0f;
@@ -103,15 +103,19 @@ namespace
 		{
 			const int32 OffsetX = Corner & 1;
 			const int32 OffsetY = Corner >> 1;
-			const FVector2f Pivot = CellPivot(LowCellX + OffsetX, LowCellY + OffsetY, CellSizeMeters, Seed);
-			const FVector2f AcrossFlow = AcrossFlowDirection(SampleMacroSlope(Pivot));
+			const FVector2d Pivot = CellPivot(LowCellX + OffsetX, LowCellY + OffsetY, CellSizeMeters, Seed);
+			const FVector2d AcrossFlow = AcrossFlowDirection(SampleMacroSlope(Pivot));
 			const float Weight =
 				FMath::Lerp(1.0f - FadeX, FadeX, static_cast<float>(OffsetX)) *
 				FMath::Lerp(1.0f - FadeY, FadeY, static_cast<float>(OffsetY));
 
+			// The offset is taken in double before it becomes a phase: the
+			// position and the pivot are both large out at the world edge, and
+			// their difference is the only small quantity in the expression.
+			const double Offset = FVector2d::DotProduct(PositionMeters - Pivot, AcrossFlow) + DragMeters;
 			float Sine = 0.0f;
 			float Cosine = 0.0f;
-			FMath::SinCos(&Sine, &Cosine, (FVector2f::DotProduct(PositionMeters - Pivot, AcrossFlow) + DragMeters) * RadiansPerMeter);
+			FMath::SinCos(&Sine, &Cosine, static_cast<float>(Offset * RadiansPerMeter));
 			CosineSum += Weight * Cosine;
 			SineSum += Weight * Sine;
 		}
@@ -121,19 +125,21 @@ namespace
 	}
 
 	void ApplyOctave(
-		FErosionState& State, FVector2f PositionMeters, float WavelengthMeters, float DepthMeters,
-		float SlopeMask, const FMassifErosionSettings& Settings, uint32 OctaveSeed, FMassifMacroSlopeSampler SampleMacroSlope)
+		FErosionState& State, FVector2d PositionMeters, double WavelengthMeters, double DepthMeters,
+		float SlopeMask, float OctaveWeight, const FMassifErosionSettings& Settings, uint32 OctaveSeed,
+		FMassifMacroSlopeSampler SampleMacroSlope)
 	{
 		State.Mask = PowerTowardsOne(State.Mask, Settings.DetailPersistence) * SlopeMask;
 
-		const float CellSizeMeters = WavelengthMeters * FMath::Max(0.25f, Settings.CellsPerWavelength);
+		const double CellSizeMeters = WavelengthMeters * FMath::Max(0.25, Settings.CellsPerWavelength);
 		const FStripeSample Stripes = SampleStripes(
 			PositionMeters, State.DragMeters, WavelengthMeters, CellSizeMeters, OctaveSeed, SampleMacroSlope);
 
 		// Ridges sit at +1 and creases at -1, so the profile below cuts nothing
 		// on a crest and a full depth in a crease.
-		const float Profile = FMath::Lerp(State.FadeTarget, ApplyRounding(Stripes.Value, Settings.RidgeRounding, Settings.CreaseRounding), State.Mask);
-		State.CutMeters += (Profile - 1.0f) * 0.5f * DepthMeters;
+		const float Shaped = ApplyRounding(Stripes.Value, Settings.RidgeRounding, Settings.CreaseRounding);
+		const float Profile = FMath::Lerp(State.FadeTarget, Shaped, State.Mask * OctaveWeight);
+		State.CutMeters += static_cast<double>(Profile - 1.0f) * 0.5 * DepthMeters;
 		State.FadeTarget = Profile;
 
 		// Dragging the finer gullies sideways bends them into this one. Doing it
@@ -145,37 +151,48 @@ namespace
 		// wavelength it is handing it to. Accumulating it undiminished instead
 		// leaves the finest octave dragged by several of its own wavelengths,
 		// which stirs it into swirls rather than bending it.
-		const float DragGain = FMath::Clamp(Settings.WavelengthGain, 0.05f, 0.95f);
+		const double DragGain = FMath::Clamp(Settings.WavelengthGain, 0.05, 0.95);
 		State.DragMeters = State.DragMeters * DragGain
-			+ Stripes.CrossSine * WavelengthMeters * FMath::Max(0.0f, Settings.BranchStrength) * State.Mask;
+			+ Stripes.CrossSine * WavelengthMeters * FMath::Max(0.0f, Settings.BranchStrength) * State.Mask * OctaveWeight;
 	}
 }
 
-float MassifErosionFilter::EvaluateDisplacementMeters(
+double MassifErosionFilter::EvaluateDisplacementMeters(
 	const FMassifErosionInput& Input,
 	const FMassifErosionSettings& Settings,
 	FMassifMacroSlopeSampler SampleMacroSlope)
 {
 	const float ReliefFraction = FMath::Clamp(Input.ReliefFraction, 0.0f, 1.0f);
-	const float SlopeMask = EaseOut(Input.SlopeMetersPerMeter.Size() / FMath::Max(UE_SMALL_NUMBER, Settings.SlopeReference));
+	const float SlopeMask = EaseOut(static_cast<float>(Input.SlopeMetersPerMeter.Length()) / FMath::Max(UE_SMALL_NUMBER, Settings.SlopeReference));
 
 	FErosionState State;
 	State.FadeTarget = ReliefFraction * 2.0f - 1.0f;
 
-	float WavelengthMeters = Settings.LargestGullyWavelengthMeters;
-	float DepthMeters = Settings.LargestGullyDepthMeters;
-	float TotalDepthMeters = 0.0f;
+	double WavelengthMeters = Settings.LargestGullyWavelengthMeters;
+	double DepthMeters = Settings.LargestGullyDepthMeters;
+	double TotalDepthMeters = 0.0;
 	for (int32 Octave = 0; Octave < Settings.OctaveCount; ++Octave)
 	{
+		float OctaveWeight = 1.0f;
+		if (Octave == Settings.OctaveCount - 1)
+		{
+			OctaveWeight = FMath::Clamp(Settings.FinestOctaveWeight, 0.0f, 1.0f);
+		}
+
 		const uint32 OctaveSeed = Settings.Seed + static_cast<uint32>(Octave) * 0x9E3779B9u;
-		ApplyOctave(State, Input.PositionMeters, WavelengthMeters, DepthMeters, SlopeMask, Settings, OctaveSeed, SampleMacroSlope);
+		ApplyOctave(State, Input.PositionMeters, WavelengthMeters, DepthMeters, SlopeMask, OctaveWeight, Settings, OctaveSeed, SampleMacroSlope);
+
+		// The full depth, not the weighted one: a faded octave still carries the
+		// fade target through at full depth, and only its deviation from that
+		// target is weighted. Counting the weighted depth here would leave flat
+		// ground displaced.
 		TotalDepthMeters += DepthMeters;
-		WavelengthMeters *= FMath::Clamp(Settings.WavelengthGain, 0.05f, 0.95f);
-		DepthMeters *= FMath::Clamp(Settings.DepthGain, 0.0f, 1.0f);
+		WavelengthMeters *= FMath::Clamp(Settings.WavelengthGain, 0.05, 0.95);
+		DepthMeters *= FMath::Clamp(Settings.DepthGain, 0.0, 1.0);
 	}
 
 	// What a point with no gullies at all would have been cut by: the fade
 	// target alone, held over every octave.
-	const float UngulliedCutMeters = (ReliefFraction - 1.0f) * TotalDepthMeters;
+	const double UngulliedCutMeters = (static_cast<double>(ReliefFraction) - 1.0) * TotalDepthMeters;
 	return State.CutMeters - UngulliedCutMeters;
 }

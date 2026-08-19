@@ -12,92 +12,139 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen")
 	int32 MasterSeed = 1337;
 
-	/** Heightfield samples per side. */
+	/** Side of the world square. Finite, and playable throughout. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen")
-	int32 Resolution = 4096;
+	float WorldSizeMeters = 150000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen")
-	float WorldSizeMeters = 8192.0f;
+	float MinAltitudeMeters = 300.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen")
-	float MinAltitudeMeters = 1200.0f;
+	float MaxAltitudeMeters = 4600.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen")
-	float MaxAltitudeMeters = 3000.0f;
+	/** Distance between range axes. The largest thing in the world. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Uplift")
+	float RangeSpacingMeters = 42000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Uplift")
+	int32 RangeOctaveCount = 4;
+
+	/** Range axis profile: 1.0 broad and rounded, 2.0 narrow and sharp. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Uplift")
+	float RangeSharpness = 1.1f;
+
+	/** Sideways displacement of the range pattern, so ranges bend and throw off spurs. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Uplift")
+	float RangeWarpWavelengthMeters = 60000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Uplift")
+	float RangeWarpMeters = 12000.0f;
+
+	/** Altitude the crests reach on a basin floor, and on a range axis. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Uplift")
+	float BasinCrestAltitudeMeters = 900.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Uplift")
+	float PeakCrestAltitudeMeters = 4400.0f;
 
 	/**
-	 * Lattice the macro surface is evaluated on before being interpolated up to
-	 * the heightfield. It varies over hundreds of meters, so it does not need
-	 * the full grid; its central differences also supply the surface slope the
-	 * erosion filter orients its gullies by.
+	 * Ground a watercourse must keep above it. Headwaters may not climb closer
+	 * than this to the local crest, which is what keeps drainage inside the
+	 * ranges that contain it instead of running over the top of them.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Uplift")
+	float MinReliefAboveWaterMeters = 500.0f;
+
+	/** Watercourses reaching the world border, each the outlet of one catchment. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
+	int32 RiverMouthCount = 28;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
+	float RiverMouthSpacingMeters = 9000.0f;
+
+	/**
+	 * Distance between nodes on a trunk, and up in the headwaters. Segments
+	 * shorten as a watercourse climbs, so one graph carries both the main
+	 * valleys and the streams that feed them.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	int32 RiverFieldResolution = 513;
-
-	/** Watercourses reaching the map border, each the outlet of one catchment. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	int32 RiverMouthCount = 7;
+	float TrunkSegmentLengthMeters = 3200.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	float RiverMouthSpacingMeters = 1600.0f;
+	float HeadwaterSegmentLengthMeters = 380.0f;
 
-	/** Distance between successive nodes along a watercourse. */
+	/** Steps upstream from a mouth over which segment length and gradient reach their headwater values. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	float RiverSegmentLengthMeters = 520.0f;
+	int32 StepsToHeadwater = 30;
+
+	/**
+	 * Share of the remaining headroom under the local crest a watercourse may
+	 * take in one step. Below 1 it eases in towards that ceiling instead of
+	 * running into it, which is what lets rivers cross low basins flat and still
+	 * climb hard through ranges.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
+	float RiverHeadroomClimbFraction = 0.25f;
 
 	/** Watercourses may not come closer to each other than this, which sets valley spacing. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	float RiverMinNodeSpacingMeters = 360.0f;
+	float RiverMinNodeSpacingMeters = 300.0f;
 
 	/** Chance that a node forks into two tributaries instead of continuing. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	float RiverBranchProbability = 0.6f;
+	float RiverBranchProbability = 0.62f;
 
 	/** Heading change allowed between successive nodes, degrees. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	float RiverTurnDegrees = 28.0f;
+	float RiverTurnDegrees = 26.0f;
 
 	/** Half-angle between the two branches of a fork, degrees. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	float RiverForkDegrees = 40.0f;
+	float RiverForkDegrees = 38.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	int32 RiverMaxNodeCount = 1200;
+	int32 RiverMaxNodeCount = 220000;
 
 	/** Valley floor gradient just above a mouth. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	float RiverSlopeNearMouth = 0.03f;
+	float RiverSlopeNearMouth = 0.004f;
 
 	/** Valley floor gradient in the headwaters. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	float RiverSlopeHeadwater = 0.14f;
-
-	/** How far the ground rises above a trunk valley's floor before it levels off. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	float ValleyReliefMeters = 1500.0f;
+	float RiverSlopeHeadwater = 0.13f;
 
 	/**
-	 * The same for a headwater stream. Well below the trunk figure: a headwater
-	 * cannot stand its own crest higher than the ground the trunk it drains into
-	 * allows around it, or the stream ends up floating above the surface.
+	 * Horizontal scale of the valley side on a trunk river, and on a headwater
+	 * stream. Relief itself is not configured here: a valley side climbs towards
+	 * the crest altitude the uplift field sets overhead, so the same river cuts
+	 * a shallow trough in a basin and a deep valley through a range.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	float HeadwaterReliefMeters = 300.0f;
+	float TrunkValleyWidthMeters = 2200.0f;
 
-	/** Horizontal scale of the valley side on a trunk river; smaller is steeper. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	float TrunkValleyWidthMeters = 1600.0f;
-
-	/** The same for a headwater stream, which only notches the slope it runs down. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	float HeadwaterValleyWidthMeters = 500.0f;
+	float HeadwaterValleyWidthMeters = 420.0f;
 
 	/** Flat ground either side of the water before the valley side starts to climb. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	float TrunkFloorHalfWidthMeters = 120.0f;
+	float TrunkFloorHalfWidthMeters = 260.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	float HeadwaterFloorHalfWidthMeters = 25.0f;
+	float HeadwaterFloorHalfWidthMeters = 15.0f;
+
+	/**
+	 * Share of the relief up to the crest a headwater stream is responsible for;
+	 * a trunk always claims all of it.
+	 *
+	 * Held at 1 for now. Below 1 a headwater's profile stops climbing early, so
+	 * it wins over a wide area at a low height and meets the trunk's still
+	 * climbing profile as a cliff — measurably worse, not better. Dissection
+	 * being uniform at the node spacing is a real problem, but the fix is to
+	 * cut small streams as notches into the surface the trunks define rather
+	 * than to have them propose a surface of their own.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
+	float HeadwaterReliefClaim = 1.0f;
 
 	/**
 	 * Ground keeps climbing this much per meter away from a watercourse even
@@ -105,54 +152,15 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	 * out as plateaus at one fixed height.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	float InterfluveRiseSlope = 0.02f;
-
-	/**
-	 * Highest a watercourse may start, as a fraction of the altitude range. Has
-	 * to stay under what the trunk valleys' relief lifts the ground to, or the
-	 * headwaters end up above their own terrain.
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	float RiverMaxSourceAltitudeFraction = 0.6f;
+	float InterfluveRiseSlope = 0.01f;
 
 	/** Rounding of the crest where two catchments meet, meters. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	float RidgeBlendMeters = 450.0f;
-
-	/**
-	 * Ridge features per map side. Low and few: this layer only varies how high
-	 * the crests stand, and the erosion filter shapes everything below that. Run
-	 * at a fine enough scale it out-steepens the valley sides, and the filter
-	 * then orients its gullies to the noise instead of to the mountain.
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
-	float RidgeFrequency = 2.5f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
-	int32 RidgeOctaveCount = 3;
-
-	/** Ridge crest profile: 1.0 soft and rounded, 2.0 knife edges. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
-	float RidgeSharpness = 1.0f;
-
-	/** How much the ridge noise pushes the crests up and down, meters. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
-	float RidgeAmplitudeMeters = 220.0f;
-
-	/** Sideways displacement of the query point, meters; bends the valleys off the graph's straight segments. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
-	float TerrainWarpMeters = 600.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
-	float TerrainWarpFrequency = 5.0f;
-
-	/** Fraction of the map edge over which height falls off to keep borders low. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
-	float EdgeFalloffFraction = 0.12f;
+	float RidgeBlendMeters = 400.0f;
 
 	/** Gully scales the erosion filter cuts, coarsest first; 0 leaves the macro surface bare. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
-	int32 GullyOctaveCount = 4;
+	int32 GullyOctaveCount = 6;
 
 	/** Spacing of the coarsest gullies. Keep it under the valley spacing or gullies compete with valleys. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
@@ -166,7 +174,7 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	float GullyWavelengthGain = 0.5f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
-	float GullyDepthGain = 0.55f;
+	float GullyDepthGain = 0.5f;
 
 	/**
 	 * Spacing of the stripe pivot lattice as a multiple of the wavelength. Sets
@@ -185,10 +193,9 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	float GullyDetailPersistence = 1.0f;
 
 	/**
-	 * How strongly a gully bends the flow the finer gullies follow, as a
-	 * fraction of the slope it is cut into. This is what makes them branch, and
-	 * the one dial trading branching against a smooth surface: past roughly 0.3
-	 * the bending outruns the pattern and tears it into cliffs.
+	 * How far a gully drags the finer gullies sideways, as a fraction of its own
+	 * wavelength. This is what makes them branch off it instead of running
+	 * parallel to it.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
 	float GullyBranchStrength = 0.25f;
@@ -201,9 +208,21 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	float GullyCreaseRounding = 0.15f;
 
 	/**
+	 * Window the whole-array path materialises out of the terrain field, centred
+	 * on the world origin. Scaffolding until M5 replaces it with clipmap rings
+	 * sampled directly; the field itself has no resolution.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Preview")
+	float PreviewWindowSizeMeters = 20000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Preview")
+	int32 Resolution = 4096;
+
+	/**
 	 * Hydraulic erosion simulation steps; 0 disables the simulated pass
-	 * entirely. The erosion filter above does the incising analytically, so the
-	 * simulation is off by default and only worth enabling to add deposition.
+	 * entirely. Incising is analytic now, and a pass that needs the whole grid
+	 * and its neighbours cannot be part of a field evaluated point by point, so
+	 * this stays off and nothing depends on it.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Erosion")
 	int32 HydraulicIterationCount = 0;
@@ -250,22 +269,11 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Erosion")
 	float ThermalRate = 0.5f;
 
-	/** Spring sources feeding rivers; 0 leaves erosion rain-fed only. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Rivers")
-	int32 RiverSourceCount = 48;
-
-	/** Water injected at each source cell in meters per second. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Rivers")
+	/** Water injected at each spring cell feeding the simulated pass, meters per second. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Erosion")
 	float RiverSourceRate = 8.0f;
 
 	/** Radius in cells over which a source spreads its inflow. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Rivers")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Erosion")
 	int32 RiverSourceRadiusCells = 3;
-
-	/** Altitude band, as a fraction of the generated relief, where sources may sit. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Rivers")
-	float RiverSourceMinAltitudeFraction = 0.55f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Rivers")
-	float RiverSourceMaxAltitudeFraction = 0.92f;
 };

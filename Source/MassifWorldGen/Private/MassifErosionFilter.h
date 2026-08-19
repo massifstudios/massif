@@ -2,13 +2,13 @@
 
 #include "CoreMinimal.h"
 
-/** The macro surface under one point: where it is and how far up the local relief it sits. */
+/** The macro surface under one point: how it leans, and how far up the local relief it sits. */
 struct FMassifErosionInput
 {
-	FVector2f PositionMeters = FVector2f::ZeroVector;
+	FVector2d PositionMeters = FVector2d::ZeroVector;
 
 	/** Gradient of the macro surface here, meters of rise per meter travelled. Sets how deep the gullies cut. */
-	FVector2f SlopeMetersPerMeter = FVector2f::ZeroVector;
+	FVector2d SlopeMetersPerMeter = FVector2d::ZeroVector;
 
 	/** 0 on a valley floor, 1 at the top of the local relief. Decides where gullies fade out. */
 	float ReliefFraction = 0.0f;
@@ -16,13 +16,21 @@ struct FMassifErosionInput
 
 struct FMassifErosionSettings
 {
-	int32 OctaveCount = 4;
+	int32 OctaveCount = 6;
+
+	/**
+	 * Weight on the finest octave included. A caller sampling coarsely drops the
+	 * octaves it cannot resolve, and fades the last one it keeps rather than
+	 * switching it off, so two samplings of the same point at different spacings
+	 * agree instead of stepping at the boundary between them.
+	 */
+	float FinestOctaveWeight = 1.0f;
 
 	/** Spacing of the widest gullies; each octave divides it by WavelengthGain's reciprocal. */
-	float LargestGullyWavelengthMeters = 220.0f;
-	float LargestGullyDepthMeters = 18.0f;
-	float WavelengthGain = 0.5f;
-	float DepthGain = 0.55f;
+	double LargestGullyWavelengthMeters = 220.0;
+	double LargestGullyDepthMeters = 18.0;
+	double WavelengthGain = 0.5;
+	double DepthGain = 0.5;
 
 	/**
 	 * Pivot lattice spacing as a multiple of the wavelength. This is what sets
@@ -30,7 +38,7 @@ struct FMassifErosionSettings
 	 * gully is about as long as it is wide and the slope comes out dimpled
 	 * rather than grooved.
 	 */
-	float CellsPerWavelength = 3.0f;
+	double CellsPerWavelength = 3.0;
 
 	/** Surface gradient at which gullies reach full depth; gentler ground gets less. */
 	float SlopeReference = 0.35f;
@@ -53,7 +61,7 @@ struct FMassifErosionSettings
 };
 
 /** Macro surface gradient anywhere, which the filter needs at each of its stripe pivots. */
-using FMassifMacroSlopeSampler = TFunctionRef<FVector2f(FVector2f PositionMeters)>;
+using FMassifMacroSlopeSampler = TFunctionRef<FVector2d(FVector2d PositionMeters)>;
 
 /**
  * Analytic erosion filter after Rune Skovbo Johansen, "Fast and Gorgeous
@@ -65,12 +73,13 @@ using FMassifMacroSlopeSampler = TFunctionRef<FVector2f(FVector2f PositionMeters
  * small gullies branch off large ones the way a drainage network does.
  *
  * Stripes are oriented per pivot cell rather than per point. A point reads its
- * phase from a pivot up to a cell away, so orienting per point levers any
- * turn in the flow direction into a large phase shift and tears the pattern
- * into cliffs; per cell the phase is exactly linear in position.
+ * phase from a pivot up to a cell away, so orienting per point levers any turn
+ * in the flow direction into a large phase shift and tears the pattern into
+ * cliffs; per cell the phase is exactly linear in position.
  *
  * Every point is evaluated from its own inputs alone: no grid, no iteration, no
- * neighbours, so the result is identical whatever order or chunking is used.
+ * neighbours. That is what lets terrain be sampled in tiles at any resolution
+ * without generating anything around them.
  */
 namespace MassifErosionFilter
 {
@@ -84,7 +93,7 @@ namespace MassifErosionFilter
 	 * gullies at all. Ground too flat to hold gullies therefore comes out
 	 * untouched, at both ends of the relief.
 	 */
-	float EvaluateDisplacementMeters(
+	double EvaluateDisplacementMeters(
 		const FMassifErosionInput& Input,
 		const FMassifErosionSettings& Settings,
 		FMassifMacroSlopeSampler SampleMacroSlope);

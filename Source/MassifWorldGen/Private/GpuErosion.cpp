@@ -260,7 +260,11 @@ namespace
 		Common.FluxDamping = 0.99f;
 		Common.MinFlowDepth = 0.002f;
 		Common.MinErosionWaterDepth = Config.MinErosionWaterDepth;
-		Common.ErosionEdgeFadeCells = Config.EdgeFalloffFraction * static_cast<float>(Resolution);
+		// Water leaves the array at its border, so cells near it never build up a
+		// realistic flow. Fading erosion out over a fixed margin hides that. The
+		// margin is a property of this pass and its array, not of the world,
+		// which no longer has an edge to fall off.
+		Common.ErosionEdgeFadeCells = 0.06f * static_cast<float>(Resolution);
 		Common.ErosionBrushRadius = FMath::Clamp(Config.ErosionBrushRadiusCells, 0, 8);
 		return Common;
 	}

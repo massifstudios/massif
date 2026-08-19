@@ -22,3 +22,6 @@ CMakeLists.txt
 # Crash/logs
 *.log
 crashinfo--*
+
+# Poly Haven downloads: re-fetchable via Tools/fetch_polyhaven_textures.py
+Content/Textures/PolyHaven/

@@ -9,14 +9,14 @@ namespace
 		return (Word >> 22u) ^ Word;
 	}
 
-	uint32 HashLattice(int32 X, int32 Y, uint32 Seed)
+	uint32 HashLattice(int64 X, int64 Y, uint32 Seed)
 	{
 		const uint32 Ux = static_cast<uint32>(X) * 198491317u;
 		const uint32 Uy = static_cast<uint32>(Y) * 6542989u;
 		return PcgHash(Ux ^ Uy ^ Seed);
 	}
 
-	FVector2f LatticeGradient(int32 X, int32 Y, uint32 Seed)
+	FVector2f LatticeGradient(int64 X, int64 Y, uint32 Seed)
 	{
 		static const FVector2f Gradients[8] =
 		{
@@ -32,19 +32,35 @@ namespace
 	{
 		return T * T * T * (T * (T * 6.0f - 15.0f) + 10.0f);
 	}
+
+	/** Lattice cell a coordinate falls in, and where in that cell it sits. */
+	struct FLatticeSplit
+	{
+		int64 Cell = 0;
+		float Fraction = 0.0f;
+	};
+
+	FLatticeSplit SplitLattice(double Coordinate)
+	{
+		const double Floor = FMath::FloorToDouble(Coordinate);
+		FLatticeSplit Split;
+		Split.Cell = static_cast<int64>(Floor);
+		Split.Fraction = static_cast<float>(Coordinate - Floor);
+		return Split;
+	}
 }
 
-float MassifNoise::GradientNoise(float X, float Y, uint32 Seed)
+float MassifNoise::GradientNoise(double X, double Y, uint32 Seed)
 {
-	const int32 CellX = FMath::FloorToInt32(X);
-	const int32 CellY = FMath::FloorToInt32(Y);
-	const float FracX = X - static_cast<float>(CellX);
-	const float FracY = Y - static_cast<float>(CellY);
+	const FLatticeSplit SplitX = SplitLattice(X);
+	const FLatticeSplit SplitY = SplitLattice(Y);
+	const float FracX = SplitX.Fraction;
+	const float FracY = SplitY.Fraction;
 
-	const float Dot00 = LatticeGradient(CellX, CellY, Seed).Dot(FVector2f(FracX, FracY));
-	const float Dot10 = LatticeGradient(CellX + 1, CellY, Seed).Dot(FVector2f(FracX - 1.0f, FracY));
-	const float Dot01 = LatticeGradient(CellX, CellY + 1, Seed).Dot(FVector2f(FracX, FracY - 1.0f));
-	const float Dot11 = LatticeGradient(CellX + 1, CellY + 1, Seed).Dot(FVector2f(FracX - 1.0f, FracY - 1.0f));
+	const float Dot00 = LatticeGradient(SplitX.Cell, SplitY.Cell, Seed).Dot(FVector2f(FracX, FracY));
+	const float Dot10 = LatticeGradient(SplitX.Cell + 1, SplitY.Cell, Seed).Dot(FVector2f(FracX - 1.0f, FracY));
+	const float Dot01 = LatticeGradient(SplitX.Cell, SplitY.Cell + 1, Seed).Dot(FVector2f(FracX, FracY - 1.0f));
+	const float Dot11 = LatticeGradient(SplitX.Cell + 1, SplitY.Cell + 1, Seed).Dot(FVector2f(FracX - 1.0f, FracY - 1.0f));
 
 	const float FadeX = QuinticFade(FracX);
 	const float FadeY = QuinticFade(FracY);
@@ -55,12 +71,21 @@ float MassifNoise::GradientNoise(float X, float Y, uint32 Seed)
 	return FMath::Lerp(North, South, FadeY) * 1.41421356f;
 }
 
-float MassifNoise::Fractal(float X, float Y, uint32 Seed, int32 OctaveCount, float Lacunarity, float Gain)
+FVector2f MassifNoise::CellPoint(int64 CellX, int64 CellY, uint32 Seed)
+{
+	const uint32 Hash = HashLattice(CellX, CellY, Seed);
+	const float ToUnit = 1.0f / 65536.0f;
+	return FVector2f(
+		static_cast<float>(Hash & 0xFFFFu) * ToUnit,
+		static_cast<float>((Hash >> 16) & 0xFFFFu) * ToUnit);
+}
+
+float MassifNoise::Fractal(double X, double Y, uint32 Seed, int32 OctaveCount, double Lacunarity, float Gain)
 {
 	float Sum = 0.0f;
 	float Amplitude = 1.0f;
 	float AmplitudeSum = 0.0f;
-	float Frequency = 1.0f;
+	double Frequency = 1.0;
 
 	for (int32 Octave = 0; Octave < OctaveCount; ++Octave)
 	{
@@ -70,24 +95,15 @@ float MassifNoise::Fractal(float X, float Y, uint32 Seed, int32 OctaveCount, flo
 		Frequency *= Lacunarity;
 	}
 
-	return Sum / AmplitudeSum;
+	return Sum / FMath::Max(AmplitudeSum, UE_SMALL_NUMBER);
 }
 
-FVector2f MassifNoise::CellPoint(int32 CellX, int32 CellY, uint32 Seed)
-{
-	const uint32 Hash = HashLattice(CellX, CellY, Seed);
-	const float ToUnit = 1.0f / 65536.0f;
-	return FVector2f(
-		static_cast<float>(Hash & 0xFFFFu) * ToUnit,
-		static_cast<float>((Hash >> 16) & 0xFFFFu) * ToUnit);
-}
-
-float MassifNoise::RidgedFractal(float X, float Y, uint32 Seed, int32 OctaveCount, float Lacunarity, float Gain, float SharpnessExponent)
+float MassifNoise::RidgedFractal(double X, double Y, uint32 Seed, int32 OctaveCount, double Lacunarity, float Gain, float SharpnessExponent)
 {
 	float Sum = 0.0f;
 	float Amplitude = 1.0f;
 	float AmplitudeSum = 0.0f;
-	float Frequency = 1.0f;
+	double Frequency = 1.0;
 	float RidgeWeight = 1.0f;
 
 	for (int32 Octave = 0; Octave < OctaveCount; ++Octave)
@@ -103,5 +119,5 @@ float MassifNoise::RidgedFractal(float X, float Y, uint32 Seed, int32 OctaveCoun
 		Frequency *= Lacunarity;
 	}
 
-	return Sum / AmplitudeSum;
+	return Sum / FMath::Max(AmplitudeSum, UE_SMALL_NUMBER);
 }

@@ -4,13 +4,20 @@
 #include "WorldGenConfig.h"
 #include "WorldGenResult.h"
 
+class FMassifTerrainField;
+
+/**
+ * Builds the terrain field, then materialises one window of it into a plain
+ * array.
+ *
+ * The array is scaffolding. The field has no resolution and the world has no
+ * heightfield; this exists so the M1 chunk renderer and the debug export keep
+ * working until M5 samples the field directly into clipmap rings.
+ */
 struct MASSIFWORLDGEN_API FWorldGenPipeline
 {
-	/**
-	 * Runs all generation stages. CPU stages are deterministic per config on
-	 * every platform; GPU erosion is deterministic per machine. Call from the
-	 * game thread when erosion is enabled (it dispatches render commands);
-	 * erosion is skipped without a rendering RHI.
-	 */
 	static FWorldGenResult Generate(const FWorldGenConfig& Config);
+
+	/** Samples the window the config's preview settings describe, centred on the world origin. */
+	static FWorldGenResult MaterialisePreviewWindow(const FMassifTerrainField& Field);
 };
