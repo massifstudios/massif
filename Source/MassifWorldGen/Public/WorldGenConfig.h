@@ -140,18 +140,19 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	float HeadwaterFloorHalfWidthMeters = 15.0f;
 
 	/**
-	 * Share of the relief up to the crest a headwater stream is responsible for;
-	 * a trunk always claims all of it.
-	 *
-	 * Held at 1 for now. Below 1 a headwater's profile stops climbing early, so
-	 * it wins over a wide area at a low height and meets the trunk's still
-	 * climbing profile as a cliff — measurably worse, not better. Dissection
-	 * being uniform at the node spacing is a real problem, but the fix is to
-	 * cut small streams as notches into the surface the trunks define rather
-	 * than to have them propose a surface of their own.
+	 * Discharge fraction above which a watercourse defines the mountainside,
+	 * proposing a valley side that climbs to the crest. Everything below it
+	 * only cuts a notch into that surface. Letting every stream claim the full
+	 * relief dissects the ground uniformly at the node spacing: the ridge
+	 * between two adjacent headwaters is barely above the streams, and the
+	 * whole massif reads as knife-edges.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	float HeadwaterReliefClaim = 1.0f;
+	float BackboneDischargeFraction = 0.35f;
+
+	/** Deepest cut a small stream makes below the mountainside it sits on. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
+	float StreamNotchDepthMeters = 100.0f;
 
 	/**
 	 * Ground keeps climbing this much per meter away from a watercourse even

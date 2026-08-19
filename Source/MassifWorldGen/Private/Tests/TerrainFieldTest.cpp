@@ -153,6 +153,9 @@ bool FTerrainFieldSurfaceTest::RunTest(const FString& Parameters)
 		}
 	}
 
+	// A pit only counts when it is deep enough to be a hollow the ground cannot
+	// drain, not a centimetre dimple the stripe filter leaves on smooth slopes.
+	const double PitDepthFloorMeters = 0.25;
 	double MaxNeighborDelta = 0.0;
 	int32 PitCount = 0;
 	for (int32 StepY = 1; StepY < Side - 1; ++StepY)
@@ -163,8 +166,10 @@ bool FTerrainFieldSurfaceTest::RunTest(const FString& Parameters)
 			const double Height = Heights[Index];
 			MaxNeighborDelta = FMath::Max(MaxNeighborDelta, FMath::Abs(Heights[Index + 1] - Height));
 			MaxNeighborDelta = FMath::Max(MaxNeighborDelta, FMath::Abs(Heights[Index + Side] - Height));
-			PitCount += Height < Heights[Index - 1] && Height < Heights[Index + 1]
-				&& Height < Heights[Index - Side] && Height < Heights[Index + Side];
+			const double LowestNeighbor = FMath::Min(
+				FMath::Min(Heights[Index - 1], Heights[Index + 1]),
+				FMath::Min(Heights[Index - Side], Heights[Index + Side]));
+			PitCount += LowestNeighbor - Height > PitDepthFloorMeters;
 		}
 	}
 

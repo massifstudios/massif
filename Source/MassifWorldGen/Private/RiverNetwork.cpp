@@ -77,29 +77,18 @@ namespace
 	{
 		double FloorHalfWidthMeters = 0.0;
 		double SideWidthMeters = 0.0;
-		/** Share of the relief up to the crest this watercourse is responsible for. */
-		double ReliefClaim = 1.0;
 	};
 
-	/**
-	 * A trunk carrying a whole catchment cuts a broad, deep valley; a headwater
-	 * stream only notches the slope it sits on.
-	 *
-	 * The relief claim is what separates a landform from a sponge. Letting every
-	 * watercourse cut down to its own water level, headwaters included, leaves
-	 * the ground dissected uniformly at the node spacing: the ridge between two
-	 * adjacent headwaters is only as high as their profiles reach halfway
-	 * between them, which is barely above the streams. Giving the small ones a
-	 * small claim leaves the interfluves to the trunks, so the trunk's valley
-	 * sides carry the relief and the streams sit in shallow notches cut into
-	 * them, which is the shape a real catchment has.
-	 */
-	FValleyShape ValleyShapeForNode(const FRiverNode& Node, const FWorldGenConfig& Config)
+	/** Log-scaled share of the biggest possible discharge, 0 at a headwater, 1 on the widest trunk. */
+	double DischargeFraction(const FRiverNode& Node, const FWorldGenConfig& Config)
 	{
 		const double Discharge = FMath::Loge(1.0 + static_cast<double>(Node.UpstreamNodeCount));
 		const double TrunkDischarge = FMath::Loge(1.0 + static_cast<double>(Config.RiverMaxNodeCount));
-		const double Fraction = FMath::Clamp(Discharge / FMath::Max(1.0, TrunkDischarge), 0.0, 1.0);
+		return FMath::Clamp(Discharge / FMath::Max(1.0, TrunkDischarge), 0.0, 1.0);
+	}
 
+	FValleyShape ValleyShapeForFraction(double Fraction, const FWorldGenConfig& Config)
+	{
 		FValleyShape Shape;
 		Shape.FloorHalfWidthMeters = FMath::Lerp(
 			static_cast<double>(Config.HeadwaterFloorHalfWidthMeters),
@@ -107,9 +96,37 @@ namespace
 		Shape.SideWidthMeters = FMath::Lerp(
 			static_cast<double>(Config.HeadwaterValleyWidthMeters),
 			static_cast<double>(Config.TrunkValleyWidthMeters), Fraction);
-		Shape.ReliefClaim = FMath::Lerp(
-			static_cast<double>(Config.HeadwaterReliefClaim), 1.0, Fraction);
 		return Shape;
+	}
+
+	/**
+	 * Farthest a notch reaches from its stream. Notch fades use a smoothstep
+	 * that ends exactly here, not the asymptotic valley profile, so a query
+	 * only ever has to look this far for streams that could still cut it.
+	 */
+	double NotchReachMeters(const FWorldGenConfig& Config)
+	{
+		return static_cast<double>(Config.TrunkFloorHalfWidthMeters) + static_cast<double>(Config.HeadwaterValleyWidthMeters);
+	}
+
+	/**
+	 * Depth a small stream cuts below the backbone surface at its recorded
+	 * distance: down to its own water, but never more than the configured notch
+	 * depth, gone entirely at the end of its side width. Zero when the stream
+	 * stands above the backbone, so a notch can only ever lower ground.
+	 */
+	double NotchCutMeters(const FRiverNotchCandidate& Notch, double BackboneHeightMeters, const FWorldGenConfig& Config)
+	{
+		const double DepthAvailable = BackboneHeightMeters - Notch.WaterElevationMeters;
+		if (DepthAvailable <= 0.0)
+		{
+			return 0.0;
+		}
+		const double DepthMeters = FMath::Min(DepthAvailable, static_cast<double>(Config.StreamNotchDepthMeters));
+		const double SideDistance = FMath::Max(0.0, Notch.DistanceMeters - Notch.FloorHalfWidthMeters);
+		const double Side = FMath::Clamp(SideDistance / FMath::Max(1.0, Notch.SideWidthMeters), 0.0, 1.0);
+		const double Fade = 1.0 - Side * Side * (3.0 - 2.0 * Side);
+		return DepthMeters * Fade;
 	}
 
 	/**
@@ -488,46 +505,68 @@ double FRiverNetwork::LowestPossibleProposalBeyond(double RadiusMeters, double C
 
 void FRiverNetwork::AccumulateCell(
 	int32 Cell, FVector2d PositionMeters, double CrestAltitudeMeters, const FWorldGenConfig& Config,
-	double& LowestHeight, double& SecondLowestHeight, FRiverTerrainSample& Result) const
+	FRiverSampleAccumulator& Accumulator) const
 {
 	const double CellDistance = CellMinDistanceMeters(Cell, PositionMeters);
 	const double LowestWaterHere = IndexCellMinWaterElevation[Cell];
 	const double BestPossible = LowestWaterHere
 		+ FMath::Max(0.0, CrestAltitudeMeters - LowestWaterHere) * ValleySideFraction(CellDistance, Config.TrunkFloorHalfWidthMeters, Config.TrunkValleyWidthMeters)
 		+ Config.InterfluveRiseSlope * CellDistance;
-	if (BestPossible > SecondLowestHeight)
+	const bool bCouldStillCut = CellDistance <= NotchReachMeters(Config);
+	if (BestPossible > Accumulator.SecondLowestBackboneHeight && !bCouldStillCut)
 	{
 		return;
 	}
 
 	for (int32 Slot = IndexCellStarts[Cell]; Slot < IndexCellStarts[Cell + 1]; ++Slot)
 	{
-		const FRiverNode& Node = Nodes[IndexedSegments[Slot]];
-		const FRiverNode& Downstream = Nodes[Node.ParentIndex];
-		double AlongFraction = 0.0;
-		const double Distance = DistanceToSegment(PositionMeters, Node.PositionMeters, Downstream.PositionMeters, AlongFraction);
-		const double WaterElevation = FMath::Lerp(Node.ElevationMeters, Downstream.ElevationMeters, AlongFraction);
+		AccumulateSegment(Nodes[IndexedSegments[Slot]], PositionMeters, CrestAltitudeMeters, Config, Accumulator);
+	}
+}
 
-		const FValleyShape Shape = ValleyShapeForNode(Node, Config);
-		const double Available = FMath::Max(0.0, CrestAltitudeMeters - WaterElevation) * Shape.ReliefClaim;
-		const double Fraction = ValleySideFraction(Distance, Shape.FloorHalfWidthMeters, Shape.SideWidthMeters);
-		const double ProposedHeight = WaterElevation + Available * Fraction + Config.InterfluveRiseSlope * Distance;
+void FRiverNetwork::AccumulateSegment(
+	const FRiverNode& Node, FVector2d PositionMeters, double CrestAltitudeMeters, const FWorldGenConfig& Config,
+	FRiverSampleAccumulator& Accumulator) const
+{
+	const FRiverNode& Downstream = Nodes[Node.ParentIndex];
+	double AlongFraction = 0.0;
+	const double Distance = DistanceToSegment(PositionMeters, Node.PositionMeters, Downstream.PositionMeters, AlongFraction);
+	const double WaterElevation = FMath::Lerp(Node.ElevationMeters, Downstream.ElevationMeters, AlongFraction);
 
-		if (ProposedHeight < LowestHeight)
-		{
-			SecondLowestHeight = LowestHeight;
-			LowestHeight = ProposedHeight;
-		}
-		else if (ProposedHeight < SecondLowestHeight)
-		{
-			SecondLowestHeight = ProposedHeight;
-		}
+	if (Distance < Accumulator.Result.DistanceToWaterMeters)
+	{
+		Accumulator.Result.DistanceToWaterMeters = Distance;
+		Accumulator.Result.NearestWaterElevationMeters = WaterElevation;
+	}
 
-		if (Distance < Result.DistanceToWaterMeters)
+	const double Fraction = DischargeFraction(Node, Config);
+	const FValleyShape Shape = ValleyShapeForFraction(Fraction, Config);
+
+	if (Fraction < Config.BackboneDischargeFraction)
+	{
+		// Too small to shape the mountainside: remember it as a notch to cut
+		// once the backbone height here is known. The side width is capped at
+		// the headwater width so no notch reaches past NotchReachMeters.
+		const double SideWidthMeters = FMath::Min(Shape.SideWidthMeters, static_cast<double>(Config.HeadwaterValleyWidthMeters));
+		if (Distance < Shape.FloorHalfWidthMeters + SideWidthMeters)
 		{
-			Result.DistanceToWaterMeters = Distance;
-			Result.NearestWaterElevationMeters = WaterElevation;
+			Accumulator.Notches.Add({ Distance, WaterElevation, Shape.FloorHalfWidthMeters, SideWidthMeters });
 		}
+		return;
+	}
+
+	const double Available = FMath::Max(0.0, CrestAltitudeMeters - WaterElevation);
+	const double SideFraction = ValleySideFraction(Distance, Shape.FloorHalfWidthMeters, Shape.SideWidthMeters);
+	const double ProposedHeight = WaterElevation + Available * SideFraction + Config.InterfluveRiseSlope * Distance;
+
+	if (ProposedHeight < Accumulator.LowestBackboneHeight)
+	{
+		Accumulator.SecondLowestBackboneHeight = Accumulator.LowestBackboneHeight;
+		Accumulator.LowestBackboneHeight = ProposedHeight;
+	}
+	else if (ProposedHeight < Accumulator.SecondLowestBackboneHeight)
+	{
+		Accumulator.SecondLowestBackboneHeight = ProposedHeight;
 	}
 }
 
@@ -535,13 +574,13 @@ FRiverTerrainSample FRiverNetwork::Sample(FVector2d PositionMeters, const FWorld
 {
 	const double CrestAltitudeMeters = Uplift.Sample(PositionMeters).CrestAltitudeMeters;
 
-	// Every watercourse proposes a height for this point. The lowest wins,
+	// Big watercourses propose the mountainside: the lowest proposal wins,
 	// because water cuts down to the valley it belongs to, and the crest
-	// between two catchments is where the two lowest proposals meet.
-	double LowestHeight = TNumericLimits<double>::Max();
-	double SecondLowestHeight = TNumericLimits<double>::Max();
-	FRiverTerrainSample Result;
-	Result.DistanceToWaterMeters = TNumericLimits<double>::Max();
+	// between two catchments is where the two lowest proposals meet. Small
+	// watercourses do not shape the mountainside at all — they cut notches
+	// into whatever surface the big ones settled on.
+	FRiverSampleAccumulator Accumulator;
+	Accumulator.Result.DistanceToWaterMeters = TNumericLimits<double>::Max();
 
 	const int32 CenterCellX = FMath::Clamp(FMath::FloorToInt32((PositionMeters.X + IndexOriginMeters) / IndexCellSizeMeters), 0, IndexCellsPerSide - 1);
 	const int32 CenterCellY = FMath::Clamp(FMath::FloorToInt32((PositionMeters.Y + IndexOriginMeters) / IndexCellSizeMeters), 0, IndexCellsPerSide - 1);
@@ -550,7 +589,9 @@ FRiverTerrainSample FRiverNetwork::Sample(FVector2d PositionMeters, const FWorld
 	for (int32 RingIndex = 0; RingIndex < IndexCellsPerSide; ++RingIndex)
 	{
 		const double ClearedRadius = FMath::Max(0.0, (RingIndex - 1) * IndexCellSizeMeters);
-		if (LowestPossibleProposalBeyond(ClearedRadius, CrestAltitudeMeters, Config) > SecondLowestHeight)
+		const bool bBackboneSettled =
+			LowestPossibleProposalBeyond(ClearedRadius, CrestAltitudeMeters, Config) > Accumulator.SecondLowestBackboneHeight;
+		if (bBackboneSettled && ClearedRadius > NotchReachMeters(Config))
 		{
 			break;
 		}
@@ -559,13 +600,14 @@ FRiverTerrainSample FRiverNetwork::Sample(FVector2d PositionMeters, const FWorld
 		GatherRingCells(RingIndex, CenterCellX, CenterCellY, RingCells);
 		for (const int32 Cell : RingCells)
 		{
-			AccumulateCell(Cell, PositionMeters, CrestAltitudeMeters, Config, LowestHeight, SecondLowestHeight, Result);
+			AccumulateCell(Cell, PositionMeters, CrestAltitudeMeters, Config, Accumulator);
 		}
 	}
 
-	if (LowestHeight == TNumericLimits<double>::Max())
+	FRiverTerrainSample Result = Accumulator.Result;
+	if (Accumulator.LowestBackboneHeight == TNumericLimits<double>::Max())
 	{
-		// No watercourse in the whole world: flat ground at the crest altitude.
+		// No big watercourse in the whole world: flat ground at the crest altitude.
 		Result.DistanceToWaterMeters = Config.TrunkValleyWidthMeters * 4.0;
 		Result.NearestWaterElevationMeters = Config.MinAltitudeMeters;
 		Result.HeightMeters = CrestAltitudeMeters;
@@ -573,7 +615,16 @@ FRiverTerrainSample FRiverNetwork::Sample(FVector2d PositionMeters, const FWorld
 		return Result;
 	}
 
-	Result.HeightMeters = PolynomialSmoothMin(LowestHeight, SecondLowestHeight, FMath::Max(1.0, static_cast<double>(Config.RidgeBlendMeters)));
+	const double BackboneHeight = PolynomialSmoothMin(
+		Accumulator.LowestBackboneHeight, Accumulator.SecondLowestBackboneHeight,
+		FMath::Max(1.0, static_cast<double>(Config.RidgeBlendMeters)));
+
+	double DeepestCutMeters = 0.0;
+	for (const FRiverNotchCandidate& Notch : Accumulator.Notches)
+	{
+		DeepestCutMeters = FMath::Max(DeepestCutMeters, NotchCutMeters(Notch, BackboneHeight, Config));
+	}
+	Result.HeightMeters = BackboneHeight - DeepestCutMeters;
 
 	const double AvailableHere = FMath::Max(1.0, CrestAltitudeMeters - Result.NearestWaterElevationMeters);
 	Result.ReliefFraction = static_cast<float>(

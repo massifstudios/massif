@@ -84,6 +84,30 @@ bool FRiverNetworkTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Network has headwaters"), HeadwaterCount > 0);
 	TestTrue(TEXT("Mouths drain more than headwaters"), Nodes[0].UpstreamNodeCount > 0);
 
+	// Small streams cut notches into the mountainside instead of claiming the
+	// relief: somewhere the ground at a small stream stands well above the
+	// water the growth assigned it. A trunk's floor stays at its own water.
+	const double TrunkDischarge = FMath::Loge(1.0 + static_cast<double>(Config.RiverMaxNodeCount));
+	int32 BuriedSmallStreamCount = 0;
+	for (int32 NodeIndex = 0; NodeIndex < Nodes.Num(); NodeIndex += 25)
+	{
+		const FRiverNode& Node = Nodes[NodeIndex];
+		const double Fraction = FMath::Loge(1.0 + static_cast<double>(Node.UpstreamNodeCount)) / TrunkDischarge;
+		const double GroundMeters = Network.Sample(Node.PositionMeters, Config, Uplift).HeightMeters;
+		if (Fraction < Config.BackboneDischargeFraction)
+		{
+			BuriedSmallStreamCount += GroundMeters > Node.ElevationMeters + Config.StreamNotchDepthMeters;
+			continue;
+		}
+		if (GroundMeters > Node.ElevationMeters + 1.0)
+		{
+			AddError(FString::Printf(TEXT("Trunk floor at (%.0f, %.0f) stands %.1f m above its own water"),
+				Node.PositionMeters.X, Node.PositionMeters.Y, GroundMeters - Node.ElevationMeters));
+			return false;
+		}
+	}
+	TestTrue(TEXT("Small streams sit in notches shallower than the relief above them"), BuriedSmallStreamCount > 0);
+
 	const FRiverNetwork RepeatRun = FRiverNetwork::Build(MakeNetworkTestConfig(1337), Uplift);
 	const FMassifUpliftField OtherUplift(Config, 99);
 	const FRiverNetwork OtherSeedRun = FRiverNetwork::Build(MakeNetworkTestConfig(99), OtherUplift);

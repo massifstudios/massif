@@ -38,6 +38,24 @@ struct FRiverTerrainSample
 	float ReliefFraction = 0.0f;
 };
 
+/** A small stream near the query, kept until the backbone height it cuts into is known. */
+struct FRiverNotchCandidate
+{
+	double DistanceMeters = 0.0;
+	double WaterElevationMeters = 0.0;
+	double FloorHalfWidthMeters = 0.0;
+	double SideWidthMeters = 0.0;
+};
+
+/** Running state of one Sample query while it walks outward over the segment index. */
+struct FRiverSampleAccumulator
+{
+	double LowestBackboneHeight = TNumericLimits<double>::Max();
+	double SecondLowestBackboneHeight = TNumericLimits<double>::Max();
+	TArray<FRiverNotchCandidate, TInlineAllocator<32>> Notches;
+	FRiverTerrainSample Result;
+};
+
 /**
  * Seeded river network grown inland from mouths on the world border, after
  * Genevaux et al., "Terrain Generation Using Procedural Models Based on
@@ -84,10 +102,15 @@ private:
 	/** Closest a point in this cell can be to the query. */
 	double CellMinDistanceMeters(int32 Cell, FVector2d PositionMeters) const;
 
-	/** Folds one cell's segments into the running best two proposals, or skips the cell whole. */
+	/** Folds one cell's segments into the accumulator, or skips the cell whole. */
 	void AccumulateCell(
 		int32 Cell, FVector2d PositionMeters, double CrestAltitudeMeters, const FWorldGenConfig& Config,
-		double& LowestHeight, double& SecondLowestHeight, FRiverTerrainSample& Result) const;
+		FRiverSampleAccumulator& Accumulator) const;
+
+	/** One segment's contribution: a backbone proposal for a big watercourse, a notch candidate for a small one. */
+	void AccumulateSegment(
+		const FRiverNode& Node, FVector2d PositionMeters, double CrestAltitudeMeters, const FWorldGenConfig& Config,
+		FRiverSampleAccumulator& Accumulator) const;
 
 	TArray<FRiverNode> Nodes;
 
