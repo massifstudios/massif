@@ -25,29 +25,79 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen")
 	float MaxAltitudeMeters = 3000.0f;
 
-	/** Broad uplift features per map side; low values give few large massifs. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
-	float UpliftFrequency = 2.2f;
+	/**
+	 * Lattice the river field is evaluated on before being interpolated up to
+	 * the heightfield. The field varies over hundreds of meters, so it does not
+	 * need the full grid.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
+	int32 RiverFieldResolution = 513;
 
-	/** Direction the mountain chains run, degrees counter-clockwise from +X. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
-	float RangeAxisDegrees = 25.0f;
+	/** Watercourses reaching the map border, each the outlet of one catchment. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
+	int32 RiverMouthCount = 7;
 
-	/** Along-axis frequency scale; below 1 stretches uplift into long chains. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
-	float RangeElongation = 0.4f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
+	float RiverMouthSpacingMeters = 1600.0f;
 
-	/** Uplift below this level drops to the valley floor, separating chains. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
-	float MassifThreshold = 0.20f;
+	/** Distance between successive nodes along a watercourse. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
+	float RiverSegmentLengthMeters = 520.0f;
 
-	/** Regional height variation features per map side. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
-	float RegionFrequency = 1.2f;
+	/** Watercourses may not come closer to each other than this, which sets valley spacing. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
+	float RiverMinNodeSpacingMeters = 360.0f;
 
-	/** How much regional variation lowers the weaker parts of the range. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
-	float RegionContrast = 0.25f;
+	/** Chance that a node forks into two tributaries instead of continuing. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
+	float RiverBranchProbability = 0.6f;
+
+	/** Heading change allowed between successive nodes, degrees. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
+	float RiverTurnDegrees = 28.0f;
+
+	/** Half-angle between the two branches of a fork, degrees. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
+	float RiverForkDegrees = 40.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
+	int32 RiverMaxNodeCount = 1200;
+
+	/** Valley floor gradient just above a mouth. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
+	float RiverSlopeNearMouth = 0.03f;
+
+	/** Valley floor gradient in the headwaters. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
+	float RiverSlopeHeadwater = 0.14f;
+
+	/** How far the ground rises above the valley floor before it levels off. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
+	float ValleyReliefMeters = 900.0f;
+
+	/** Horizontal scale of the valley side on a trunk river; smaller is steeper. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
+	float TrunkValleyWidthMeters = 1200.0f;
+
+	/** The same for a headwater stream, which only notches the slope it runs down. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
+	float HeadwaterValleyWidthMeters = 420.0f;
+
+	/**
+	 * Ground keeps climbing this much per meter away from a watercourse even
+	 * after the valley side has levelled off. Without it the interfluves come
+	 * out as plateaus at one fixed height.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
+	float InterfluveRiseSlope = 0.02f;
+
+	/** Highest a watercourse may start, as a fraction of the altitude range. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
+	float RiverMaxSourceAltitudeFraction = 0.6f;
+
+	/** Rounding of the crest where two catchments meet, meters. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
+	float RidgeBlendMeters = 450.0f;
 
 	/** Ridge features per map side. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
@@ -60,6 +110,10 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
 	float RidgeSharpness = 1.0f;
 
+	/** How much the ridge noise pushes the crests up and down, meters. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
+	float RidgeAmplitudeMeters = 400.0f;
+
 	/** Medium-scale surface relief features per map side (spurs, gullies, knolls). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
 	float DetailFrequency = 24.0f;
@@ -67,29 +121,12 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
 	float DetailAmplitudeMeters = 45.0f;
 
-	/** How far ridged relief cuts down between crests; 0 keeps massifs flat-topped, 1 drops valleys to the floor. */
+	/** Sideways displacement of the query point, meters; bends the valleys off the graph's straight segments. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
-	float ValleyDepth = 0.8f;
+	float TerrainWarpMeters = 600.0f;
 
-	/** Main valley threads per map side; these run continuously through the range. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
-	float ValleyNetworkFrequency = 2.6f;
-
-	/** How deeply the valley network cuts into the massifs, 0 to 1. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
-	float ValleyNetworkStrength = 0.4f;
-
-	/** Valley thread width; above 1 narrows them to gorges. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
-	float ValleyNetworkSharpness = 1.6f;
-
-	/** Slope profile exponent; above 1 keeps low ground gentle and steepens towards the summits. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
-	float SlopeProfileExponent = 1.4f;
-
-	/** Domain warp displacement as a fraction of map size. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
-	float WarpStrength = 0.08f;
+	float TerrainWarpFrequency = 5.0f;
 
 	/** Fraction of the map edge over which height falls off to keep borders low. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
