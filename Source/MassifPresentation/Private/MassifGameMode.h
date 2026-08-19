@@ -5,6 +5,7 @@
 #include "WorldGenConfig.h"
 #include "MassifGameMode.generated.h"
 
+class AMassifFoliageManager;
 class AMassifTerrainManager;
 class FMassifTerrainField;
 
@@ -53,6 +54,9 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<AMassifTerrainManager> TerrainManager;
+
+	UPROPERTY()
+	TObjectPtr<AMassifFoliageManager> FoliageManager;
 
 	FWorldGenConfig PendingKnobConfig;
 	double PendingKnobsSinceSeconds = -1.0;

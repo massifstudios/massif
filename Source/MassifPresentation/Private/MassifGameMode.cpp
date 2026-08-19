@@ -11,6 +11,7 @@
 #include "GameFramework/SpectatorPawn.h"
 #include "Components/InputComponent.h"
 #include "Engine/GameViewportClient.h"
+#include "Foliage/MassifFoliageManager.h"
 #include "MassifTerrainField.h"
 #include "MassifTuningPanel.h"
 #include "Materials/MaterialInterface.h"
@@ -220,6 +221,7 @@ void AMassifGameMode::RebuildTerrainField(const FWorldGenConfig& Config)
 	TSharedPtr<const FMassifTerrainField> NewField = MakeShared<const FMassifTerrainField>(Config);
 	TerrainField = NewField;
 	TerrainManager->ResetField(NewField);
+	FoliageManager->ResetField(NewField, Config.MasterSeed);
 	UE_LOG(LogTemp, Display, TEXT("Terrain field rebuilt in %.2f s"), FPlatformTime::Seconds() - StartSeconds);
 }
 
@@ -355,6 +357,9 @@ void AMassifGameMode::GenerateWorldAndSpawnTerrain()
 
 	TerrainManager = GetWorld()->SpawnActor<AMassifTerrainManager>();
 	TerrainManager->Initialize(TerrainField, LoadTerrainMaterial());
+
+	FoliageManager = GetWorld()->SpawnActor<AMassifFoliageManager>();
+	FoliageManager->Initialize(TerrainField, Config.MasterSeed);
 }
 
 void AMassifGameMode::ConfigureSpectatorPawn()
