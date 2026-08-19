@@ -26,9 +26,10 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	float MaxAltitudeMeters = 3000.0f;
 
 	/**
-	 * Lattice the river field is evaluated on before being interpolated up to
-	 * the heightfield. The field varies over hundreds of meters, so it does not
-	 * need the full grid.
+	 * Lattice the macro surface is evaluated on before being interpolated up to
+	 * the heightfield. It varies over hundreds of meters, so it does not need
+	 * the full grid; its central differences also supply the surface slope the
+	 * erosion filter orients its gullies by.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
 	int32 RiverFieldResolution = 513;
@@ -91,9 +92,13 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
 	float InterfluveRiseSlope = 0.02f;
 
-	/** Highest a watercourse may start, as a fraction of the altitude range. */
+	/**
+	 * Highest a watercourse may start, as a fraction of the altitude range.
+	 * Ground above it drains nowhere and reads as an undissected plateau, so
+	 * this sits just below the crests rather than partway up them.
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	float RiverMaxSourceAltitudeFraction = 0.6f;
+	float RiverMaxSourceAltitudeFraction = 0.8f;
 
 	/** Rounding of the crest where two catchments meet, meters. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
@@ -114,13 +119,6 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
 	float RidgeAmplitudeMeters = 400.0f;
 
-	/** Medium-scale surface relief features per map side (spurs, gullies, knolls). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
-	float DetailFrequency = 24.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
-	float DetailAmplitudeMeters = 45.0f;
-
 	/** Sideways displacement of the query point, meters; bends the valleys off the graph's straight segments. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
 	float TerrainWarpMeters = 600.0f;
@@ -132,12 +130,62 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
 	float EdgeFalloffFraction = 0.12f;
 
-	/** Hydraulic erosion simulation steps; 0 disables erosion entirely. */
+	/** Gully scales the erosion filter cuts, coarsest first; 0 leaves the macro surface bare. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
+	int32 GullyOctaveCount = 5;
+
+	/** Spacing of the coarsest gullies. Keep it under the valley spacing or gullies compete with valleys. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
+	float LargestGullyWavelengthMeters = 480.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
+	float LargestGullyDepthMeters = 90.0f;
+
+	/** Wavelength and depth left per octave. Equal values keep gully steepness the same at every scale. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
+	float GullyWavelengthGain = 0.5f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
+	float GullyDepthGain = 0.55f;
+
+	/** Spacing of the stripe pivot lattice as a multiple of the wavelength; below 1 the gullies lose coherence. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
+	float GullyCellsPerWavelength = 1.0f;
+
+	/** Surface gradient at which gullies cut to full depth; gentler ground gets proportionally less. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
+	float GullySlopeReference = 0.35f;
+
+	/** Above 1, fine gullies keep cutting on ground where the coarse ones had already faded out. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
+	float GullyDetailPersistence = 1.6f;
+
+	/**
+	 * How strongly a gully bends the flow the finer gullies follow, as a
+	 * fraction of the slope it is cut into. This is what makes them branch, and
+	 * the one dial trading branching against a smooth surface: past roughly 0.3
+	 * the bending outruns the pattern and tears it into cliffs.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
+	float GullyBranchStrength = 0.25f;
+
+	/** 1 keeps a rounded cosine profile at that end of the gully, 0 pinches it to a straight-sided edge. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
+	float GullyRidgeRounding = 0.6f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
+	float GullyCreaseRounding = 0.15f;
+
+	/**
+	 * Hydraulic erosion simulation steps; 0 disables the simulated pass
+	 * entirely. The erosion filter above does the incising analytically, so the
+	 * simulation is off by default and only worth enabling to add deposition.
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Erosion")
-	int32 HydraulicIterationCount = 1500;
+	int32 HydraulicIterationCount = 0;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Erosion")
-	int32 ThermalIterationCount = 500;
+	int32 ThermalIterationCount = 0;
 
 	/** Simulation step in seconds. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Erosion")

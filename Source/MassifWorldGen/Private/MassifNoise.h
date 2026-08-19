@@ -21,4 +21,7 @@ namespace MassifNoise
 	 * rounded crests, 2.0 gives knife edges.
 	 */
 	float RidgedFractal(float X, float Y, uint32 Seed, int32 OctaveCount, float Lacunarity, float Gain, float SharpnessExponent);
+
+	/** Deterministic point in [0, 1)^2 for one lattice cell, as Worley-style noise uses. */
+	FVector2f CellPoint(int32 CellX, int32 CellY, uint32 Seed);
 }

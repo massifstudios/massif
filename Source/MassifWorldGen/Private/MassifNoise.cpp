@@ -73,6 +73,15 @@ float MassifNoise::Fractal(float X, float Y, uint32 Seed, int32 OctaveCount, flo
 	return Sum / AmplitudeSum;
 }
 
+FVector2f MassifNoise::CellPoint(int32 CellX, int32 CellY, uint32 Seed)
+{
+	const uint32 Hash = HashLattice(CellX, CellY, Seed);
+	const float ToUnit = 1.0f / 65536.0f;
+	return FVector2f(
+		static_cast<float>(Hash & 0xFFFFu) * ToUnit,
+		static_cast<float>((Hash >> 16) & 0xFFFFu) * ToUnit);
+}
+
 float MassifNoise::RidgedFractal(float X, float Y, uint32 Seed, int32 OctaveCount, float Lacunarity, float Gain, float SharpnessExponent)
 {
 	float Sum = 0.0f;

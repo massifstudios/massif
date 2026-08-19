@@ -1,71 +1,143 @@
 #include "WorldGenPipeline.h"
 
 #include "GpuErosion.h"
+#include "MassifErosionFilter.h"
 #include "MassifNoise.h"
 #include "MassifSeed.h"
 #include "RiverNetwork.h"
 
 namespace
 {
-	/**
-	 * The river field sampled on a coarse lattice. Evaluating the whole graph
-	 * costs the same for every point, so it is done once per lattice node and
-	 * interpolated; the field is smooth at this spacing, and the noise detail
-	 * that is not goes on afterwards at full resolution.
-	 */
-	struct FRiverFieldGrid
+	/** Ridged noise on the crests, faded out towards the valley floors. */
+	float RidgeRelief(const FWorldGenConfig& Config, uint32 RidgeSeed, FVector2f PositionMeters, float ReliefFraction)
 	{
-		TArray<float> BaseHeightMeters;
-		TArray<float> DistanceToWaterMeters;
-		TArray<float> NearestWaterElevationMeters;
+		const float CyclesPerMeter = Config.RidgeFrequency / FMath::Max(1.0f, Config.WorldSizeMeters);
+		const float Ridged = MassifNoise::RidgedFractal(
+			PositionMeters.X * CyclesPerMeter, PositionMeters.Y * CyclesPerMeter,
+			RidgeSeed, Config.RidgeOctaveCount, 2.0f, 0.5f, Config.RidgeSharpness);
+		return (Ridged - 0.5f) * Config.RidgeAmplitudeMeters * ReliefFraction * ReliefFraction;
+	}
+
+	struct FMacroSurfaceSample
+	{
+		float HeightMeters = 0.0f;
+		FVector2f SlopeMetersPerMeter = FVector2f::ZeroVector;
+		/** 0 on a valley floor, 1 where the valley side has climbed its full relief. */
+		float ReliefFraction = 0.0f;
+	};
+
+	/**
+	 * The landform without any erosion detail: river valleys plus the ridge
+	 * noise riding on their crests, sampled on a coarse lattice. Evaluating the
+	 * whole river graph costs the same for every point, so it is done once per
+	 * lattice node and interpolated.
+	 *
+	 * The lattice also yields the surface slope by central difference. That
+	 * slope is what orients the erosion filter, so it has to come from the
+	 * landform alone: a slope read off the finished terrain would already
+	 * contain the gullies the filter is about to cut.
+	 */
+	struct FMacroSurfaceGrid
+	{
+		TArray<float> HeightMeters;
+		TArray<float> SlopeX;
+		TArray<float> SlopeY;
+		TArray<float> ReliefFraction;
 		int32 SamplesPerSide = 0;
 		float MetersPerSample = 0.0f;
 		float HalfWorldMeters = 0.0f;
 
-		FRiverFieldGrid(const FWorldGenConfig& Config, const FRiverNetwork& Network, int32 InSamplesPerSide)
-			: SamplesPerSide(InSamplesPerSide)
-			, MetersPerSample(Config.WorldSizeMeters / static_cast<float>(InSamplesPerSide - 1))
+		FMacroSurfaceGrid(const FWorldGenConfig& Config, const FRiverNetwork& Network, uint32 RidgeSeed)
+			: SamplesPerSide(FMath::Max(2, Config.RiverFieldResolution))
+			, MetersPerSample(Config.WorldSizeMeters / static_cast<float>(FMath::Max(2, Config.RiverFieldResolution) - 1))
 			, HalfWorldMeters(Config.WorldSizeMeters * 0.5f)
 		{
-			BaseHeightMeters.SetNumUninitialized(SamplesPerSide * SamplesPerSide);
-			DistanceToWaterMeters.SetNumUninitialized(SamplesPerSide * SamplesPerSide);
-			NearestWaterElevationMeters.SetNumUninitialized(SamplesPerSide * SamplesPerSide);
+			const int32 SampleCount = SamplesPerSide * SamplesPerSide;
+			HeightMeters.SetNumUninitialized(SampleCount);
+			SlopeX.SetNumUninitialized(SampleCount);
+			SlopeY.SetNumUninitialized(SampleCount);
+			ReliefFraction.SetNumUninitialized(SampleCount);
 
-			ParallelFor(SamplesPerSide, [this, &Config, &Network](int32 SampleY)
+			ParallelFor(SamplesPerSide, [this, &Config, &Network, RidgeSeed](int32 SampleY)
 			{
-				FillRow(Config, Network, SampleY);
+				FillHeightRow(Config, Network, RidgeSeed, SampleY);
+			});
+			ParallelFor(SamplesPerSide, [this](int32 SampleY)
+			{
+				FillSlopeRow(SampleY);
 			});
 		}
 
-		void FillRow(const FWorldGenConfig& Config, const FRiverNetwork& Network, int32 SampleY)
+		float PositionAt(int32 SampleIndex) const
 		{
-			const float PositionY = -HalfWorldMeters + static_cast<float>(SampleY) * MetersPerSample;
+			return -HalfWorldMeters + static_cast<float>(SampleIndex) * MetersPerSample;
+		}
+
+		int32 ClampSample(int32 SampleIndex) const
+		{
+			return FMath::Clamp(SampleIndex, 0, SamplesPerSide - 1);
+		}
+
+		void FillHeightRow(const FWorldGenConfig& Config, const FRiverNetwork& Network, uint32 RidgeSeed, int32 SampleY)
+		{
+			const float PositionY = PositionAt(SampleY);
 			for (int32 SampleX = 0; SampleX < SamplesPerSide; ++SampleX)
 			{
-				const float PositionX = -HalfWorldMeters + static_cast<float>(SampleX) * MetersPerSample;
-				const FRiverTerrainSample Sample = Network.Sample(FVector2f(PositionX, PositionY), Config);
+				const FVector2f Position(PositionAt(SampleX), PositionY);
+				const FRiverTerrainSample River = Network.Sample(Position, Config);
+				const float HeightAboveWater = FMath::Max(0.0f, River.BaseHeightMeters - River.NearestWaterElevationMeters);
+				const float Relief = FMath::Clamp(HeightAboveWater / FMath::Max(1.0f, Config.ValleyReliefMeters), 0.0f, 1.0f);
+
 				const int32 Index = SampleY * SamplesPerSide + SampleX;
-				BaseHeightMeters[Index] = Sample.BaseHeightMeters;
-				DistanceToWaterMeters[Index] = Sample.DistanceToWaterMeters;
-				NearestWaterElevationMeters[Index] = Sample.NearestWaterElevationMeters;
+				ReliefFraction[Index] = Relief;
+				HeightMeters[Index] = River.BaseHeightMeters + RidgeRelief(Config, RidgeSeed, Position, Relief);
 			}
 		}
 
-		FRiverTerrainSample SampleBilinear(FVector2f PositionMeters) const
+		void FillSlopeRow(int32 SampleY)
+		{
+			for (int32 SampleX = 0; SampleX < SamplesPerSide; ++SampleX)
+			{
+				const int32 Index = SampleY * SamplesPerSide + SampleX;
+				SlopeX[Index] = CentralDifference(SampleX, SampleY, 1, 0);
+				SlopeY[Index] = CentralDifference(SampleX, SampleY, 0, 1);
+			}
+		}
+
+		/** One of the steps is always zero, so the clamped index span is the distance travelled. */
+		float CentralDifference(int32 SampleX, int32 SampleY, int32 StepX, int32 StepY) const
+		{
+			const int32 HighX = ClampSample(SampleX + StepX);
+			const int32 HighY = ClampSample(SampleY + StepY);
+			const int32 LowX = ClampSample(SampleX - StepX);
+			const int32 LowY = ClampSample(SampleY - StepY);
+			const float RiseMeters = HeightMeters[HighY * SamplesPerSide + HighX] - HeightMeters[LowY * SamplesPerSide + LowX];
+			const float RunMeters = static_cast<float>((HighX - LowX) + (HighY - LowY)) * MetersPerSample;
+			return RiseMeters / FMath::Max(RunMeters, MetersPerSample);
+		}
+
+		/**
+		 * Smoothstepped rather than straight bilinear: at this lattice spacing a
+		 * plain lerp leaves the cell diagonals as visible creases once the
+		 * heightfield is shaded.
+		 */
+		FMacroSurfaceSample SampleBilinear(FVector2f PositionMeters) const
 		{
 			const float SampleSpaceX = (PositionMeters.X + HalfWorldMeters) / MetersPerSample;
 			const float SampleSpaceY = (PositionMeters.Y + HalfWorldMeters) / MetersPerSample;
-			const int32 LowX = FMath::Clamp(FMath::FloorToInt32(SampleSpaceX), 0, SamplesPerSide - 1);
-			const int32 LowY = FMath::Clamp(FMath::FloorToInt32(SampleSpaceY), 0, SamplesPerSide - 1);
-			const int32 HighX = FMath::Min(LowX + 1, SamplesPerSide - 1);
-			const int32 HighY = FMath::Min(LowY + 1, SamplesPerSide - 1);
-			const float FractionX = FMath::Clamp(SampleSpaceX - static_cast<float>(LowX), 0.0f, 1.0f);
-			const float FractionY = FMath::Clamp(SampleSpaceY - static_cast<float>(LowY), 0.0f, 1.0f);
+			const int32 LowX = ClampSample(FMath::FloorToInt32(SampleSpaceX));
+			const int32 LowY = ClampSample(FMath::FloorToInt32(SampleSpaceY));
+			const int32 HighX = ClampSample(LowX + 1);
+			const int32 HighY = ClampSample(LowY + 1);
+			const float FractionX = FMath::SmoothStep(0.0f, 1.0f, SampleSpaceX - static_cast<float>(LowX));
+			const float FractionY = FMath::SmoothStep(0.0f, 1.0f, SampleSpaceY - static_cast<float>(LowY));
 
-			FRiverTerrainSample Result;
-			Result.BaseHeightMeters = BlendField(BaseHeightMeters, LowX, LowY, HighX, HighY, FractionX, FractionY);
-			Result.DistanceToWaterMeters = BlendField(DistanceToWaterMeters, LowX, LowY, HighX, HighY, FractionX, FractionY);
-			Result.NearestWaterElevationMeters = BlendField(NearestWaterElevationMeters, LowX, LowY, HighX, HighY, FractionX, FractionY);
+			FMacroSurfaceSample Result;
+			Result.HeightMeters = BlendField(HeightMeters, LowX, LowY, HighX, HighY, FractionX, FractionY);
+			Result.SlopeMetersPerMeter = FVector2f(
+				BlendField(SlopeX, LowX, LowY, HighX, HighY, FractionX, FractionY),
+				BlendField(SlopeY, LowX, LowY, HighX, HighY, FractionX, FractionY));
+			Result.ReliefFraction = BlendField(ReliefFraction, LowX, LowY, HighX, HighY, FractionX, FractionY);
 			return Result;
 		}
 
@@ -77,27 +149,43 @@ namespace
 		}
 	};
 
+	FMassifErosionSettings MakeErosionFilterSettings(const FWorldGenConfig& Config, uint32 Seed)
+	{
+		FMassifErosionSettings Settings;
+		Settings.OctaveCount = Config.GullyOctaveCount;
+		Settings.LargestGullyWavelengthMeters = Config.LargestGullyWavelengthMeters;
+		Settings.LargestGullyDepthMeters = Config.LargestGullyDepthMeters;
+		Settings.WavelengthGain = Config.GullyWavelengthGain;
+		Settings.DepthGain = Config.GullyDepthGain;
+		Settings.CellsPerWavelength = Config.GullyCellsPerWavelength;
+		Settings.SlopeReference = Config.GullySlopeReference;
+		Settings.DetailPersistence = Config.GullyDetailPersistence;
+		Settings.BranchStrength = Config.GullyBranchStrength;
+		Settings.RidgeRounding = Config.GullyRidgeRounding;
+		Settings.CreaseRounding = Config.GullyCreaseRounding;
+		Settings.Seed = Seed;
+		return Settings;
+	}
+
 	/**
 	 * Terrain built around the river graph: the network fixes where the valleys
-	 * run and how high their floors sit, and noise only decorates the slopes it
-	 * leaves behind.
+	 * run and how high their floors sit, and the erosion filter cuts the gullies
+	 * into the slopes they leave behind.
 	 */
 	struct FHeightfieldSampler
 	{
 		FWorldGenConfig Config;
-		const FRiverFieldGrid& RiverField;
-		uint32 RidgeSeed = 0;
-		uint32 DetailSeed = 0;
+		const FMacroSurfaceGrid& MacroSurface;
+		FMassifErosionSettings ErosionSettings;
 		uint32 WarpSeedX = 0;
 		uint32 WarpSeedY = 0;
 
-		FHeightfieldSampler(const FWorldGenConfig& InConfig, const FRiverFieldGrid& InRiverField)
+		FHeightfieldSampler(const FWorldGenConfig& InConfig, const FMacroSurfaceGrid& InMacroSurface, const FMassifErosionSettings& InErosionSettings)
 			: Config(InConfig)
-			, RiverField(InRiverField)
+			, MacroSurface(InMacroSurface)
+			, ErosionSettings(InErosionSettings)
 		{
 			const FMassifSeed Seed(static_cast<uint32>(InConfig.MasterSeed));
-			RidgeSeed = Seed.MakeChannelSeed(TEXT("WorldGen.Ridge"));
-			DetailSeed = Seed.MakeChannelSeed(TEXT("WorldGen.Detail"));
 			WarpSeedX = Seed.MakeChannelSeed(TEXT("WorldGen.WarpX"));
 			WarpSeedY = Seed.MakeChannelSeed(TEXT("WorldGen.WarpY"));
 		}
@@ -106,16 +194,14 @@ namespace
 		float SampleAltitude(float UnitX, float UnitY) const
 		{
 			const FVector2f Position = WarpedPosition(UnitX, UnitY);
-			const FRiverTerrainSample River = RiverField.SampleBilinear(Position);
+			const FMacroSurfaceSample Macro = MacroSurface.SampleBilinear(Position);
 
-			// Everything above the valley floor is a slope, and how far up it a
-			// point sits decides how rough the ground gets.
-			const float HeightAboveWater = FMath::Max(0.0f, River.BaseHeightMeters - River.NearestWaterElevationMeters);
-			const float SlopeFraction = FMath::Clamp(HeightAboveWater / FMath::Max(1.0f, Config.ValleyReliefMeters), 0.0f, 1.0f);
+			FMassifErosionInput ErosionInput;
+			ErosionInput.PositionMeters = Position;
+			ErosionInput.SlopeMetersPerMeter = Macro.SlopeMetersPerMeter;
+			ErosionInput.ReliefFraction = Macro.ReliefFraction;
 
-			const float Altitude = River.BaseHeightMeters
-				+ RidgeRelief(UnitX, UnitY, SlopeFraction)
-				+ DetailRelief(UnitX, UnitY, SlopeFraction);
+			const float Altitude = Macro.HeightMeters + MassifErosionFilter::EvaluateDisplacementMeters(ErosionInput, ErosionSettings);
 			return FMath::Clamp(EdgeFalloff(UnitX, UnitY, Altitude), Config.MinAltitudeMeters, Config.MaxAltitudeMeters);
 		}
 
@@ -131,22 +217,6 @@ namespace
 			return FVector2f(
 				-HalfWorld + UnitX * Config.WorldSizeMeters + WarpX * Config.TerrainWarpMeters,
 				-HalfWorld + UnitY * Config.WorldSizeMeters + WarpY * Config.TerrainWarpMeters);
-		}
-
-		/** Ridged noise on the crests, faded out towards the valley floors. */
-		float RidgeRelief(float UnitX, float UnitY, float SlopeFraction) const
-		{
-			const float Ridged = MassifNoise::RidgedFractal(
-				UnitX * Config.RidgeFrequency, UnitY * Config.RidgeFrequency,
-				RidgeSeed, Config.RidgeOctaveCount, 2.0f, 0.5f, Config.RidgeSharpness);
-			return (Ridged - 0.5f) * Config.RidgeAmplitudeMeters * SlopeFraction * SlopeFraction;
-		}
-
-		float DetailRelief(float UnitX, float UnitY, float SlopeFraction) const
-		{
-			const float Detail = MassifNoise::Fractal(
-				UnitX * Config.DetailFrequency, UnitY * Config.DetailFrequency, DetailSeed, 5, 2.0f, 0.5f);
-			return Detail * Config.DetailAmplitudeMeters * (0.15f + 0.85f * SlopeFraction);
 		}
 
 		/** Pulls the outermost ground down to the mouth altitude so the map does not end on a cliff. */
@@ -198,12 +268,14 @@ FWorldGenResult FWorldGenPipeline::Generate(const FWorldGenConfig& Config)
 	Result.MetersPerPixel = Config.WorldSizeMeters / static_cast<float>(Config.Resolution - 1);
 	Result.HeightMeters.SetNumUninitialized(Config.Resolution * Config.Resolution);
 
+	const FMassifSeed Seed(static_cast<uint32>(Config.MasterSeed));
 	const FRiverNetwork Network = FRiverNetwork::Build(Config);
-	const FRiverFieldGrid RiverField(Config, Network, Config.RiverFieldResolution);
-	UE_LOG(LogTemp, Display, TEXT("WorldGen rivers: %d graph nodes, %d^2 field"),
+	const FMacroSurfaceGrid MacroSurface(Config, Network, Seed.MakeChannelSeed(TEXT("WorldGen.Ridge")));
+	UE_LOG(LogTemp, Display, TEXT("WorldGen rivers: %d graph nodes, %d^2 macro surface"),
 		Network.GetNodes().Num(), Config.RiverFieldResolution);
 
-	const FHeightfieldSampler Sampler(Config, RiverField);
+	const FMassifErosionSettings ErosionSettings = MakeErosionFilterSettings(Config, Seed.MakeChannelSeed(TEXT("WorldGen.ErosionFilter")));
+	const FHeightfieldSampler Sampler(Config, MacroSurface, ErosionSettings);
 	const float UnitStep = 1.0f / static_cast<float>(Config.Resolution - 1);
 	float* Heights = Result.HeightMeters.GetData();
 
