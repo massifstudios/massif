@@ -35,6 +35,16 @@ class MASSIFWORLDGEN_API FMassifTerrainField
 {
 public:
 	explicit FMassifTerrainField(const FWorldGenConfig& InConfig);
+
+	/**
+	 * Builds the field around an already-solved bake instead of running the
+	 * stream-power solve again. Only valid when no bake-affecting config field
+	 * differs from the one the bake was built with; the analytic layers on top
+	 * (channel carve, erosion filter) may differ freely, which is what makes
+	 * live tuning of those layers cheap.
+	 */
+	FMassifTerrainField(const FWorldGenConfig& InConfig, TSharedPtr<const FMassifFluvialBake> ExistingBake);
+
 	~FMassifTerrainField();
 
 	FMassifTerrainField(const FMassifTerrainField&) = delete;
@@ -55,6 +65,9 @@ public:
 
 	const FMassifFluvialBake& GetFluvialBake() const;
 
+	/** The solved bake, shareable into a field rebuilt with different analytic-layer config. */
+	TSharedPtr<const FMassifFluvialBake> GetFluvialBakeShared() const;
+
 	/** Octaves worth evaluating at a spacing, and the weight the finest of them gets. */
 	int32 OctavesForSpacing(double SampleSpacingMeters, float& OutFinestWeight) const;
 
@@ -64,5 +77,5 @@ private:
 
 	FWorldGenConfig Config;
 	TUniquePtr<FMassifUpliftField> Uplift;
-	TUniquePtr<FMassifFluvialBake> FluvialBake;
+	TSharedPtr<const FMassifFluvialBake> FluvialBake;
 };

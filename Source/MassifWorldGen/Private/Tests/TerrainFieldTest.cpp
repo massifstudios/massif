@@ -221,6 +221,43 @@ bool FTerrainFieldPrecisionTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainFieldSharedBakeTest,
+	"Massif.WorldGen.TerrainField.SharedBake",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FTerrainFieldSharedBakeTest::RunTest(const FString& Parameters)
+{
+	const FWorldGenConfig Config = MakeFieldTestConfig(1337);
+	const FMassifTerrainField Fresh(Config);
+
+	// Adopting a solved bake is only usable for live tuning if it changes
+	// nothing: with identical config, a field around the donor's bake has to be
+	// bit-identical to one that ran the solve itself.
+	const FMassifTerrainField SharedSameConfig(Config, Fresh.GetFluvialBakeShared());
+
+	// And a gully-knob change on top of the shared bake must reach the ground:
+	// same macro surface, different heights where slopes hold gullies.
+	FWorldGenConfig DeeperGullies = Config;
+	DeeperGullies.LargestGullyDepthMeters *= 2.0f;
+	const FMassifTerrainField SharedDeeperGullies(DeeperGullies, Fresh.GetFluvialBakeShared());
+
+	bool bGullyChangeReachedGround = false;
+	for (int32 Step = 0; Step < 64; ++Step)
+	{
+		const FVector2d Position(-2000.0 + Step * 61.0, 900.0 - Step * 37.0);
+		const double FreshHeight = Fresh.SampleHeightMeters(Position, 2.0);
+		if (SharedSameConfig.SampleHeightMeters(Position, 2.0) != FreshHeight)
+		{
+			AddError(FString::Printf(TEXT("Shared bake changed the ground at (%.0f, %.0f)"), Position.X, Position.Y));
+			return false;
+		}
+		bGullyChangeReachedGround |= SharedDeeperGullies.SampleHeightMeters(Position, 2.0) != FreshHeight;
+	}
+	TestTrue(TEXT("Deeper gullies on the shared bake make different ground"), bGullyChangeReachedGround);
+
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainFieldDeterminismTest,
 	"Massif.WorldGen.TerrainField.Determinism",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)

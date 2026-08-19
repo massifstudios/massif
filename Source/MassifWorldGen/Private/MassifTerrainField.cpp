@@ -31,7 +31,16 @@ FMassifTerrainField::FMassifTerrainField(const FWorldGenConfig& InConfig)
 {
 	const FMassifSeed Seed(static_cast<uint32>(Config.MasterSeed));
 	Uplift = MakeUnique<FMassifUpliftField>(Config, Seed.MakeChannelSeed(TEXT("WorldGen.Uplift")));
-	FluvialBake = MakeUnique<FMassifFluvialBake>(FMassifFluvialBake::Build(Config, *Uplift));
+	FluvialBake = MakeShared<FMassifFluvialBake>(FMassifFluvialBake::Build(Config, *Uplift));
+}
+
+FMassifTerrainField::FMassifTerrainField(const FWorldGenConfig& InConfig, TSharedPtr<const FMassifFluvialBake> ExistingBake)
+	: Config(InConfig)
+	, FluvialBake(MoveTemp(ExistingBake))
+{
+	check(FluvialBake.IsValid());
+	const FMassifSeed Seed(static_cast<uint32>(Config.MasterSeed));
+	Uplift = MakeUnique<FMassifUpliftField>(Config, Seed.MakeChannelSeed(TEXT("WorldGen.Uplift")));
 }
 
 FMassifTerrainField::~FMassifTerrainField() = default;
@@ -39,6 +48,11 @@ FMassifTerrainField::~FMassifTerrainField() = default;
 const FMassifFluvialBake& FMassifTerrainField::GetFluvialBake() const
 {
 	return *FluvialBake;
+}
+
+TSharedPtr<const FMassifFluvialBake> FMassifTerrainField::GetFluvialBakeShared() const
+{
+	return FluvialBake;
 }
 
 int32 FMassifTerrainField::OctavesForSpacing(double SampleSpacingMeters, float& OutFinestWeight) const
