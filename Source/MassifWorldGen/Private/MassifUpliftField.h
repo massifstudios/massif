@@ -18,12 +18,13 @@ struct FMassifUpliftSample
  * The tectonic layer: where mountain ranges stand and where basins lie,
  * varying over tens of kilometers.
  *
- * At 150 km the hydrology graph alone cannot carry the largest scale. Left to
- * itself it produces one undifferentiated field of valleys, because every
- * catchment is drawn from the same distribution. This decides instead that one
- * part of the world is high alpine and another is a broad valley floor, and
- * the rivers then run through what it sets out: it caps how high headwaters
- * may climb, so drainage stays inside the ranges that contain it.
+ * At 150 km erosion alone cannot carry the largest scale: every catchment
+ * would be drawn from the same distribution and the world would come out as
+ * one undifferentiated field of valleys. This decides instead that one part
+ * of the world is high alpine and another is a broad valley floor. The
+ * fluvial bake starts from the ceiling this sets and keeps uplifting the
+ * ranges while erosion carves them, so relief concentrates where the
+ * tectonics say.
  */
 class FMassifUpliftField
 {
@@ -31,9 +32,6 @@ public:
 	FMassifUpliftField(const FWorldGenConfig& InConfig, uint32 InSeed);
 
 	FMassifUpliftSample Sample(FVector2d PositionMeters) const;
-
-	/** Highest a watercourse may rise here, leaving room for the relief above it. */
-	double MaxWaterAltitudeMeters(FVector2d PositionMeters) const;
 
 private:
 	FVector2d WarpedPosition(FVector2d PositionMeters) const;

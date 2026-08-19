@@ -52,9 +52,3 @@ FMassifUpliftSample FMassifUpliftField::Sample(FVector2d PositionMeters) const
 		(static_cast<double>(PeakNoise) - 0.5) * 2.0 * Config.PeakReliefMeters * Result.RangeFraction;
 	return Result;
 }
-
-double FMassifUpliftField::MaxWaterAltitudeMeters(FVector2d PositionMeters) const
-{
-	const FMassifUpliftSample Uplift = Sample(PositionMeters);
-	return Uplift.CrestAltitudeMeters - Config.MinReliefAboveWaterMeters;
-}
