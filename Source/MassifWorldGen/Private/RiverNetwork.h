@@ -45,6 +45,8 @@ struct FRiverNotchCandidate
 	double WaterElevationMeters = 0.0;
 	double FloorHalfWidthMeters = 0.0;
 	double SideWidthMeters = 0.0;
+	/** 0..1 share of the full notch depth this stream is big enough to cut. */
+	double DepthScale = 1.0;
 };
 
 /** Running state of one Sample query while it walks outward over the segment index. */

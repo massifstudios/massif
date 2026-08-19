@@ -9,6 +9,7 @@ FMassifUpliftField::FMassifUpliftField(const FWorldGenConfig& InConfig, uint32 I
 {
 	const FMassifSeed Seed(InSeed);
 	RangeSeed = Seed.MakeChannelSeed(TEXT("WorldGen.Uplift.Range"));
+	PeakSeed = Seed.MakeChannelSeed(TEXT("WorldGen.Uplift.Peaks"));
 	WarpSeedX = Seed.MakeChannelSeed(TEXT("WorldGen.Uplift.WarpX"));
 	WarpSeedY = Seed.MakeChannelSeed(TEXT("WorldGen.Uplift.WarpY"));
 }
@@ -40,6 +41,15 @@ FMassifUpliftSample FMassifUpliftField::Sample(FVector2d PositionMeters) const
 		static_cast<double>(Config.BasinCrestAltitudeMeters),
 		static_cast<double>(Config.PeakCrestAltitudeMeters),
 		static_cast<double>(Result.RangeFraction));
+
+	// Peak-scale structure on top of the range envelope. The range noise is
+	// smoothstepped, so its own fine octaves die out exactly on the crests;
+	// without this term every summit region tops off flat at the crest altitude.
+	const double PeakCycles = 1.0 / FMath::Max(1.0f, Config.PeakWavelengthMeters);
+	const float PeakNoise = MassifNoise::RidgedFractal(
+		Warped.X * PeakCycles, Warped.Y * PeakCycles, PeakSeed, 2, 2.0, 0.5f, 1.8f);
+	Result.CrestAltitudeMeters +=
+		(static_cast<double>(PeakNoise) - 0.5) * 2.0 * Config.PeakReliefMeters * Result.RangeFraction;
 	return Result;
 }
 

@@ -122,7 +122,8 @@ namespace
 		{
 			return 0.0;
 		}
-		const double DepthMeters = FMath::Min(DepthAvailable, static_cast<double>(Config.StreamNotchDepthMeters));
+		const double DepthMeters = FMath::Min(
+			DepthAvailable, static_cast<double>(Config.StreamNotchDepthMeters) * Notch.DepthScale);
 		const double SideDistance = FMath::Max(0.0, Notch.DistanceMeters - Notch.FloorHalfWidthMeters);
 		const double Side = FMath::Clamp(SideDistance / FMath::Max(1.0, Notch.SideWidthMeters), 0.0, 1.0);
 		const double Fade = 1.0 - Side * Side * (3.0 - 2.0 * Side);
@@ -306,7 +307,11 @@ namespace
 	/** A branch that fails on its first heading tries a few others before dying out. */
 	bool TryAppendChildAnyHeading(FGrowthContext& Context, int32 ParentIndex, double BaseTurnRadians, float ChildStrength)
 	{
-		const double MaxTurn = FMath::DegreesToRadians(static_cast<double>(Context.Config.RiverTurnDegrees));
+		// Small streams run nearly straight. With full turn jitter they random-walk
+		// sideways across the mountainside, and their notches cross each other in a
+		// waffle of trenches no erosion would leave standing.
+		const double TurnScale = FMath::Lerp(1.0, 0.35, HeadwaterProgress(ChildStrength));
+		const double MaxTurn = FMath::DegreesToRadians(static_cast<double>(Context.Config.RiverTurnDegrees)) * TurnScale;
 		for (int32 Attempt = 0; Attempt < 5; ++Attempt)
 		{
 			const double TurnRadians = BaseTurnRadians + Context.Stream.FRandRange(-MaxTurn, MaxTurn);
@@ -546,11 +551,16 @@ void FRiverNetwork::AccumulateSegment(
 	{
 		// Too small to shape the mountainside: remember it as a notch to cut
 		// once the backbone height here is known. The side width is capped at
-		// the headwater width so no notch reaches past NotchReachMeters.
+		// the headwater width so no notch reaches past NotchReachMeters. Depth
+		// scales with discharge, so a lone stub scratches the slope while a
+		// stream just short of backbone size cuts the full notch — otherwise
+		// every stub stamps a full-depth pad onto the hillside.
 		const double SideWidthMeters = FMath::Min(Shape.SideWidthMeters, static_cast<double>(Config.HeadwaterValleyWidthMeters));
 		if (Distance < Shape.FloorHalfWidthMeters + SideWidthMeters)
 		{
-			Accumulator.Notches.Add({ Distance, WaterElevation, Shape.FloorHalfWidthMeters, SideWidthMeters });
+			const double DepthScale = FMath::Square(FMath::Clamp(
+				Fraction / FMath::Max(0.01f, Config.BackboneDischargeFraction), 0.0, 1.0));
+			Accumulator.Notches.Add({ Distance, WaterElevation, Shape.FloorHalfWidthMeters, SideWidthMeters, DepthScale });
 		}
 		return;
 	}
@@ -619,12 +629,29 @@ FRiverTerrainSample FRiverNetwork::Sample(FVector2d PositionMeters, const FWorld
 		Accumulator.LowestBackboneHeight, Accumulator.SecondLowestBackboneHeight,
 		FMath::Max(1.0, static_cast<double>(Config.RidgeBlendMeters)));
 
+	// Two crossing notches merge smoothly instead of leaving a knob standing
+	// between their trenches: the deepest two cuts blend as a smooth maximum.
+	// Only the top two — summing every notch tail in reach rails at the depth
+	// cap wherever streams cluster and shears whole hillsides into terraces.
 	double DeepestCutMeters = 0.0;
+	double SecondDeepestCutMeters = 0.0;
 	for (const FRiverNotchCandidate& Notch : Accumulator.Notches)
 	{
-		DeepestCutMeters = FMath::Max(DeepestCutMeters, NotchCutMeters(Notch, BackboneHeight, Config));
+		const double CutMeters = NotchCutMeters(Notch, BackboneHeight, Config);
+		if (CutMeters > DeepestCutMeters)
+		{
+			SecondDeepestCutMeters = DeepestCutMeters;
+			DeepestCutMeters = CutMeters;
+		}
+		else if (CutMeters > SecondDeepestCutMeters)
+		{
+			SecondDeepestCutMeters = CutMeters;
+		}
 	}
-	Result.HeightMeters = BackboneHeight - DeepestCutMeters;
+	const double NotchDepthCap = static_cast<double>(Config.StreamNotchDepthMeters);
+	const double MergedCutMeters = -PolynomialSmoothMin(
+		-DeepestCutMeters, -SecondDeepestCutMeters, NotchDepthCap * 0.3);
+	Result.HeightMeters = BackboneHeight - FMath::Clamp(MergedCutMeters, 0.0, NotchDepthCap);
 
 	const double AvailableHere = FMath::Max(1.0, CrestAltitudeMeters - Result.NearestWaterElevationMeters);
 	Result.ReliefFraction = static_cast<float>(

@@ -20,7 +20,7 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	float MinAltitudeMeters = 300.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen")
-	float MaxAltitudeMeters = 4600.0f;
+	float MaxAltitudeMeters = 4800.0f;
 
 	/** Distance between range axes. The largest thing in the world. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Uplift")
@@ -45,7 +45,20 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	float BasinCrestAltitudeMeters = 900.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Uplift")
-	float PeakCrestAltitudeMeters = 4400.0f;
+	float PeakCrestAltitudeMeters = 4300.0f;
+
+	/**
+	 * Ridged relief added to the crest altitude inside the ranges, so summits
+	 * are peaks and cols instead of the smooth domes the range-scale noise
+	 * makes on its own. Ground reaches the crest altitude wherever it stands
+	 * far from every big watercourse — without structure at peak scale, every
+	 * such place tops off flat.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Uplift")
+	float PeakReliefMeters = 300.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Uplift")
+	float PeakWavelengthMeters = 4500.0f;
 
 	/**
 	 * Ground a watercourse must keep above it. Headwaters may not climb closer
@@ -175,7 +188,7 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	float LargestGullyWavelengthMeters = 220.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
-	float LargestGullyDepthMeters = 18.0f;
+	float LargestGullyDepthMeters = 9.0f;
 
 	/** Wavelength and depth left per octave. Equal values keep gully steepness the same at every scale. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")

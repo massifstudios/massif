@@ -40,6 +40,7 @@ private:
 
 	const FWorldGenConfig& Config;
 	uint32 RangeSeed = 0;
+	uint32 PeakSeed = 0;
 	uint32 WarpSeedX = 0;
 	uint32 WarpSeedY = 0;
 };
