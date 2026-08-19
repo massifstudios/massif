@@ -46,7 +46,7 @@ namespace
 
 	double EvaluateAt(FVector2d PositionMeters, const FMassifErosionSettings& Settings)
 	{
-		return MassifErosionFilter::EvaluateDisplacementMeters(MakeInputAt(PositionMeters), Settings, &SampleTurningSlope);
+		return MassifErosionFilter::EvaluateDisplacementMeters(MakeInputAt(PositionMeters), Settings);
 	}
 }
 
@@ -60,15 +60,14 @@ bool FErosionFilterTest::RunTest(const FString& Parameters)
 	const double TotalDepthMeters = TotalGullyDepthMeters(Settings);
 
 	// Ground with no slope has no flow direction to lay gullies across, so it
-	// must come back exactly as it went in. This is what keeps river floors at
-	// the elevation their graph gives them.
-	auto SampleNoSlope = [](FVector2d) { return FVector2d::ZeroVector; };
+	// must come back exactly as it went in. This is what keeps valley floors
+	// flat instead of sunk by the full gully depth.
 	for (float ReliefFraction = 0.0f; ReliefFraction <= 1.0f; ReliefFraction += 0.25f)
 	{
 		FMassifErosionInput FlatInput;
 		FlatInput.PositionMeters = FVector2d(137.0, -412.0);
 		FlatInput.ReliefFraction = ReliefFraction;
-		const double Displacement = MassifErosionFilter::EvaluateDisplacementMeters(FlatInput, Settings, SampleNoSlope);
+		const double Displacement = MassifErosionFilter::EvaluateDisplacementMeters(FlatInput, Settings);
 		TestEqual(FString::Printf(TEXT("Flat ground at relief %.2f is left alone"), ReliefFraction), Displacement, 0.0, 0.01);
 	}
 
@@ -100,9 +99,9 @@ bool FErosionFilterTest::RunTest(const FString& Parameters)
 		FirstEvaluation, EvaluateAt(SamplePosition, MakeFilterTestSettings(99)));
 
 	// Sampled at the heightfield's own spacing over a gradient that keeps
-	// turning, which is where the pattern tears if the stripes are oriented per
-	// point instead of per pivot cell. 8 m over 2 m is already a 76 degree wall,
-	// which no gully flank should reach.
+	// turning, which is where the pattern tears if the per-cell phases fight
+	// the turning direction. 8 m over 2 m is already a 76 degree wall, which
+	// no gully flank should reach.
 	const double StepMeters = 2.0;
 	double MaxNeighborDelta = 0.0;
 	for (int32 StepY = 0; StepY < 64; ++StepY)

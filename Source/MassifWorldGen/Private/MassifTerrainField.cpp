@@ -111,12 +111,7 @@ double FMassifTerrainField::SampleHeightMeters(FVector2d PositionMeters, double 
 	ErosionInput.SlopeMetersPerMeter = SampleBaseGradient(PositionMeters);
 	ErosionInput.ReliefFraction = ComputeReliefFraction(PositionMeters, BaseHeightMeters);
 
-	auto SampleSlope = [this](FVector2d PivotMeters)
-	{
-		return SampleBaseGradient(PivotMeters);
-	};
-
-	const double Altitude = BaseHeightMeters + MassifErosionFilter::EvaluateDisplacementMeters(ErosionInput, Settings, SampleSlope);
+	const double Altitude = BaseHeightMeters + MassifErosionFilter::EvaluateDisplacementMeters(ErosionInput, Settings);
 	return FMath::Clamp(Altitude, static_cast<double>(Config.MinAltitudeMeters), static_cast<double>(Config.MaxAltitudeMeters));
 }
 

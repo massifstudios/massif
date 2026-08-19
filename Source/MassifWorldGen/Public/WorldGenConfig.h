@@ -92,12 +92,12 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	float GullyDepthGain = 0.5f;
 
 	/**
-	 * Spacing of the stripe pivot lattice as a multiple of the wavelength. Sets
-	 * how long a gully runs before it dies out: at 1 a gully is about as long as
-	 * it is wide and the slope comes out dimpled rather than grooved.
+	 * Stripes per pivot cell. The reference implementation keeps this close to
+	 * 1: much above it the phase blend between cells visibly distorts the
+	 * stripes into swirls.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
-	float GullyCellsPerWavelength = 3.0f;
+	float GullyCellsPerWavelength = 1.0f;
 
 	/** Surface gradient at which gullies cut to full depth; gentler ground gets proportionally less. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
@@ -108,14 +108,14 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	float GullyDetailPersistence = 1.0f;
 
 	/**
-	 * How far a gully drags the finer gullies sideways, as a fraction of its own
-	 * wavelength. This is what makes them branch off it instead of running
-	 * parallel to it.
+	 * The reference's gully weight: stripe amplitude relative to the fade base,
+	 * and how strongly each octave's stripes steer the finer ones into
+	 * branching off them.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
-	float GullyBranchStrength = 0.25f;
+	float GullyBranchStrength = 1.0f;
 
-	/** 1 keeps a rounded cosine profile at that end of the gully, 0 pinches it to a straight-sided edge. */
+	/** Mask smoothing at that end of the gully profile: 1 eases gullies in gently, 0 snaps them on. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
 	float GullyRidgeRounding = 0.6f;
 

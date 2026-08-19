@@ -30,7 +30,7 @@ void SMassifTuningPanel::Construct(const FArguments& InArgs)
 			]
 			+ SVerticalBox::Slot().AutoHeight()
 			[
-				MakeKnobRow(NSLOCTEXT("Massif", "GullyBranch", "Gully branch weight"), TEXT("massif.Gully.BranchStrength"), 0.0f, 1.0f)
+				MakeKnobRow(NSLOCTEXT("Massif", "GullyBranch", "Gully branch weight"), TEXT("massif.Gully.BranchStrength"), 0.0f, 2.0f)
 			]
 			+ SVerticalBox::Slot().AutoHeight()
 			[

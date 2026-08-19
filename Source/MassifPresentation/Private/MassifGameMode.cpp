@@ -41,8 +41,8 @@ namespace
 		TEXT("Spacing of the coarsest gullies in meters."));
 
 	TAutoConsoleVariable<float> CVarMassifGullyBranchStrength(
-		TEXT("massif.Gully.BranchStrength"), 0.25f,
-		TEXT("How far a gully drags finer gullies sideways, as a fraction of its wavelength."));
+		TEXT("massif.Gully.BranchStrength"), 1.0f,
+		TEXT("Gully weight: stripe amplitude and how strongly coarse gullies steer finer ones."));
 
 	TAutoConsoleVariable<float> CVarMassifGullyRidgeRounding(
 		TEXT("massif.Gully.RidgeRounding"), 0.6f,
