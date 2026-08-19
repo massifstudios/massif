@@ -28,7 +28,35 @@ namespace
 		SHADER_PARAMETER(float, MaxWaterSpeed)
 		SHADER_PARAMETER(float, MaxErosionPerStep)
 		SHADER_PARAMETER(float, FluxDamping)
+		SHADER_PARAMETER(float, MinFlowDepth)
+		SHADER_PARAMETER(float, MinErosionWaterDepth)
+		SHADER_PARAMETER(float, ErosionEdgeFadeCells)
+		SHADER_PARAMETER(int32, ErosionBrushRadius)
 	END_SHADER_PARAMETER_STRUCT()
+
+	/** Matches FRiverSourceEntry in MassifErosion.usf. */
+	struct FRiverSourceEntryGpu
+	{
+		int32 CellX = 0;
+		int32 CellY = 0;
+		float RateMetersPerSecond = 0.0f;
+		float Padding = 0.0f;
+	};
+
+	class FSeedRiverSourcesCS : public FGlobalShader
+	{
+	public:
+		DECLARE_GLOBAL_SHADER(FSeedRiverSourcesCS);
+		SHADER_USE_PARAMETER_STRUCT(FSeedRiverSourcesCS, FGlobalShader);
+
+		BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+			SHADER_PARAMETER_STRUCT_INCLUDE(FErosionCommonParameters, Common)
+			SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FRiverSourceEntry>, RiverSources)
+			SHADER_PARAMETER(uint32, RiverSourceCount)
+			SHADER_PARAMETER(int32, RiverSourceRadius)
+			SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<float>, SourceOut)
+		END_SHADER_PARAMETER_STRUCT()
+	};
 
 	class FAddWaterCS : public FGlobalShader
 	{
@@ -39,6 +67,7 @@ namespace
 		BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
 			SHADER_PARAMETER_STRUCT_INCLUDE(FErosionCommonParameters, Common)
 			SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float>, WaterIn)
+			SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float>, SourceIn)
 			SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<float>, WaterOut)
 		END_SHADER_PARAMETER_STRUCT()
 	};
@@ -85,8 +114,35 @@ namespace
 			SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float>, WaterIn)
 			SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float>, SedimentIn)
 			SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float2>, VelocityIn)
-			SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<float>, TerrainOut)
+			SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<float>, ExchangeOut)
 			SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<float>, SedimentOut)
+		END_SHADER_PARAMETER_STRUCT()
+	};
+
+	class FBlurErosionCS : public FGlobalShader
+	{
+	public:
+		DECLARE_GLOBAL_SHADER(FBlurErosionCS);
+		SHADER_USE_PARAMETER_STRUCT(FBlurErosionCS, FGlobalShader);
+
+		BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+			SHADER_PARAMETER_STRUCT_INCLUDE(FErosionCommonParameters, Common)
+			SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float>, ExchangeIn)
+			SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<float>, ExchangeOut)
+		END_SHADER_PARAMETER_STRUCT()
+	};
+
+	class FApplyErosionCS : public FGlobalShader
+	{
+	public:
+		DECLARE_GLOBAL_SHADER(FApplyErosionCS);
+		SHADER_USE_PARAMETER_STRUCT(FApplyErosionCS, FGlobalShader);
+
+		BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+			SHADER_PARAMETER_STRUCT_INCLUDE(FErosionCommonParameters, Common)
+			SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float>, TerrainIn)
+			SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float>, ExchangeBlurIn)
+			SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<float>, TerrainOut)
 		END_SHADER_PARAMETER_STRUCT()
 	};
 
@@ -152,6 +208,9 @@ namespace
 		FRDGTextureRef WaterB = nullptr;
 		FRDGTextureRef SedimentA = nullptr;
 		FRDGTextureRef SedimentB = nullptr;
+		FRDGTextureRef Exchange = nullptr;
+		FRDGTextureRef ExchangeBlur = nullptr;
+		FRDGTextureRef Source = nullptr;
 		FRDGTextureRef FluxA = nullptr;
 		FRDGTextureRef FluxB = nullptr;
 		FRDGTextureRef Velocity = nullptr;
@@ -171,6 +230,9 @@ namespace
 		Textures.WaterB = GraphBuilder.CreateTexture(ScalarDesc, TEXT("Massif.Erosion.WaterB"));
 		Textures.SedimentA = GraphBuilder.CreateTexture(ScalarDesc, TEXT("Massif.Erosion.SedimentA"));
 		Textures.SedimentB = GraphBuilder.CreateTexture(ScalarDesc, TEXT("Massif.Erosion.SedimentB"));
+		Textures.Exchange = GraphBuilder.CreateTexture(ScalarDesc, TEXT("Massif.Erosion.Exchange"));
+		Textures.ExchangeBlur = GraphBuilder.CreateTexture(ScalarDesc, TEXT("Massif.Erosion.ExchangeBlur"));
+		Textures.Source = GraphBuilder.CreateTexture(ScalarDesc, TEXT("Massif.Erosion.Source"));
 		Textures.FluxA = GraphBuilder.CreateTexture(FluxDesc, TEXT("Massif.Erosion.FluxA"));
 		Textures.FluxB = GraphBuilder.CreateTexture(FluxDesc, TEXT("Massif.Erosion.FluxB"));
 		Textures.Velocity = GraphBuilder.CreateTexture(VelocityDesc, TEXT("Massif.Erosion.Velocity"));
@@ -185,16 +247,21 @@ namespace
 		Common.DeltaTime = Config.ErosionDeltaTime;
 		Common.RainRate = Config.RainRate;
 		Common.EvaporationRate = Config.EvaporationRate;
-		Common.PipeCrossSection = Common.CellSizeMeters * Common.CellSizeMeters;
+		// Virtual pipe stability wants DeltaTime * PipeCrossSection * Gravity <= CellSize^2.
+		Common.PipeCrossSection = 1.0f;
 		Common.Gravity = 9.81f;
 		Common.SedimentCapacityFactor = Config.SedimentCapacityFactor;
 		Common.DissolveRate = Config.DissolveRate;
 		Common.DepositRate = Config.DepositRate;
 		Common.TalusTangent = FMath::Tan(FMath::DegreesToRadians(Config.TalusAngleDegrees));
 		Common.ThermalRate = Config.ThermalRate;
-		Common.MaxWaterSpeed = 10.0f;
+		Common.MaxWaterSpeed = 6.0f;
 		Common.MaxErosionPerStep = 0.02f;
 		Common.FluxDamping = 0.99f;
+		Common.MinFlowDepth = 0.002f;
+		Common.MinErosionWaterDepth = Config.MinErosionWaterDepth;
+		Common.ErosionEdgeFadeCells = Config.EdgeFalloffFraction * static_cast<float>(Resolution);
+		Common.ErosionBrushRadius = FMath::Clamp(Config.ErosionBrushRadiusCells, 0, 8);
 		return Common;
 	}
 
@@ -213,6 +280,7 @@ namespace
 			FAddWaterCS::FParameters* Parameters = GraphBuilder.AllocParameters<FAddWaterCS::FParameters>();
 			Parameters->Common = Common;
 			Parameters->WaterIn = Textures.WaterA;
+			Parameters->SourceIn = Textures.Source;
 			Parameters->WaterOut = GraphBuilder.CreateUAV(Textures.WaterB);
 			FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("Massif.Erosion.AddWater"),
 				TShaderMapRef<FAddWaterCS>(ShaderMap), Parameters, GroupCount);
@@ -247,12 +315,29 @@ namespace
 			Parameters->WaterIn = Textures.WaterA;
 			Parameters->SedimentIn = Textures.SedimentA;
 			Parameters->VelocityIn = Textures.Velocity;
-			Parameters->TerrainOut = GraphBuilder.CreateUAV(Textures.TerrainB);
+			Parameters->ExchangeOut = GraphBuilder.CreateUAV(Textures.Exchange);
 			Parameters->SedimentOut = GraphBuilder.CreateUAV(Textures.SedimentB);
 			FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("Massif.Erosion.ErodeDeposit"),
 				TShaderMapRef<FErodeDepositCS>(ShaderMap), Parameters, GroupCount);
-			Swap(Textures.TerrainA, Textures.TerrainB);
 			Swap(Textures.SedimentA, Textures.SedimentB);
+		}
+		{
+			FBlurErosionCS::FParameters* Parameters = GraphBuilder.AllocParameters<FBlurErosionCS::FParameters>();
+			Parameters->Common = Common;
+			Parameters->ExchangeIn = Textures.Exchange;
+			Parameters->ExchangeOut = GraphBuilder.CreateUAV(Textures.ExchangeBlur);
+			FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("Massif.Erosion.BlurErosion"),
+				TShaderMapRef<FBlurErosionCS>(ShaderMap), Parameters, GroupCount);
+		}
+		{
+			FApplyErosionCS::FParameters* Parameters = GraphBuilder.AllocParameters<FApplyErosionCS::FParameters>();
+			Parameters->Common = Common;
+			Parameters->TerrainIn = Textures.TerrainA;
+			Parameters->ExchangeBlurIn = Textures.ExchangeBlur;
+			Parameters->TerrainOut = GraphBuilder.CreateUAV(Textures.TerrainB);
+			FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("Massif.Erosion.ApplyErosion"),
+				TShaderMapRef<FApplyErosionCS>(ShaderMap), Parameters, GroupCount);
+			Swap(Textures.TerrainA, Textures.TerrainB);
 		}
 		{
 			FAdvectSedimentCS::FParameters* Parameters = GraphBuilder.AllocParameters<FAdvectSedimentCS::FParameters>();
@@ -300,12 +385,77 @@ namespace
 			Swap(Textures.TerrainA, Textures.TerrainB);
 		}
 	}
+
+	void AddSeedRiverSourcesPass(
+		FRDGBuilder& GraphBuilder, const FWorldGenConfig& Config, const FErosionCommonParameters& Common,
+		FErosionTextures& Textures, TConstArrayView<FMassifRiverSource> RiverSources)
+	{
+		AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(Textures.Source), 0.0f);
+		if (RiverSources.IsEmpty())
+		{
+			return;
+		}
+
+		TArray<FRiverSourceEntryGpu> Entries;
+		Entries.Reserve(RiverSources.Num());
+		for (const FMassifRiverSource& Source : RiverSources)
+		{
+			Entries.Add(FRiverSourceEntryGpu{ Source.CellX, Source.CellY, Source.RateMetersPerSecond, 0.0f });
+		}
+
+		FRDGBufferRef SourceBuffer = CreateStructuredBuffer(
+			GraphBuilder, TEXT("Massif.Erosion.RiverSources"), sizeof(FRiverSourceEntryGpu),
+			Entries.Num(), Entries.GetData(), Entries.Num() * sizeof(FRiverSourceEntryGpu));
+
+		FSeedRiverSourcesCS::FParameters* Parameters = GraphBuilder.AllocParameters<FSeedRiverSourcesCS::FParameters>();
+		Parameters->Common = Common;
+		Parameters->RiverSources = GraphBuilder.CreateSRV(SourceBuffer);
+		Parameters->RiverSourceCount = static_cast<uint32>(Entries.Num());
+		Parameters->RiverSourceRadius = FMath::Max(0, Config.RiverSourceRadiusCells);
+		Parameters->SourceOut = GraphBuilder.CreateUAV(Textures.Source);
+
+		const FIntVector GroupCount(FMath::DivideAndRoundUp(Entries.Num(), 64), 1, 1);
+		FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("Massif.Erosion.SeedRiverSources"),
+			TShaderMapRef<FSeedRiverSourcesCS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)), Parameters, GroupCount);
+	}
+
+	/** True on exactly IterationCount of the StepCount steps, spread evenly. */
+	bool RunsOnStep(int32 Step, int32 IterationCount, int32 StepCount)
+	{
+		return (Step * IterationCount) / StepCount != ((Step + 1) * IterationCount) / StepCount;
+	}
+
+	// Interleaved so slopes steepened by water are cut back to the talus angle as
+	// they form, rather than all at once on the finished heightfield.
+	void AddErosionIterations(
+		FRDGBuilder& GraphBuilder, const FWorldGenConfig& Config, const FErosionCommonParameters& Common,
+		FErosionTextures& Textures, FIntVector GroupCount)
+	{
+		const int32 HydraulicCount = FMath::Max(0, Config.HydraulicIterationCount);
+		const int32 ThermalCount = FMath::Max(0, Config.ThermalIterationCount);
+		const int32 StepCount = FMath::Max(HydraulicCount, ThermalCount);
+
+		for (int32 Step = 0; Step < StepCount; ++Step)
+		{
+			if (RunsOnStep(Step, HydraulicCount, StepCount))
+			{
+				AddHydraulicIteration(GraphBuilder, Common, Textures, GroupCount);
+			}
+			if (RunsOnStep(Step, ThermalCount, StepCount))
+			{
+				AddThermalIteration(GraphBuilder, Common, Textures, GroupCount);
+			}
+		}
+	}
 }
 
+IMPLEMENT_GLOBAL_SHADER(FSeedRiverSourcesCS, "/MassifWorldGen/MassifErosion.usf", "SeedRiverSourcesCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FAddWaterCS, "/MassifWorldGen/MassifErosion.usf", "AddWaterCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FComputeFluxCS, "/MassifWorldGen/MassifErosion.usf", "ComputeFluxCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FUpdateWaterCS, "/MassifWorldGen/MassifErosion.usf", "UpdateWaterCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FErodeDepositCS, "/MassifWorldGen/MassifErosion.usf", "ErodeDepositCS", SF_Compute);
+IMPLEMENT_GLOBAL_SHADER(FBlurErosionCS, "/MassifWorldGen/MassifErosion.usf", "BlurErosionCS", SF_Compute);
+IMPLEMENT_GLOBAL_SHADER(FApplyErosionCS, "/MassifWorldGen/MassifErosion.usf", "ApplyErosionCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FAdvectSedimentCS, "/MassifWorldGen/MassifErosion.usf", "AdvectSedimentCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FEvaporateCS, "/MassifWorldGen/MassifErosion.usf", "EvaporateCS", SF_Compute);
 IMPLEMENT_GLOBAL_SHADER(FThermalFluxCS, "/MassifWorldGen/MassifErosion.usf", "ThermalFluxCS", SF_Compute);
@@ -316,7 +466,7 @@ bool FMassifGpuErosion::CanRun()
 	return FApp::CanEverRender() && GDynamicRHI != nullptr;
 }
 
-bool FMassifGpuErosion::Run(const FWorldGenConfig& Config, TArray<float>& HeightMeters)
+bool FMassifGpuErosion::Run(const FWorldGenConfig& Config, TArray<float>& HeightMeters, TConstArrayView<FMassifRiverSource> RiverSources)
 {
 	const int32 Resolution = Config.Resolution;
 	check(HeightMeters.Num() == Resolution * Resolution);
@@ -334,7 +484,7 @@ bool FMassifGpuErosion::Run(const FWorldGenConfig& Config, TArray<float>& Height
 	float* DestinationData = ErodedHeights.GetData();
 
 	ENQUEUE_RENDER_COMMAND(MassifGpuErosion)(
-		[&Config, SourceData, DestinationData, Resolution, CompletionEvent, &bSucceeded](FRHICommandListImmediate& RHICmdList)
+		[&Config, &RiverSources, SourceData, DestinationData, Resolution, CompletionEvent, &bSucceeded](FRHICommandListImmediate& RHICmdList)
 	{
 		const FIntPoint Extent(Resolution, Resolution);
 
@@ -368,14 +518,8 @@ bool FMassifGpuErosion::Run(const FWorldGenConfig& Config, TArray<float>& Height
 			const FErosionCommonParameters Common = MakeCommonParameters(Config, Resolution);
 			const FIntVector GroupCount = ErosionGroupCount(Resolution);
 
-			for (int32 Iteration = 0; Iteration < Config.HydraulicIterationCount; ++Iteration)
-			{
-				AddHydraulicIteration(GraphBuilder, Common, Textures, GroupCount);
-			}
-			for (int32 Iteration = 0; Iteration < Config.ThermalIterationCount; ++Iteration)
-			{
-				AddThermalIteration(GraphBuilder, Common, Textures, GroupCount);
-			}
+			AddSeedRiverSourcesPass(GraphBuilder, Config, Common, Textures, RiverSources);
+			AddErosionIterations(GraphBuilder, Config, Common, Textures, GroupCount);
 
 			AddEnqueueCopyPass(GraphBuilder, &Readback, Textures.TerrainA);
 			GraphBuilder.Execute();

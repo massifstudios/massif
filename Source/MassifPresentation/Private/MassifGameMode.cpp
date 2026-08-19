@@ -140,7 +140,10 @@ void AMassifGameMode::GenerateWorldAndSpawnTerrain()
 				FMath::Abs(Result.HeightMeters[Index + 1] - Result.HeightMeters[Index]));
 		}
 	}
-	UE_LOG(LogTemp, Display, TEXT("WorldGen sanity: max neighbor height delta %.1f m"), MaxNeighborDeltaMeters);
+	const int32 LocalMinimumCount = Result.CountLocalMinima();
+	UE_LOG(LogTemp, Display, TEXT("WorldGen sanity: max neighbor height delta %.1f m, %d pits (%.3f%% of cells)"),
+		MaxNeighborDeltaMeters, LocalMinimumCount,
+		100.0f * static_cast<float>(LocalMinimumCount) / static_cast<float>(Result.HeightMeters.Num()));
 
 	if (FParse::Param(FCommandLine::Get(), TEXT("MassifExportWorldGen")))
 	{

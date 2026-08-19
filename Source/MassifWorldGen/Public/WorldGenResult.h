@@ -31,5 +31,12 @@ struct MASSIFWORLDGEN_API FWorldGenResult
 
 	float SampleSlopeDegrees(float WorldX, float WorldY) const;
 
+	/**
+	 * Interior cells lying below all four neighbours. Erosion that digs pits
+	 * instead of channels shows up here, so this is the check that flat ground
+	 * came out of the simulation flat.
+	 */
+	int32 CountLocalMinima() const;
+
 	uint64 ComputeHash() const;
 };

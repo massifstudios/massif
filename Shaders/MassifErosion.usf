@@ -6,14 +6,30 @@
 Texture2D<float> TerrainIn;
 Texture2D<float> WaterIn;
 Texture2D<float> SedimentIn;
+Texture2D<float> ExchangeIn;
+Texture2D<float> ExchangeBlurIn;
+Texture2D<float> SourceIn;
 Texture2D<float4> FluxIn;
 Texture2D<float2> VelocityIn;
 
 RWTexture2D<float> TerrainOut;
 RWTexture2D<float> WaterOut;
 RWTexture2D<float> SedimentOut;
+RWTexture2D<float> ExchangeOut;
+RWTexture2D<float> SourceOut;
 RWTexture2D<float4> FluxOut;
 RWTexture2D<float2> VelocityOut;
+
+struct FRiverSourceEntry
+{
+	int2 Cell;
+	float RateMetersPerSecond;
+	float Padding;
+};
+
+StructuredBuffer<FRiverSourceEntry> RiverSources;
+uint RiverSourceCount;
+int RiverSourceRadius;
 
 uint2 GridSize;
 float CellSizeMeters;
@@ -30,6 +46,10 @@ float ThermalRate;
 float MaxWaterSpeed;
 float MaxErosionPerStep;
 float FluxDamping;
+float MinFlowDepth;
+float MinErosionWaterDepth;
+float ErosionEdgeFadeCells;
+int ErosionBrushRadius;
 
 static const int2 NeighborOffsets[4] =
 {
@@ -42,7 +62,37 @@ bool IsInside(int2 Cell)
 }
 
 // ---------------------------------------------------------------------------
-// Pass 1: rain.
+// Setup: stamp the spring sources into the per-cell inflow map, once per run.
+
+void WriteSourceDisc(int2 Center, float RateMetersPerSecond)
+{
+	const int Diameter = 2 * RiverSourceRadius + 1;
+	const int DiscCellCount = Diameter * Diameter;
+	for (int Index = 0; Index < DiscCellCount; ++Index)
+	{
+		const int2 Offset = int2(Index % Diameter, Index / Diameter) - RiverSourceRadius;
+		const int2 Cell = Center + Offset;
+		const bool bInsideDisc = dot(Offset, Offset) <= RiverSourceRadius * RiverSourceRadius;
+		if (bInsideDisc && IsInside(Cell))
+		{
+			SourceOut[Cell] = RateMetersPerSecond;
+		}
+	}
+}
+
+[numthreads(64, 1, 1)]
+void SeedRiverSourcesCS(uint3 ThreadId : SV_DispatchThreadID)
+{
+	if (ThreadId.x >= RiverSourceCount)
+	{
+		return;
+	}
+	const FRiverSourceEntry Source = RiverSources[ThreadId.x];
+	WriteSourceDisc(Source.Cell, Source.RateMetersPerSecond);
+}
+
+// ---------------------------------------------------------------------------
+// Pass 1: rain and spring inflow.
 [numthreads(8, 8, 1)]
 void AddWaterCS(uint3 ThreadId : SV_DispatchThreadID)
 {
@@ -50,7 +100,8 @@ void AddWaterCS(uint3 ThreadId : SV_DispatchThreadID)
 	{
 		return;
 	}
-	WaterOut[ThreadId.xy] = WaterIn[ThreadId.xy] + RainRate * DeltaTime;
+	const float InflowRate = RainRate + SourceIn[ThreadId.xy];
+	WaterOut[ThreadId.xy] = WaterIn[ThreadId.xy] + InflowRate * DeltaTime;
 }
 
 // ---------------------------------------------------------------------------
@@ -128,7 +179,7 @@ void UpdateWaterCS(uint3 ThreadId : SV_DispatchThreadID)
 	// Average water flow through the cell per axis drives sediment transport.
 	const float FlowX = 0.5f * (Inflow.x - Outflow.x + Outflow.y - Inflow.y);
 	const float FlowY = 0.5f * (Inflow.z - Outflow.z + Outflow.w - Inflow.w);
-	const float AverageDepth = max(0.01f, 0.5f * (OldWater + NewWater));
+	const float AverageDepth = max(MinFlowDepth, 0.5f * (OldWater + NewWater));
 	float2 Velocity = float2(FlowX, FlowY) / (AverageDepth * CellSizeMeters);
 	const float Speed = length(Velocity);
 	if (Speed > MaxWaterSpeed)
@@ -140,6 +191,55 @@ void UpdateWaterCS(uint3 ThreadId : SV_DispatchThreadID)
 
 // ---------------------------------------------------------------------------
 // Pass 4: erosion / deposition against transport capacity.
+// Writes the signed exchange (positive eroded, negative deposited) instead of
+// touching the terrain; ApplyErosionCS spreads it through the brush.
+
+/** Slope sine from central differences of terrain height. */
+float LocalSlopeSine(int2 Cell)
+{
+	const int2 LeftCell = int2(max(Cell.x - 1, 0), Cell.y);
+	const int2 RightCell = int2(min(Cell.x + 1, (int)GridSize.x - 1), Cell.y);
+	const int2 DownCell = int2(Cell.x, max(Cell.y - 1, 0));
+	const int2 UpCell = int2(Cell.x, min(Cell.y + 1, (int)GridSize.y - 1));
+	const float GradientX = (TerrainIn[RightCell] - TerrainIn[LeftCell]) / (2.0f * CellSizeMeters);
+	const float GradientY = (TerrainIn[UpCell] - TerrainIn[DownCell]) / (2.0f * CellSizeMeters);
+	const float GradientLengthSquared = GradientX * GradientX + GradientY * GradientY;
+	return sqrt(GradientLengthSquared) / sqrt(1.0f + GradientLengthSquared);
+}
+
+/**
+ * Fades erosion out towards the map border. The border ramp is an artificial
+ * even slope that has no valleys to gather into, so leaving it in the
+ * simulation just combs it into rills.
+ */
+float EdgeFade(int2 Cell)
+{
+	const int2 BorderDistance = min(Cell, int2(GridSize) - 1 - Cell);
+	const float NearestBorder = (float)min(BorderDistance.x, BorderDistance.y);
+	return saturate(NearestBorder / max(1.0f, ErosionEdgeFadeCells));
+}
+
+/**
+ * How far this cell may be cut down before it becomes a local minimum. Water
+ * pools in any pit it digs and then keeps digging it, so bounding erosion by
+ * the drop to the lowest neighbour is what keeps flat ground flat.
+ */
+float ErosionHeadroom(int2 Cell)
+{
+	const float Height = TerrainIn[Cell];
+	float LowestNeighbor = Height;
+	UNROLL
+	for (int Dir = 0; Dir < 4; ++Dir)
+	{
+		const int2 Neighbor = Cell + NeighborOffsets[Dir];
+		if (IsInside(Neighbor))
+		{
+			LowestNeighbor = min(LowestNeighbor, TerrainIn[Neighbor]);
+		}
+	}
+	return 0.5f * (Height - LowestNeighbor);
+}
+
 [numthreads(8, 8, 1)]
 void ErodeDepositCS(uint3 ThreadId : SV_DispatchThreadID)
 {
@@ -149,42 +249,99 @@ void ErodeDepositCS(uint3 ThreadId : SV_DispatchThreadID)
 	}
 	const int2 Cell = int2(ThreadId.xy);
 
-	// Local slope from central differences of terrain height.
-	const int2 LeftCell = int2(max(Cell.x - 1, 0), Cell.y);
-	const int2 RightCell = int2(min(Cell.x + 1, (int)GridSize.x - 1), Cell.y);
-	const int2 DownCell = int2(Cell.x, max(Cell.y - 1, 0));
-	const int2 UpCell = int2(Cell.x, min(Cell.y + 1, (int)GridSize.y - 1));
-	const float GradientX = (TerrainIn[RightCell] - TerrainIn[LeftCell]) / (2.0f * CellSizeMeters);
-	const float GradientY = (TerrainIn[UpCell] - TerrainIn[DownCell]) / (2.0f * CellSizeMeters);
-	const float SlopeSine = sqrt(GradientX * GradientX + GradientY * GradientY)
-		/ sqrt(1.0f + GradientX * GradientX + GradientY * GradientY);
-
+	// Capacity scales with slope, flow speed and water depth, so still ponds and
+	// dry cells carry nothing and drop whatever they hold. Below the channel
+	// depth there is no capacity at all and the cell can only deposit.
+	const float WaterDepth = WaterIn[Cell];
+	const float ChannelFactor = saturate((WaterDepth - MinErosionWaterDepth) / max(1e-6f, MinErosionWaterDepth));
 	const float Speed = length(VelocityIn[Cell]);
-	// Cells with almost no water must not erode: fade capacity in over the first centimeters of depth.
-	const float DepthFactor = saturate(WaterIn[Cell] / 0.05f);
-	const float Capacity = SedimentCapacityFactor * max(0.05f, SlopeSine) * Speed * DepthFactor;
+	const float Capacity = SedimentCapacityFactor * LocalSlopeSine(Cell) * Speed * WaterDepth * ChannelFactor * EdgeFade(Cell);
 
 	const float OldSediment = SedimentIn[Cell];
-	float NewTerrain = TerrainIn[Cell];
-	float NewSediment = OldSediment;
 	if (OldSediment < Capacity)
 	{
-		const float Dissolved = min(DissolveRate * (Capacity - OldSediment), MaxErosionPerStep);
-		NewTerrain -= Dissolved;
-		NewSediment += Dissolved;
+		const float Dissolved = min(min(DissolveRate * (Capacity - OldSediment), MaxErosionPerStep), ErosionHeadroom(Cell));
+		ExchangeOut[Cell] = Dissolved;
+		SedimentOut[Cell] = OldSediment + Dissolved;
+		return;
 	}
-	else
-	{
-		const float Deposited = min(DepositRate * (OldSediment - Capacity), MaxErosionPerStep);
-		NewTerrain += Deposited;
-		NewSediment -= Deposited;
-	}
-	TerrainOut[Cell] = NewTerrain;
-	SedimentOut[Cell] = NewSediment;
+
+	const float Deposited = min(DepositRate * (OldSediment - Capacity), MaxErosionPerStep);
+	ExchangeOut[Cell] = -Deposited;
+	SedimentOut[Cell] = OldSediment - Deposited;
 }
 
 // ---------------------------------------------------------------------------
-// Pass 5: semi-Lagrangian sediment advection.
+// Pass 5: spread the eroded amount through the brush and apply it to the terrain.
+
+/**
+ * Erosion brush (Lague): taking material through a radius-weighted footprint
+ * rather than from the single cell stops one-pixel pits, checkerboard patterns
+ * and the rill combing that per-cell cutting produces on an even slope. Run as
+ * two separable tent passes so the cost stays linear in the radius.
+ */
+float BrushWeight(int Step)
+{
+	return 1.0f - abs((float)Step) / (ErosionBrushRadius + 1.0f);
+}
+
+/** Tent over the raw exchange; deposition is spread as well, or it leaves per-cell bumps. */
+float BlurExchangeHorizontal(int2 Cell)
+{
+	float Total = 0.0f;
+	float WeightSum = 0.0f;
+	for (int Step = -ErosionBrushRadius; Step <= ErosionBrushRadius; ++Step)
+	{
+		const int2 Sample = Cell + int2(Step, 0);
+		if (IsInside(Sample))
+		{
+			Total += ExchangeIn[Sample] * BrushWeight(Step);
+			WeightSum += BrushWeight(Step);
+		}
+	}
+	return Total / WeightSum;
+}
+
+/** Second half of the separable brush. */
+float BlurExchangeVertical(int2 Cell)
+{
+	float Total = 0.0f;
+	float WeightSum = 0.0f;
+	for (int Step = -ErosionBrushRadius; Step <= ErosionBrushRadius; ++Step)
+	{
+		const int2 Sample = Cell + int2(0, Step);
+		if (IsInside(Sample))
+		{
+			Total += ExchangeBlurIn[Sample] * BrushWeight(Step);
+			WeightSum += BrushWeight(Step);
+		}
+	}
+	return Total / WeightSum;
+}
+
+[numthreads(8, 8, 1)]
+void BlurErosionCS(uint3 ThreadId : SV_DispatchThreadID)
+{
+	if (ThreadId.x >= GridSize.x || ThreadId.y >= GridSize.y)
+	{
+		return;
+	}
+	ExchangeOut[ThreadId.xy] = BlurExchangeHorizontal(int2(ThreadId.xy));
+}
+
+[numthreads(8, 8, 1)]
+void ApplyErosionCS(uint3 ThreadId : SV_DispatchThreadID)
+{
+	if (ThreadId.x >= GridSize.x || ThreadId.y >= GridSize.y)
+	{
+		return;
+	}
+	const int2 Cell = int2(ThreadId.xy);
+	TerrainOut[Cell] = TerrainIn[Cell] - BlurExchangeVertical(Cell);
+}
+
+// ---------------------------------------------------------------------------
+// Pass 6: semi-Lagrangian sediment advection.
 [numthreads(8, 8, 1)]
 void AdvectSedimentCS(uint3 ThreadId : SV_DispatchThreadID)
 {
@@ -220,7 +377,7 @@ void AdvectSedimentCS(uint3 ThreadId : SV_DispatchThreadID)
 }
 
 // ---------------------------------------------------------------------------
-// Pass 6: evaporation.
+// Pass 7: evaporation.
 [numthreads(8, 8, 1)]
 void EvaporateCS(uint3 ThreadId : SV_DispatchThreadID)
 {

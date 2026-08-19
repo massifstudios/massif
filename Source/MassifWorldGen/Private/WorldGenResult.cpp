@@ -43,6 +43,32 @@ float FWorldGenResult::SampleSlopeDegrees(float WorldX, float WorldY) const
 	return FMath::RadiansToDegrees(FMath::Acos(NormalZ));
 }
 
+namespace
+{
+	bool IsLowerThanNeighbors(const TArray<float>& HeightMeters, int32 Resolution, int32 PixelX, int32 PixelY)
+	{
+		const int32 Index = PixelY * Resolution + PixelX;
+		const float Height = HeightMeters[Index];
+		return Height < HeightMeters[Index - 1]
+			&& Height < HeightMeters[Index + 1]
+			&& Height < HeightMeters[Index - Resolution]
+			&& Height < HeightMeters[Index + Resolution];
+	}
+}
+
+int32 FWorldGenResult::CountLocalMinima() const
+{
+	int32 MinimumCount = 0;
+	for (int32 PixelY = 1; PixelY < Resolution - 1; ++PixelY)
+	{
+		for (int32 PixelX = 1; PixelX < Resolution - 1; ++PixelX)
+		{
+			MinimumCount += IsLowerThanNeighbors(HeightMeters, Resolution, PixelX, PixelY);
+		}
+	}
+	return MinimumCount;
+}
+
 uint64 FWorldGenResult::ComputeHash() const
 {
 	FMassifStateHash StateHash;

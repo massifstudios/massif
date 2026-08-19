@@ -46,8 +46,8 @@ bool FWorldGenErosionTest::RunTest(const FString& Parameters)
 	}
 
 	FWorldGenConfig Config = MakeTestConfig(1337);
-	Config.HydraulicIterationCount = 600;
-	Config.ThermalIterationCount = 200;
+	Config.HydraulicIterationCount = 1500;
+	Config.ThermalIterationCount = 500;
 
 	const FWorldGenResult Uneroded = FWorldGenPipeline::Generate(MakeTestConfig(1337));
 	const FWorldGenResult FirstRun = FWorldGenPipeline::Generate(Config);
@@ -78,6 +78,14 @@ bool FWorldGenErosionTest::RunTest(const FString& Parameters)
 	}
 	TestTrue(FString::Printf(TEXT("No needle spikes (max neighbor delta %.1f m)"), MaxNeighborDelta),
 		MaxNeighborDelta < 60.0f);
+
+	// Erosion must cut channels, not pepper the map with pits. Uneroded noise
+	// sits near zero, so anything far above it means cells are digging holes.
+	const float ErodedPitFraction = static_cast<float>(FirstRun.CountLocalMinima()) / static_cast<float>(FirstRun.HeightMeters.Num());
+	const float UnerodedPitFraction = static_cast<float>(Uneroded.CountLocalMinima()) / static_cast<float>(Uneroded.HeightMeters.Num());
+	AddInfo(FString::Printf(TEXT("Pits: %.3f%% eroded, %.3f%% uneroded"), 100.0f * ErodedPitFraction, 100.0f * UnerodedPitFraction));
+	TestTrue(FString::Printf(TEXT("Erosion leaves few pits (%.3f%% of cells)"), 100.0f * ErodedPitFraction),
+		ErodedPitFraction < 0.01f);
 
 	return true;
 }
