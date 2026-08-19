@@ -36,6 +36,13 @@ public:
 
 	void Initialize(TSharedPtr<const FMassifTerrainField> InField, UMaterialInterface* InTerrainMaterial);
 
+	/**
+	 * Swap in a rebuilt field and regrow the quadtree from the root, so the
+	 * ground reflects the new field coarse-to-fine. Results of tile builds still
+	 * in flight against the old field are dropped, never applied to the new tree.
+	 */
+	void ResetField(TSharedPtr<const FMassifTerrainField> InField);
+
 	virtual void Tick(float DeltaSeconds) override;
 
 private:

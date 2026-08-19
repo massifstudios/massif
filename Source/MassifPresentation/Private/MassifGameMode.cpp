@@ -26,6 +26,66 @@ namespace
 		TEXT("massif.WorldGenResolution"), 4097,
 		TEXT("Heightfield samples per side; (value - 1) must be divisible by 256."));
 
+	// Erosion-filter knobs, live: a change rebuilds the terrain field around the
+	// already-solved bake once the value has settled. Defaults mirror
+	// FWorldGenConfig.
+	TAutoConsoleVariable<float> CVarMassifGullyDepth(
+		TEXT("massif.Gully.Depth"), 9.0f,
+		TEXT("Largest gully depth in meters — overall erosion-filter strength."));
+
+	TAutoConsoleVariable<float> CVarMassifGullyWavelength(
+		TEXT("massif.Gully.Wavelength"), 220.0f,
+		TEXT("Spacing of the coarsest gullies in meters."));
+
+	TAutoConsoleVariable<float> CVarMassifGullyBranchStrength(
+		TEXT("massif.Gully.BranchStrength"), 0.25f,
+		TEXT("How far a gully drags finer gullies sideways, as a fraction of its wavelength."));
+
+	TAutoConsoleVariable<float> CVarMassifGullyRidgeRounding(
+		TEXT("massif.Gully.RidgeRounding"), 0.6f,
+		TEXT("1 rounded cosine ridge, 0 pinched straight-sided edge."));
+
+	TAutoConsoleVariable<float> CVarMassifGullyCreaseRounding(
+		TEXT("massif.Gully.CreaseRounding"), 0.15f,
+		TEXT("1 rounded gully floor, 0 pinched crease."));
+
+	TAutoConsoleVariable<float> CVarMassifGullySlopeReference(
+		TEXT("massif.Gully.SlopeReference"), 0.35f,
+		TEXT("Surface gradient at which gullies cut to full depth."));
+
+	bool bMassifRegenerateRequested = false;
+
+	FAutoConsoleCommand CmdMassifRegenerate(
+		TEXT("massif.Regenerate"),
+		TEXT("Rebuild the terrain field including the fluvial bake, picking up massif.Seed."),
+		FConsoleCommandDelegate::CreateLambda([]()
+		{
+			bMassifRegenerateRequested = true;
+		}));
+
+	void ApplyGullyKnobCVars(FWorldGenConfig& Config)
+	{
+		Config.LargestGullyDepthMeters = CVarMassifGullyDepth.GetValueOnGameThread();
+		Config.LargestGullyWavelengthMeters = CVarMassifGullyWavelength.GetValueOnGameThread();
+		Config.GullyBranchStrength = CVarMassifGullyBranchStrength.GetValueOnGameThread();
+		Config.GullyRidgeRounding = CVarMassifGullyRidgeRounding.GetValueOnGameThread();
+		Config.GullyCreaseRounding = CVarMassifGullyCreaseRounding.GetValueOnGameThread();
+		Config.GullySlopeReference = CVarMassifGullySlopeReference.GetValueOnGameThread();
+	}
+
+	bool SameGullyKnobs(const FWorldGenConfig& Left, const FWorldGenConfig& Right)
+	{
+		return Left.LargestGullyDepthMeters == Right.LargestGullyDepthMeters
+			&& Left.LargestGullyWavelengthMeters == Right.LargestGullyWavelengthMeters
+			&& Left.GullyBranchStrength == Right.GullyBranchStrength
+			&& Left.GullyRidgeRounding == Right.GullyRidgeRounding
+			&& Left.GullyCreaseRounding == Right.GullyCreaseRounding
+			&& Left.GullySlopeReference == Right.GullySlopeReference;
+	}
+
+	/** Long enough that dragging a value in steps triggers one rebuild, not one per step. */
+	constexpr double GullyRebuildDebounceSeconds = 0.5;
+
 	/** -MassifScreenshotAfter=N: debug screenshot after N seconds, then quit. Command-line
 	 *  arg instead of a cvar because -ExecCmds runs only after GameMode::BeginPlay. */
 	float GetAutoScreenshotDelaySeconds()
@@ -52,6 +112,7 @@ namespace
 AMassifGameMode::AMassifGameMode()
 {
 	DefaultPawnClass = ASpectatorPawn::StaticClass();
+	PrimaryActorTick.bCanEverTick = true;
 }
 
 void AMassifGameMode::BeginPlay()
@@ -61,6 +122,71 @@ void AMassifGameMode::BeginPlay()
 	SpawnEnvironmentActors();
 	ConfigureSpectatorPawn();
 	ScheduleDebugScreenshot();
+}
+
+void AMassifGameMode::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+	if (!TerrainField.IsValid() || TerrainManager == nullptr)
+	{
+		return;
+	}
+
+	if (bMassifRegenerateRequested)
+	{
+		bMassifRegenerateRequested = false;
+		PendingKnobsSinceSeconds = -1.0;
+		RebuildTerrainField(MakeWorldGenConfig(), false);
+		return;
+	}
+
+	PollGullyKnobs();
+}
+
+void AMassifGameMode::PollGullyKnobs()
+{
+	FWorldGenConfig Desired = TerrainField->GetConfig();
+	ApplyGullyKnobCVars(Desired);
+	if (SameGullyKnobs(Desired, TerrainField->GetConfig()))
+	{
+		PendingKnobsSinceSeconds = -1.0;
+		return;
+	}
+
+	const double NowSeconds = FPlatformTime::Seconds();
+	const bool bKnobsMovedAgain = PendingKnobsSinceSeconds < 0.0 || !SameGullyKnobs(Desired, PendingKnobConfig);
+	if (bKnobsMovedAgain)
+	{
+		PendingKnobConfig = Desired;
+		PendingKnobsSinceSeconds = NowSeconds;
+	}
+	if (NowSeconds - PendingKnobsSinceSeconds < GullyRebuildDebounceSeconds)
+	{
+		return;
+	}
+
+	PendingKnobsSinceSeconds = -1.0;
+	RebuildTerrainField(Desired, true);
+}
+
+void AMassifGameMode::RebuildTerrainField(const FWorldGenConfig& Config, bool bReuseBake)
+{
+	const double StartSeconds = FPlatformTime::Seconds();
+	TSharedPtr<const FMassifTerrainField> NewField;
+	if (bReuseBake)
+	{
+		NewField = MakeShared<const FMassifTerrainField>(Config, TerrainField->GetFluvialBakeShared());
+	}
+	else
+	{
+		NewField = MakeShared<const FMassifTerrainField>(Config);
+	}
+
+	TerrainField = NewField;
+	TerrainManager->ResetField(NewField);
+	UE_LOG(LogTemp, Display, TEXT("Terrain field rebuilt in %.2f s (%s)"),
+		FPlatformTime::Seconds() - StartSeconds,
+		bReuseBake ? TEXT("bake reused") : TEXT("bake re-solved"));
 }
 
 void AMassifGameMode::ScheduleDebugScreenshot()
@@ -144,13 +270,19 @@ void AMassifGameMode::ExportWorldGenDebug(const FWorldGenConfig& Config)
 	FPlatformMisc::RequestExit(false);
 }
 
-void AMassifGameMode::GenerateWorldAndSpawnTerrain()
+FWorldGenConfig AMassifGameMode::MakeWorldGenConfig() const
 {
 	FWorldGenConfig Config;
 	Config.MasterSeed = CVarMassifSeed.GetValueOnGameThread();
 	Config.Resolution = CVarMassifWorldGenResolution.GetValueOnGameThread();
 	FParse::Value(FCommandLine::Get(), TEXT("MassifSeed="), Config.MasterSeed);
+	ApplyGullyKnobCVars(Config);
+	return Config;
+}
 
+void AMassifGameMode::GenerateWorldAndSpawnTerrain()
+{
+	const FWorldGenConfig Config = MakeWorldGenConfig();
 	if (FParse::Param(FCommandLine::Get(), TEXT("MassifExportWorldGen")))
 	{
 		ExportWorldGenDebug(Config);
@@ -158,14 +290,14 @@ void AMassifGameMode::GenerateWorldAndSpawnTerrain()
 	}
 
 	const double FieldStartSeconds = FPlatformTime::Seconds();
-	TSharedPtr<const FMassifTerrainField> Field = MakeShared<const FMassifTerrainField>(Config);
+	TerrainField = MakeShared<const FMassifTerrainField>(Config);
 	UE_LOG(LogTemp, Display, TEXT("WorldGen: seed %d, terrain field over %.0f m built in %.2f s"),
 		Config.MasterSeed, Config.WorldSizeMeters, FPlatformTime::Seconds() - FieldStartSeconds);
 
 	SpawnAltitudeMeters = Config.MaxAltitudeMeters + 2200.0f;
 
-	AMassifTerrainManager* TerrainManager = GetWorld()->SpawnActor<AMassifTerrainManager>();
-	TerrainManager->Initialize(Field, LoadTerrainMaterial());
+	TerrainManager = GetWorld()->SpawnActor<AMassifTerrainManager>();
+	TerrainManager->Initialize(TerrainField, LoadTerrainMaterial());
 }
 
 void AMassifGameMode::ConfigureSpectatorPawn()

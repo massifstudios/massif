@@ -27,14 +27,29 @@ AMassifTerrainManager::AMassifTerrainManager()
 
 void AMassifTerrainManager::Initialize(TSharedPtr<const FMassifTerrainField> InField, UMaterialInterface* InTerrainMaterial)
 {
-	check(InField.IsValid());
-	Field = InField;
 	TerrainMaterial = InTerrainMaterial;
+	ResetField(InField);
+}
+
+void AMassifTerrainManager::ResetField(TSharedPtr<const FMassifTerrainField> InField)
+{
+	check(InField.IsValid());
+	if (RootNode.IsValid())
+	{
+		DestroySubtree(*RootNode);
+		RootNode.Reset();
+	}
+	BuildRequests.Reset();
+	// Builds in flight hold their own references to the old field and the old
+	// queue; replacing the queue is what keeps their results off the new tree,
+	// which reuses the same node keys.
 	FinishedBuilds = MakeShared<FFinishedBuildQueue>();
+	InFlightBuildCount = 0;
+	Field = InField;
 
 	// Depth at which one more split would put vertices closer than the finest
-	// spacing worth rendering. 150 km with 64-quad tiles bottoms out around
-	// depth 14, or 14 cm between vertices.
+	// spacing worth rendering. 20 km with 64-quad tiles bottoms out around
+	// depth 11, or 15 cm between vertices.
 	const double WorldSizeMeters = Field->GetConfig().WorldSizeMeters;
 	MaxTreeDepth = 0;
 	double VertexSpacingMeters = WorldSizeMeters / TileQuadCount;
