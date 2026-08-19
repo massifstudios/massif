@@ -56,34 +56,45 @@ commit.
 - **Superseded in part by M4.** A grid-and-neighbours erosion pass cannot
   be part of a terrain field that must be evaluable point-by-point at any
   resolution. Incising is now analytic (ARCHITECTURE §5.1 layer 3). The
-  compute passes stay in tree, off by default, usable as an offline pass
-  over the baked playable-region grid.
+  compute passes stay in tree, off by default.
 
-### M4 — Terrain Field, World Scale & LOD Streaming
-Replaces the stored 8 × 8 km heightfield with a terrain field evaluable at
-any point and any resolution, and opens the world to 150 × 150 km.
-See ARCHITECTURE §5 and §12.
+### M4 — Terrain Field & World Scale
+Replaces the stored 8 x 8 km heightfield with a terrain field evaluable at
+any point and any resolution, and opens the world to 150 × 150 km,
+playable throughout. See ARCHITECTURE §5 and §12.
 
-- `FMassifTerrainField`: `Height(x, y, spacing)` and slope, CPU-only,
+- `FMassifTerrainField`: `Height(FVector2d, spacing)` and slope, CPU-only,
   deterministic, no global grid. Octave count keyed to sample spacing;
   finest octave faded in, never switched, so LOD levels agree.
+- Coordinates widened to double throughout worldgen. Float resolves only
+  ~8 mm at 150 km, which would spend the detail budget on coordinate error.
 - Hydrology graph reworked: hierarchical, lazily refined from stable node
   ids, uniform spatial index over segments so point queries are local
-  instead of looping every node.
+  instead of looping every node. Eager to ~1.25 km spacing world-wide.
 - Uplift/range layer (20–80 km) so a 150 km world has ranges and basins
   rather than one massif tiled.
-- Playable region selection at new-game time; `FWorldGenResult` re-scoped
-  to it and baked at 4 m. Sim-facing query API unchanged.
-- Terrain rendering moves from fixed 128 m chunks to clipmap rings with
-  vertex morphing.
+- Erosion filter retuned for the new scale, and its octave stack keyed to
+  sample spacing rather than a fixed count.
+- `FWorldGenResult` retired as a monolithic heightfield; its query API
+  moves onto the field, so M7–M11 are unaffected.
 - **Verify:** tests — chunk independence (a tile sampled alone is
   bit-identical to the same tile sampled inside a larger block), LOD
-  agreement across ring boundaries, surface sanity (max step between
-  adjacent samples, local-minimum fraction), determinism hash, sim grid
-  bake reproducibility. Manual — fly from ground level out to the 150 km
-  horizon with no seams, popping, or terracing.
+  agreement across spacings, surface sanity (max step between adjacent
+  samples, local-minimum fraction), determinism hash. Manual — fly from
+  ground level out to the 150 km horizon.
 
-### M5 — Masks, Textured Terrain & PCG Forests
+### M5 — LOD Streaming & Terrain Rendering
+- Clipmap rings sampled from the field, ~10 cm at the camera doubling
+  outward to the world edge, with vertex morphing across ring boundaries.
+- Replaces the fixed 128 m Geometry Script chunks from M1.
+- Resident tile manager (§5.4): 512 m tiles generated on demand around
+  camera and player activity, evicted when far, keyed by tile coordinate.
+- **Verify:** tests — tile residency is deterministic and independent of
+  the order tiles are requested; a tile generated alone matches the same
+  tile generated as a neighbour of another. Manual — fly and ski with no
+  seams, popping, or terracing at ring boundaries.
+
+### M6 — Masks, Textured Terrain & PCG Forests
 - Derived masks from eroded terrain: flow accumulation, deposition,
   slope → semantic masks (river, scree, forest, rock face, buildable);
   debug visualization mode per mask.
@@ -95,7 +106,7 @@ See ARCHITECTURE §5 and §12.
 - **Verify:** manual — masks match geology, forests and textures read
   naturally; headless suite still green.
 
-### M6 — Snow: Sim Grid + Visual Prototype
+### M7 — Snow: Sim Grid + Visual Prototype
 - `FSnowGrid` in sim: snowfall and altitude/temperature-driven melt on
   sim tick, deterministic.
 - Snow material on terrain: coverage/depth from GPU copy of sim grid;
@@ -106,7 +117,7 @@ See ARCHITECTURE §5 and §12.
   stable across runs; manual — snow visibly accumulates, a dragged debug
   brush leaves tracks that do not affect sim hash.
 
-### M7 — Building Tools: Lift & Slope Placement
+### M8 — Building Tools: Lift & Slope Placement
 - Placement mode UI shell (toolbar, ghost preview, validity coloring).
 - Lift placement: pick two station points → towers auto-spaced along the
   line; validation (length, slope under stations, buildable mask) in sim
@@ -119,7 +130,7 @@ See ARCHITECTURE §5 and §12.
   expected graph delta, graph connectivity query; manual — place a lift
   and a connected slope on the generated terrain.
 
-### M8 — Lift Simulation
+### M9 — Lift Simulation
 - Chairs advance along the lift line each sim tick; guest queue with
   `LiftQueueCapacity`; board/alight at stations.
 - Presentation: station/tower/chair placeholder meshes from sim data,
@@ -128,7 +139,7 @@ See ARCHITECTURE §5 and §12.
   boarding conservation (nobody duplicated/lost), determinism hash;
   manual — chairs visibly cycle.
 
-### M9 — Guest Agents
+### M10 — Guest Agents
 - `FGuestAgent` array in sim: spawn at resort entry, state machine
   Arrive → QueueLift → RideLift → SkiSlope → loop → Leave; ski speed from
   slope angle + snow condition + seeded skill.
@@ -139,7 +150,7 @@ See ARCHITECTURE §5 and §12.
   and never wedge in a state), determinism hash with 200 agents;
   manual — guests queue, ride up, ski down, repeat.
 
-### M10 — Playable Loop & Save/Load
+### M11 — Playable Loop & Save/Load
 - New-game flow: seed entry → generate → play. Minimal HUD (sim speed,
   guest count, seed display).
 - Save/load: seed + worldgen result + full sim state; versioned per

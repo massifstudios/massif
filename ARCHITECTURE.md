@@ -76,19 +76,23 @@ and `MassifCore` tests must pass headless.
   seed-driven. No gameplay-relevant value comes from a GPU pass. Compute
   shaders may mirror the field for rendering, but their results are never
   read back into sim.
-- **Sim never samples the terrain field directly.** The field is
-  LOD-dependent by design, and sampling it at view LOD would make sim state
-  depend on where the camera is. Instead worldgen bakes a fixed-resolution
-  height/slope grid over the **playable region** once at new-game time and
-  writes it into the save (§9, §12). Sim queries that grid and nothing
-  else. Presentation samples the field freely at whatever LOD it needs; the
-  two are expected to disagree below the sim grid spacing, and that
-  disagreement is never gameplay-relevant.
-- Baking the sim grid also keeps saves self-contained and immune to float
-  drift between compilers and platforms. Shared seeds reproduce the same
-  world on the same hardware class and a near-identical world elsewhere;
-  a bit-exact cross-platform reference implementation is out of scope
-  unless seed-sharing becomes a headline feature.
+- **Sim samples the terrain field only at fixed, named spacings.** The
+  field is LOD-dependent by design, so sampling it at view LOD would make
+  sim state depend on where the camera is. Sim therefore uses named
+  constants — `SimContactSpacing` (0.5 m) for agent-ground contact and
+  placement validation, `SimSurveySpacing` (4 m) for wide-area scans — and
+  never a spacing derived from camera distance. Presentation samples freely
+  at whatever LOD it needs.
+- The whole world is playable, so nothing terrain-shaped is baked: 150 km
+  at 4 m would be 1.4 × 10^9 cells. The field is cheap and deterministic
+  enough to query directly.
+- **Consequence, accepted:** terrain is no longer frozen into the save, so
+  a save carried to a machine whose float math differs would sit on
+  near-identical rather than identical ground. Single-player and offline,
+  so this only matters for shared saves, which is not a feature. Shared
+  *seeds* reproduce the same world on the same hardware class and a
+  near-identical world elsewhere. A bit-exact cross-platform
+  implementation stays out of scope.
 
 ## 5. World Generation
 
@@ -96,8 +100,13 @@ Seed-driven, no hardcoded maps. Terrain is a **pure function of world
 position**, never a stored grid:
 
 ```
-Height(WorldX, WorldY, SampleSpacingMeters) → meters
+Height(FVector2d WorldMeters, double SampleSpacingMeters) → double meters
 ```
+
+**Positions are double precision, not float.** `float32` resolves about
+4 mm at 75 km from the origin and 8 mm at 150 km, which would spend most
+of the centimeter detail budget on coordinate error before any terrain is
+evaluated. Seeds and noise lattices stay integer; only positions widen.
 
 `SampleSpacingMeters` selects how far down the octave stack to evaluate:
 detail finer than roughly twice the spacing is skipped, and the finest
@@ -107,6 +116,11 @@ sample and a fine sample of the same point agree.
 At the world extent in §12 no full-resolution grid can exist — 150 km at
 1 cm is 10^15 samples — so on-demand evaluation is not an optimisation
 here, it is the only representation that works.
+
+The whole world is playable. Nothing is scoped to a sub-region: what is
+scoped instead is *residency*, since anything needing neighbours or
+persistence lives in tiles that come and go around player activity
+(§5.5).
 
 ### 5.1 Layers
 
@@ -133,8 +147,8 @@ iteration, so any point at any resolution is evaluable in isolation.
 **Grid-based erosion cannot meet that contract.** The hydraulic pipe model
 and thermal erosion from M3 need the whole grid and its neighbours, so
 they are no longer part of the terrain definition. The code stays in tree
-and can be run as an offline pass over the baked sim grid, but it is off
-by default and nothing depends on it.
+and can be run as an offline pass over a resident tile, but it is off by
+default and nothing depends on it.
 
 Layer 4 is where centimeter-scale *appearance* comes from. Centimeter
 geometry is not a target: a 1 cm mesh over 50 × 50 m is 50 M triangles,
@@ -155,7 +169,7 @@ it is a graph, not a grid.
   refinement is deterministic and order-independent.
 - Levels down to ~1.25 km spacing are built eagerly for the whole world
   (~15 k nodes, milliseconds). Finer levels are refined on demand around
-  the playable region and wherever the camera goes.
+  the camera and wherever the player has built.
 - Segments are held in a uniform spatial index. Point queries touch only
   nearby segments, which is what lets the macro surface be evaluated
   analytically at any point instead of via a precomputed lattice.
@@ -175,17 +189,50 @@ terrain is **generated meshes sampled from the field**.
   there is no stitching step.
 - The only seam risk is between LOD levels, handled by vertex morphing
   plus the octave fade described above.
-- Playable-region actors register with World Partition. Far-field backdrop
-  rings are camera-relative and not streamed through World Partition.
-- Sim never queries the mesh, and never queries the field: all
-  height/slope/mask queries go through `FWorldGenResult`, which is now the
-  baked playable-region grid (§12).
+- Player-built actors register with World Partition. Terrain rings are
+  camera-relative and not streamed through World Partition.
+- Sim never queries the mesh. Height and slope come from the field at
+  fixed spacings (§4); masks and snow come from resident tiles (§5.4).
 
-### 5.4 Masks and PCG
+### 5.4 Resident tiles
 
-Masks are derived over the playable region only, from the baked grid:
-flow accumulation, deposition, slope, curvature, altitude bands →
-semantic masks (forest, river/stream, scree, rock face, buildable).
+The field answers point queries, but masks, snow and scattered content
+need neighbours or need to persist. Those live in **resident tiles**:
+512 m square, generated on demand around player activity and the camera,
+evicted when far, keyed by tile coordinate so generation is deterministic
+and order-independent.
+
+```
+TileSeed = HashCombine(MasterSeed, TileX, TileY, LayerName)
+```
+
+Three kinds of content, with different seam rules. Getting these
+backwards is the classic way to reintroduce the seams the field exists to
+avoid:
+
+| kind | examples | seeding | seams |
+|---|---|---|---|
+| **Continuous fields** | height, slope | **never per-tile.** Always the global field | none by construction |
+| **Derived grids** | flow accumulation, masks, snow | per tile, computed *from* the field with an apron of neighbouring cells that is discarded after | none, provided the apron is at least the widest kernel used |
+| **Discrete scatter** | trees, rocks, scree | per-tile seed, each tile also sampling its 8 neighbours so objects near a border appear in both | none; a seam is not a concept for point sets |
+
+Terrain shape must never be generated per tile from a tile seed. Adjacent
+tiles would not agree at their shared edge, which is exactly the stitching
+problem the field is there to remove.
+
+**Flow accumulation** is the one genuinely global derived quantity — water
+arrives from far outside the tile. The hydrology graph already carries
+that: it supplies discharge entering the tile, and the tile only has to
+resolve the last few hundred meters locally.
+
+Only tiles the player has modified are saved (§9). Everything else is
+regenerated from the seed on demand.
+
+### 5.5 Masks and PCG
+
+Semantic masks (forest, river/stream, scree, rock face, buildable) are
+derived per resident tile from flow accumulation, deposition, slope,
+curvature and altitude bands.
 
 PCG runs against the generated surface using the semantic masks as spatial
 data. PCG output is presentation + collision only; anything
@@ -196,17 +243,21 @@ regenerate. The same simulation can later be run in accelerated form at
 worldgen time to pre-age forests (fallen trees, clearings, wind-shaped
 tree lines) instead of purely mask-driven placement.
 
-Outside the playable region there are no masks. Far-field vegetation and
-rock are driven directly by the terrain field (altitude, slope, aspect),
-since nothing there is gameplay-relevant.
+Distant terrain that has no resident tiles gets vegetation and rock driven
+directly by the field (altitude, slope, aspect). It becomes mask-driven as
+soon as tiles become resident, so the two must agree closely enough that
+the transition is not visible.
 
 ## 6. Snow System
 
 Two layers with a strict boundary:
 
 1. **Sim snow grid (gameplay truth).** `FSnowGrid` in `MassifSim`: coarse
-   grid (≈4 m/cell) over the playable region only, of
-   `{SnowDepth, Compaction}` per cell. Updated on sim
+   grid (≈4 m/cell) held as resident tiles (§5.4) around resorts and
+   player activity, not as one world-sized array, of
+   `{SnowDepth, Compaction}` per cell. Untouched terrain derives its snow
+   from altitude and aspect analytically, and only becomes a resident tile
+   once something writes to it. Updated on sim
    tick by weather (snowfall, melt by altitude/aspect/temperature), snow
    cannons, and grooming — all deterministic. Slope quality, cannon
    coverage, and guest satisfaction read this grid. Serialized in saves.
@@ -257,11 +308,11 @@ when cells change) with the deformation RT for close-range detail.
 
 ## 9. Save Games
 
-- Save = master seed + engine version tag + playable-region bounds +
-  `FWorldGenResult` (the baked playable-region grid, 16-bit heights,
-  compressed) + full `FMassifSimState` + save format version.
-- The world outside the playable region is never saved. It is a pure
-  function of the seed and is regenerated on load.
+- Save = master seed + engine version tag + full `FMassifSimState` +
+  modified resident tiles (§5.4, compressed) + save format version.
+- No heightfield is saved. Terrain is a pure function of the seed and is
+  regenerated on demand, so save size scales with what the player has
+  built and touched, not with world area.
 - Custom version GUID (`FMassifCustomVersion`) from the first save-touching
   commit; every format change bumps it. During development, incompatible
   saves are invalidated (dev reset) unless migration is explicitly
@@ -302,25 +353,26 @@ when cells change) with the deformation RT for close-range detail.
 
 ## 12. World Scale (decided)
 
-Two extents, deliberately different. Conflating them is what forces either
-a tiny world or an unstorable one.
-
-| | extent | resolution | where it lives |
-|---|---|---|---|
-| **World** | 150 × 150 km, finite | terrain field, any spacing on demand | nothing stored; pure function of the seed |
-| **Playable region** | ~16 × 16 km around the resort massif | 4 m sim grid (4001², 16-bit ≈ 32 MB, compressed in save) | `FWorldGenResult`, masks, snow grid |
-
-- The world is almost entirely backdrop and view. It is finite: rivers need
-  real outlets, and globally consistent drainage is worth more than
-  unbounded extent.
-- The playable region is chosen at new-game time — the generator picks a
-  massif with usable relief and aspect. It is the only part with
-  sim-resolution data and the only part the player may build in.
+- **Extent:** 150 × 150 km, finite, **playable throughout**. Finite because
+  rivers need real outlets: globally consistent drainage is worth more than
+  unbounded extent, and it is what lets large landforms come from the
+  hydrology graph rather than from noise.
+- **Nothing terrain-shaped is stored.** No heightfield, no world-sized
+  arrays. What is scoped is residency, not area (§5.4).
+- **Coordinates:** double precision throughout the field API. See §5.
 - **Altitude range:** valley floors ~400–900 m, peaks to ~4500 m.
+- **Sim sampling:** fixed spacings only — 0.5 m for agent contact and
+  placement validation, 4 m for wide-area scans. Never view-derived.
+- **Resident tiles:** 512 m square, 4 m cells (128² per tile) for masks and
+  snow. Generated on demand, evicted when far, saved only if modified.
 - **Presentation detail:** clipmap rings from ~10 cm at the camera,
   doubling outward to the world edge, ~20 rings and ~1.5 M vertices.
   Below the finest ring, detail is material displacement and scattered
-  meshes, not geometry.
-- `FWorldGenResult` keeps its existing sim-facing query API
-  (`SampleHeightMeters`, `SampleSlopeDegrees`, `SampleNormal`). Only its
-  extent and its producer change, so §6–§8 are unaffected.
+  meshes, not geometry. Centimeter *geometry* is not a target: 1 cm over
+  50 × 50 m is 50 M triangles, and snow drapes over everything under
+  roughly half a meter regardless.
+- **Hydrology graph:** eager to ~1.25 km node spacing world-wide
+  (~15 k nodes), refined on demand to ~200 m headwaters near activity.
+- `FWorldGenResult` as a monolithic heightfield is retired. Its sim-facing
+  query API (`SampleHeightMeters`, `SampleSlopeDegrees`, `SampleNormal`)
+  survives on the terrain field, so §6–§8 are unaffected.
