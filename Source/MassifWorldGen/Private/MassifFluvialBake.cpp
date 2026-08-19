@@ -295,17 +295,52 @@ namespace
 			}
 		}
 
+		/**
+		 * Multi-direction accumulation: every cell spreads its water over all
+		 * lower neighbours, weighted by slope. A single-receiver pass drives
+		 * the whole hillside into parallel one-cell channels — ladder rungs of
+		 * ridge and trench across every slope; spread flow converges the way
+		 * water sheets do, and channels only emerge where it genuinely
+		 * concentrates. Cells are visited from highest filled surface down, so
+		 * every contribution arrives before a cell passes its own on.
+		 */
 		void AccumulateDrainage()
 		{
 			const double CellAreaSquareMeters = CellSizeMeters * CellSizeMeters;
 			DrainageAreaSquareMeters.Init(CellAreaSquareMeters, CellCount);
 			for (int32 OrderIndex = PopOrder.Num() - 1; OrderIndex >= 0; --OrderIndex)
 			{
-				const int32 CellIndex = PopOrder[OrderIndex];
-				const int32 Receiver = ReceiverIndices[CellIndex];
-				if (Receiver != CellIndex)
+				DistributeDrainage(PopOrder[OrderIndex]);
+			}
+		}
+
+		void DistributeDrainage(int32 CellIndex)
+		{
+			if (IsBorder(CellIndex))
+			{
+				return;
+			}
+			double DropWeights[8] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+			double TotalWeight = 0.0;
+			for (int32 NeighborIndex = 0; NeighborIndex < 8; ++NeighborIndex)
+			{
+				const int32 Neighbor = NeighborCell(CellIndex, NeighborIndex);
+				const double Drop = (FilledHeightMeters[CellIndex] - FilledHeightMeters[Neighbor])
+					/ NeighborDistanceMeters(NeighborIndex);
+				DropWeights[NeighborIndex] = FMath::Max(0.0, Drop);
+				TotalWeight += DropWeights[NeighborIndex];
+			}
+			if (TotalWeight <= 0.0)
+			{
+				return;
+			}
+			const double AreaPerWeight = DrainageAreaSquareMeters[CellIndex] / TotalWeight;
+			for (int32 NeighborIndex = 0; NeighborIndex < 8; ++NeighborIndex)
+			{
+				const int32 Neighbor = NeighborCell(CellIndex, NeighborIndex);
+				if (DropWeights[NeighborIndex] > 0.0)
 				{
-					DrainageAreaSquareMeters[Receiver] += DrainageAreaSquareMeters[CellIndex];
+					DrainageAreaSquareMeters[Neighbor] += AreaPerWeight * DropWeights[NeighborIndex];
 				}
 			}
 		}
@@ -332,13 +367,24 @@ namespace
 			{
 				return 0.0;
 			}
+			// Erosion works against the slope-weighted blend of every lower
+			// neighbour, not a single receiver. One receiver quantises the cut
+			// into the lattice's eight headings and the hillsides organise
+			// into parallel ladder channels along them; the blend is
+			// direction-continuous. Every lower neighbour sits earlier in pop
+			// order, so all of them already hold their updated height.
+			double DownstreamHeight = 0.0;
+			double DownstreamDistance = 0.0;
+			if (!ComputeDownstreamBlend(CellIndex, DownstreamHeight, DownstreamDistance))
+			{
+				return 0.0;
+			}
 			// Drained area is normalised to cells and distance to the cell
 			// size, so the factor means the same thing at any bake resolution:
-			// a ridge cell's steady-state drop towards its receiver is
-			// uplift-per-step over the factor. The exponent then sets how much
-			// flatter a big river runs than a headwater — the concavity that
-			// gathers relief into massifs with broad valleys between them.
-			const int32 Receiver = ReceiverIndices[CellIndex];
+			// a ridge cell's steady-state drop is uplift-per-step over the
+			// factor. The exponent then sets how much flatter a big river runs
+			// than a headwater — the concavity that gathers relief into
+			// massifs with broad valleys between them.
 			const double DrainedCells = DrainageAreaSquareMeters[CellIndex] / (CellSizeMeters * CellSizeMeters);
 			// Above 1, the channel-initiation area holds fluvial erosion off the
 			// smallest drainages. Kept mild or off: starving hillslopes of
@@ -352,12 +398,40 @@ namespace
 			}
 			const double ErosionFactor = Channelisation * static_cast<double>(Config.BakeStreamPowerFactor)
 				* FMath::Pow(DrainedCells, static_cast<double>(Config.BakeDrainageExponent))
-				* CellSizeMeters / ReceiverDistanceMeters[CellIndex];
+				* CellSizeMeters / DownstreamDistance;
 			const double PreviousHeight = HeightMeters[CellIndex];
 			const double RaisedHeight = PreviousHeight + UpliftStepMeters[CellIndex];
-			const double ErodedHeight = (RaisedHeight + ErosionFactor * HeightMeters[Receiver]) / (1.0 + ErosionFactor);
+			const double ErodedHeight = (RaisedHeight + ErosionFactor * DownstreamHeight) / (1.0 + ErosionFactor);
 			HeightMeters[CellIndex] = FMath::Min(ErodedHeight, static_cast<double>(Config.MaxAltitudeMeters));
 			return FMath::Abs(HeightMeters[CellIndex] - PreviousHeight);
+		}
+
+		/** Slope-weighted mean height and distance of the lower neighbours on the filled surface. */
+		bool ComputeDownstreamBlend(int32 CellIndex, double& OutHeightMeters, double& OutDistanceMeters) const
+		{
+			double TotalWeight = 0.0;
+			double WeightedHeight = 0.0;
+			double WeightedDistance = 0.0;
+			for (int32 NeighborIndex = 0; NeighborIndex < 8; ++NeighborIndex)
+			{
+				const int32 Neighbor = NeighborCell(CellIndex, NeighborIndex);
+				const double Distance = NeighborDistanceMeters(NeighborIndex);
+				const double Drop = (FilledHeightMeters[CellIndex] - FilledHeightMeters[Neighbor]) / Distance;
+				if (Drop <= 0.0)
+				{
+					continue;
+				}
+				TotalWeight += Drop;
+				WeightedHeight += Drop * HeightMeters[Neighbor];
+				WeightedDistance += Drop * Distance;
+			}
+			if (TotalWeight <= 0.0)
+			{
+				return false;
+			}
+			OutHeightMeters = WeightedHeight / TotalWeight;
+			OutDistanceMeters = WeightedDistance / TotalWeight;
+			return true;
 		}
 
 		/** Optional blend towards the four-neighbour mean, for softer interfluves than pure stream power leaves. */
@@ -574,9 +648,9 @@ void FMassifFluvialBake::ExtractRiverPolylines(const TArray<int32>& PopOrder, do
 		Node.DrainageAreaSquareMeters = DrainageAreaSquareMeters[CellIndex];
 	}
 
-	// A channel cell's receiver gets its whole drainage added, so it is a
-	// channel cell too, except where the channel leaves at the border and the
-	// cell receives itself: that is an outlet. Water is clamped in pop order —
+	// Flow spreads over several neighbours, so the steepest-descent cell below
+	// a channel is not always a channel itself; the chain down to the next one
+	// is, at worst, the walk to the border. Water is clamped in pop order —
 	// receivers first — so it never rises downstream even where the solved
 	// surface keeps a residual bump.
 	for (const int32 CellIndex : PopOrder)
@@ -586,15 +660,31 @@ void FMassifFluvialBake::ExtractRiverPolylines(const TArray<int32>& PopOrder, do
 		{
 			continue;
 		}
-		const int32 Receiver = ReceiverIndices[CellIndex];
-		if (Receiver == CellIndex)
+		const int32 ParentCell = NextChannelCellDownstream(CellIndex, NodeOfCell);
+		if (ParentCell == INDEX_NONE || ParentCell == CellIndex)
 		{
 			continue;
 		}
-		RiverNodes[NodeIndex].ParentIndex = NodeOfCell[Receiver];
+		RiverNodes[NodeIndex].ParentIndex = NodeOfCell[ParentCell];
 		RiverNodes[NodeIndex].WaterElevationMeters = FMath::Max(
-			RiverNodes[NodeIndex].WaterElevationMeters, RiverNodes[NodeOfCell[Receiver]].WaterElevationMeters);
+			RiverNodes[NodeIndex].WaterElevationMeters, RiverNodes[NodeOfCell[ParentCell]].WaterElevationMeters);
 	}
+}
+
+int32 FMassifFluvialBake::NextChannelCellDownstream(int32 CellIndex, const TArray<int32>& NodeOfCell) const
+{
+	int32 Cursor = ReceiverIndices[CellIndex];
+	int32 StepsLeft = CellsPerSide * CellsPerSide;
+	while (Cursor != ReceiverIndices[Cursor] && NodeOfCell[Cursor] == INDEX_NONE && StepsLeft > 0)
+	{
+		Cursor = ReceiverIndices[Cursor];
+		--StepsLeft;
+	}
+	if (NodeOfCell[Cursor] == INDEX_NONE)
+	{
+		return INDEX_NONE;
+	}
+	return Cursor;
 }
 
 void FMassifFluvialBake::SmoothRiverPolylines()
@@ -618,7 +708,7 @@ void FMassifFluvialBake::SmoothRiverPolylines()
 		SingleChildOfNode[ParentIndex] = NodeIndex;
 	}
 
-	for (int32 Pass = 0; Pass < 2; ++Pass)
+	for (int32 Pass = 0; Pass < 4; ++Pass)
 	{
 		TArray<FVector2d> SmoothedPositions;
 		SmoothedPositions.SetNumUninitialized(RiverNodes.Num());
@@ -807,7 +897,14 @@ double FMassifFluvialBake::SampleChannelCarveMeters(
 	const double DepthCap = static_cast<double>(Config.ChannelNotchDepthCapMeters);
 	const double MergedCutMeters = -PolynomialSmoothMin(
 		-DeepestCutMeters, -SecondDeepestCutMeters, FMath::Max(1.0, DepthCap * 0.3));
-	return FMath::Clamp(MergedCutMeters, 0.0, DepthCap);
+
+	// A full-depth bed sliced into near-flat ground reads as a trench wall
+	// out of nowhere; the same water on a mountainside sits in terrain that
+	// already falls faster than the bed is deep. Depth follows the local
+	// macro slope, so streams fade to a shallow swale as the land flattens.
+	const double SlopeMagnitude = SampleGradientMetersPerMeter(InPositionMeters).Length();
+	const double SlopeFactor = FMath::Clamp(SlopeMagnitude / 0.15, 0.15, 1.0);
+	return FMath::Clamp(MergedCutMeters * SlopeFactor, 0.0, DepthCap);
 }
 
 void FMassifFluvialBake::GatherChannelCuts(

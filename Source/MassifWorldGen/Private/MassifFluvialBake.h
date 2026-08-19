@@ -92,6 +92,7 @@ private:
 	void ComputeDrainWaterGrid(const TArray<int32>& PopOrder, double ChannelAreaThresholdSquareMeters);
 	void BlurDrainWaterRow(int32 CellY, TArray<double>& Blurred) const;
 	void ExtractRiverPolylines(const TArray<int32>& PopOrder, double ChannelAreaThresholdSquareMeters);
+	int32 NextChannelCellDownstream(int32 CellIndex, const TArray<int32>& NodeOfCell) const;
 	void SmoothRiverPolylines();
 	FVector2d SmoothedNodePosition(int32 NodeIndex, const TArray<int32>& SingleChildOfNode, const TArray<int32>& ChildCounts) const;
 	void BuildRiverSegmentIndex(const FWorldGenConfig& Config);

@@ -99,7 +99,7 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 
 	/** Share of the uplift a basin floor keeps, so basins roll instead of relaxing dead flat. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
-	float BakeBasinUpliftFraction = 0.1f;
+	float BakeBasinUpliftFraction = 0.03f;
 
 	/**
 	 * Drained cells below which fluvial erosion fades out. 1 disables. Keep
@@ -111,7 +111,7 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 
 	/** 0..1 blend towards the four-neighbour mean each iteration, for softer interfluves. 0 disables. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
-	float BakeHillslopeSmoothing = 0.2f;
+	float BakeHillslopeSmoothing = 0.3f;
 
 	/**
 	 * Fractal relief the solve starts from, as a share of the height between
@@ -147,7 +147,7 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 
 	/** Drained area above which a cell counts as a channel and joins the river polylines. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
-	float RiverDrainageAreaThresholdSquareMeters = 4.0e6f;
+	float RiverDrainageAreaThresholdSquareMeters = 12.0e6f;
 
 	/**
 	 * Channel cross-section from drained area, hydraulic-geometry style: floor

@@ -80,15 +80,23 @@ bool FFluvialBakeDrainageTest::RunTest(const FString& Parameters)
 		}
 	}
 
+	// Flow spreads over several neighbours, so area is not monotone along the
+	// steepest-descent chain; what must hold instead is conservation — every
+	// cell's area ends up at the border, nowhere else.
+	double TotalAreaSum = 0.0;
+	double BorderAreaSum = 0.0;
+	const double CellAreaSquareMeters = static_cast<double>(Config.BakeCellSizeMeters) * Config.BakeCellSizeMeters;
 	for (int32 CellIndex = 0; CellIndex < CellCount; ++CellIndex)
 	{
-		const int32 Receiver = Receivers[CellIndex];
-		if (Receiver != CellIndex && DrainageAreas[Receiver] <= DrainageAreas[CellIndex])
+		TotalAreaSum += CellAreaSquareMeters;
+		if (Bake.IsBorderCell(CellIndex))
 		{
-			AddError(FString::Printf(TEXT("Drained area shrank downstream at cell %d"), CellIndex));
-			return false;
+			BorderAreaSum += DrainageAreas[CellIndex];
 		}
 	}
+	const double ConservationError = FMath::Abs(BorderAreaSum - TotalAreaSum) / TotalAreaSum;
+	TestTrue(FString::Printf(TEXT("All drained area reaches the border (error %.4f%%)"), 100.0 * ConservationError),
+		ConservationError < 0.001);
 
 	return true;
 }
@@ -170,11 +178,6 @@ bool FFluvialBakeRiversTest::RunTest(const FString& Parameters)
 		if (Node.WaterElevationMeters < Parent.WaterElevationMeters)
 		{
 			AddError(FString::Printf(TEXT("Water rises downstream at node %d"), NodeIndex));
-			return false;
-		}
-		if (Node.DrainageAreaSquareMeters > Parent.DrainageAreaSquareMeters)
-		{
-			AddError(FString::Printf(TEXT("Drained area shrinks downstream at node %d"), NodeIndex));
 			return false;
 		}
 	}
