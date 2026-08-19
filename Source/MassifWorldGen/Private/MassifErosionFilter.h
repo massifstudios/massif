@@ -28,7 +28,7 @@ struct FMassifErosionSettings
 
 	/** Spacing of the widest gullies; each octave divides it by WavelengthGain's reciprocal. */
 	double LargestGullyWavelengthMeters = 1800.0;
-	double LargestGullyDepthMeters = 140.0;
+	double LargestGullyDepthMeters = 300.0;
 	double WavelengthGain = 0.5;
 	double DepthGain = 0.5;
 
@@ -36,24 +36,24 @@ struct FMassifErosionSettings
 	 * Stripes per pivot cell. The reference keeps this close to 1: much above it
 	 * the phase interpolation between cells visibly distorts the stripes.
 	 */
-	double CellsPerWavelength = 1.0;
+	double CellsPerWavelength = 0.7;
 
 	/** Surface gradient at which gullies reach full depth; gentler ground gets less. */
 	float SlopeReference = 0.35f;
 
 	/** Above 1, later octaves keep cutting on ground where the earlier ones had already faded. */
-	float DetailPersistence = 1.0f;
+	float DetailPersistence = 1.5f;
 
 	/**
 	 * Amplitude of the stripes relative to the fade base, and how strongly each
 	 * octave's stripes steer the finer ones — the reference's gully weight.
 	 * This is what makes gullies branch instead of running parallel.
 	 */
-	float BranchStrength = 1.0f;
+	float BranchStrength = 0.5f;
 
 	/** Mask smoothing at that end of the gully profile: 1 eases gullies in gently, 0 snaps them on. */
-	float RidgeRounding = 0.6f;
-	float CreaseRounding = 0.15f;
+	float RidgeRounding = 0.1f;
+	float CreaseRounding = 0.0f;
 
 	uint32 Seed = 0;
 };

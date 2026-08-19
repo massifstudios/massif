@@ -82,7 +82,7 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	float LargestGullyWavelengthMeters = 1800.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
-	float LargestGullyDepthMeters = 140.0f;
+	float LargestGullyDepthMeters = 300.0f;
 
 	/** Wavelength and depth left per octave. Equal values keep gully steepness the same at every scale. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
@@ -97,7 +97,7 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	 * stripes into swirls.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
-	float GullyCellsPerWavelength = 1.0f;
+	float GullyCellsPerWavelength = 0.7f;
 
 	/** Surface gradient at which gullies cut to full depth; gentler ground gets proportionally less. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
@@ -105,7 +105,7 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 
 	/** Above 1, fine gullies keep cutting on ground where the coarse ones had already faded out. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
-	float GullyDetailPersistence = 1.0f;
+	float GullyDetailPersistence = 1.5f;
 
 	/**
 	 * The reference's gully weight: stripe amplitude relative to the fade base,
@@ -113,14 +113,14 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	 * branching off them.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
-	float GullyBranchStrength = 1.0f;
+	float GullyBranchStrength = 0.5f;
 
 	/** Mask smoothing at that end of the gully profile: 1 eases gullies in gently, 0 snaps them on. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
-	float GullyRidgeRounding = 0.6f;
+	float GullyRidgeRounding = 0.1f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
-	float GullyCreaseRounding = 0.15f;
+	float GullyCreaseRounding = 0.0f;
 
 	/**
 	 * Window the whole-array path materialises out of the terrain field, centred

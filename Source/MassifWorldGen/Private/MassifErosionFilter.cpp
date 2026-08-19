@@ -23,9 +23,21 @@ namespace
 	/**
 	 * How fast an octave's own stripe slope saturates its mask. The stripe sine
 	 * is 0 on crests and creases, so this is what keeps the finer gullies off
-	 * the ridge lines the coarser ones made.
+	 * the ridge lines the coarser ones made. Reference default.
 	 */
-	const float OctaveSlopeOnset = 2.0f;
+	const float OctaveSlopeOnset = 1.25f;
+
+	/**
+	 * The gullies orient by the direction of the slope but a pretend, fixed
+	 * magnitude — the reference's assumed slope. With the real magnitude, the
+	 * octaves' own steering overwhelms the direction wherever the base slope
+	 * is weak, and the creases wander into loops.
+	 */
+	const double AssumedSlopeMagnitude = 0.7;
+
+	/** Scale on the input mask's rounding, and per-octave growth of the octave masks'. Reference defaults. */
+	const float InputRoundingScale = 0.1f;
+	const float RoundingGrowthPerOctave = 2.0f;
 
 	struct FStripeSample
 	{
@@ -108,7 +120,11 @@ namespace
 				continue;
 			}
 
-			const double PhaseRadians = FVector2d::DotProduct(FromCellPointMeters, AcrossDirection) * RadiansPerMeter;
+			// Quarter-cycle offset as in the reference: a cell point sits on a
+			// stripe flank, not a crest, so its own neighbourhood carries a
+			// stable stripe slope for the masks and the steering.
+			const double PhaseRadians =
+				FVector2d::DotProduct(FromCellPointMeters, AcrossDirection) * RadiansPerMeter + UE_DOUBLE_PI * 0.5;
 			float Sine = 0.0f;
 			float Cosine = 0.0f;
 			FMath::SinCos(&Sine, &Cosine, static_cast<float>(PhaseRadians));
@@ -140,19 +156,21 @@ double MassifErosionFilter::EvaluateDisplacementMeters(const FMassifErosionInput
 	// stripes, so finer gullies keep off the crests the coarser ones made.
 	const float InputSlopeOnset = 1.0f / FMath::Max(UE_SMALL_NUMBER, Settings.SlopeReference);
 	const float RoundingForInput = FMath::Lerp(
-		Settings.CreaseRounding, Settings.RidgeRounding, Clamp01(FadeTarget + 0.5f));
+		Settings.CreaseRounding, Settings.RidgeRounding, Clamp01(FadeTarget + 0.5f)) * InputRoundingScale;
 	const float InputSlope = static_cast<float>(Input.SlopeMetersPerMeter.Length());
 	float CombinedMask = EaseOut(SmoothStart(InputSlope * InputSlopeOnset, RoundingForInput * InputSlopeOnset));
 
-	// The gradient the gullies orient by. Every octave adds its own stripes'
-	// steepest slope, so the finer gullies bend into the coarser ones and
-	// branch off them the way a drainage network does.
-	FVector2d GullySlope = Input.SlopeMetersPerMeter;
+	// The gradient the gullies orient by: the direction of the base slope at
+	// the assumed magnitude. Every octave adds its own stripes' steepest
+	// slope, so the finer gullies bend into the coarser ones and branch off
+	// them the way a drainage network does.
+	FVector2d GullySlope = Input.SlopeMetersPerMeter.GetSafeNormal() * AssumedSlopeMagnitude;
 
 	double DisplacementMeters = 0.0;
 	double TotalAmplitudeMeters = 0.0;
 	double WavelengthMeters = Settings.LargestGullyWavelengthMeters;
 	double DepthMeters = Settings.LargestGullyDepthMeters;
+	float RoundingMultiplier = 1.0f;
 	for (int32 Octave = 0; Octave < Settings.OctaveCount; ++Octave)
 	{
 		float OctaveWeight = 1.0f;
@@ -191,13 +209,14 @@ double MassifErosionFilter::EvaluateDisplacementMeters(const FMassifErosionInput
 		FadeTarget = Faded;
 
 		const float RoundingForOctave = FMath::Lerp(
-			Settings.CreaseRounding, Settings.RidgeRounding, Clamp01(Stripes.Cosine + 0.5f));
+			Settings.CreaseRounding, Settings.RidgeRounding, Clamp01(Stripes.Cosine + 0.5f)) * RoundingMultiplier;
 		const float OctaveMask = EaseOut(SmoothStart(
 			FMath::Abs(Stripes.Sine) * OctaveSlopeOnset, RoundingForOctave * OctaveSlopeOnset));
 		CombinedMask = PowerTowardsOne(CombinedMask, Settings.DetailPersistence) * OctaveMask;
 
 		WavelengthMeters *= FMath::Clamp(Settings.WavelengthGain, 0.05, 0.95);
 		DepthMeters *= FMath::Clamp(Settings.DepthGain, 0.0, 1.0);
+		RoundingMultiplier *= RoundingGrowthPerOctave;
 	}
 
 	// What a point with no gullies at all would have been displaced by: the

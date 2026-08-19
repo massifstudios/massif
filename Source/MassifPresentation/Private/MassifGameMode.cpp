@@ -33,7 +33,7 @@ namespace
 	// Erosion-filter knobs, live: a change rebuilds the terrain field once the
 	// value has settled. Defaults mirror FWorldGenConfig.
 	TAutoConsoleVariable<float> CVarMassifGullyDepth(
-		TEXT("massif.Gully.Depth"), 140.0f,
+		TEXT("massif.Gully.Depth"), 300.0f,
 		TEXT("Largest gully depth in meters — overall erosion-filter strength."));
 
 	TAutoConsoleVariable<float> CVarMassifGullyWavelength(
@@ -41,15 +41,15 @@ namespace
 		TEXT("Spacing of the coarsest gullies in meters."));
 
 	TAutoConsoleVariable<float> CVarMassifGullyBranchStrength(
-		TEXT("massif.Gully.BranchStrength"), 1.0f,
+		TEXT("massif.Gully.BranchStrength"), 0.5f,
 		TEXT("Gully weight: stripe amplitude and how strongly coarse gullies steer finer ones."));
 
 	TAutoConsoleVariable<float> CVarMassifGullyRidgeRounding(
-		TEXT("massif.Gully.RidgeRounding"), 0.6f,
+		TEXT("massif.Gully.RidgeRounding"), 0.1f,
 		TEXT("1 rounded cosine ridge, 0 pinched straight-sided edge."));
 
 	TAutoConsoleVariable<float> CVarMassifGullyCreaseRounding(
-		TEXT("massif.Gully.CreaseRounding"), 0.15f,
+		TEXT("massif.Gully.CreaseRounding"), 0.0f,
 		TEXT("1 rounded gully floor, 0 pinched crease."));
 
 	TAutoConsoleVariable<float> CVarMassifGullySlopeReference(

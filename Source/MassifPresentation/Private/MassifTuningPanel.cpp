@@ -22,7 +22,7 @@ void SMassifTuningPanel::Construct(const FArguments& InArgs)
 			]
 			+ SVerticalBox::Slot().AutoHeight()
 			[
-				MakeKnobRow(NSLOCTEXT("Massif", "GullyDepth", "Erosion strength (gully depth m)"), TEXT("massif.Gully.Depth"), 0.0f, 400.0f)
+				MakeKnobRow(NSLOCTEXT("Massif", "GullyDepth", "Erosion strength (gully depth m)"), TEXT("massif.Gully.Depth"), 0.0f, 800.0f)
 			]
 			+ SVerticalBox::Slot().AutoHeight()
 			[

@@ -7,8 +7,14 @@
 
 namespace
 {
-	/** Fixed step for the base-surface gradient, so slope cannot depend on how the caller samples. */
-	const double GradientStepMeters = 20.0;
+	/**
+	 * Fixed step for the base-surface gradient, so slope cannot depend on how
+	 * the caller samples. Deliberately coarse: the uplift envelope carries
+	 * ridged noise whose folds kink the gradient direction, and the filter
+	 * levers any direction kink into a cliff a phase cell away — the wide
+	 * difference low-passes the direction field below gully scale.
+	 */
+	const double GradientStepMeters = 150.0;
 
 	FMassifErosionSettings MakeErosionSettings(const FWorldGenConfig& Config, uint32 Seed)
 	{
