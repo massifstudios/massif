@@ -37,3 +37,8 @@ tasks:
     desc: Regenerate base content assets (L_Massif map, M_Terrain material)
     cmds:
       - UnrealEditor-Cmd {{.PROJECT}} -run=pythonscript -script={{.TASKFILE_DIR}}/Tools/create_base_content.py -unattended -nosplash -nullrhi
+
+  foliage:
+    desc: Import downloaded Poly Haven vegetation models as Nanite static meshes
+    cmds:
+      - UnrealEditor-Cmd {{.PROJECT}} -run=pythonscript -script={{.TASKFILE_DIR}}/Tools/create_foliage_content.py -unattended -nosplash -nullrhi
