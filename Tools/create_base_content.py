@@ -22,10 +22,20 @@ ROCK_COLOR = (0.145, 0.135, 0.125)
 SNOW_COLOR = (0.905, 0.925, 0.965)
 GRASS_COLOR = (0.075, 0.145, 0.055)
 
-SNOW_LINE_METERS = 1500.0
-SNOW_BAND_METERS = 300.0
-GRASS_LINE_METERS = 1350.0
-GRASS_BAND_METERS = 200.0
+# The world spans 500-3400 m, so a 1500 m snowline buries the whole massif in
+# one layer. These put grass on the valleys and lower flanks, rock on the
+# steeps and the high ground, snow on the summits.
+SNOW_LINE_METERS = 2600.0
+SNOW_BAND_METERS = 400.0
+GRASS_LINE_METERS = 2000.0
+GRASS_BAND_METERS = 350.0
+
+# Surface normal Z at which a layer gives way to rock, and how sharply. Grass
+# stops holding around 30 degrees; snow sits on much steeper ground than that.
+GRASS_FLATNESS_THRESHOLD = 0.80
+GRASS_FLATNESS_SHARPEN = 5.0
+SNOW_FLATNESS_THRESHOLD = 0.55
+SNOW_FLATNESS_SHARPEN = 3.0
 
 TEXTURE_SOURCE_ROOT = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Content", "Textures", "PolyHaven"
@@ -47,6 +57,20 @@ MAP_SUFFIXES = ("D", "N", "R")
 VARIANT_NOISE_WAVELENGTH_METERS = 340.0
 TINT_NOISE_WAVELENGTH_METERS = 1700.0
 
+# Altitude jitter fed into the snow and grass band masks. Without it both lines
+# are clean contours around the massif, which reads as a painted-on gradient;
+# with it they wander over spurs and gullies the way real ones do.
+LINE_NOISE_WAVELENGTH_METERS = 420.0
+LINE_NOISE_AMPLITUDE_METERS = 140.0
+
+# Kilometre-scale tint the base color is multiplied by. Two colors rather than
+# one brightness, so distant slopes vary in hue as well as value.
+TINT_COOL = (0.78, 0.86, 0.98)
+TINT_WARM = (1.16, 1.06, 0.88)
+
+WORLD_ALIGNED_TEXTURE = "/Engine/Functions/Engine_MaterialFunctions01/Texturing/WorldAlignedTexture"
+WORLD_ALIGNED_NORMAL = "/Engine/Functions/Engine_MaterialFunctions01/Texturing/WorldAlignedNormal"
+
 
 def create_level():
     if unreal.EditorAssetLibrary.does_asset_exist(MAP_PATH):
@@ -65,9 +89,15 @@ def expr(material, expression_class, x, y):
 
 
 def connect(from_expr, from_output, to_expr, to_input):
-    unreal.MaterialEditingLibrary.connect_material_expressions(
+    """Raises on a bad pin name: a silently dropped connection would surface only as a black material."""
+    connected = unreal.MaterialEditingLibrary.connect_material_expressions(
         from_expr, from_output, to_expr, to_input
     )
+    if not connected:
+        raise RuntimeError(
+            f"Could not connect {type(from_expr).__name__}.'{from_output}' "
+            f"to {type(to_expr).__name__}.'{to_input}'"
+        )
 
 
 def make_altitude_meters(material):
@@ -83,10 +113,19 @@ def make_altitude_meters(material):
     to_meters = expr(material, unreal.MaterialExpressionMultiply, -1200, -300)
     to_meters.set_editor_property("const_b", 0.01)
     connect(mask_z, "", to_meters, "A")
-    return to_meters
+
+    # Only the band masks read this, so jittering it here moves the snow and
+    # grass lines off their clean horizontal contours in one place.
+    jitter = make_macro_noise(
+        material, LINE_NOISE_WAVELENGTH_METERS, -LINE_NOISE_AMPLITUDE_METERS, LINE_NOISE_AMPLITUDE_METERS, -450
+    )
+    jittered = expr(material, unreal.MaterialExpressionAdd, -1050, -300)
+    connect(to_meters, "", jittered, "A")
+    connect(jitter, "", jittered, "B")
+    return jittered
 
 
-def make_flatness(material, threshold_z=0.62, sharpen_factor=3.0, y=100):
+def make_flatness(material, threshold_z, sharpen_factor, y=100):
     """1.0 on flat ground, 0.0 on steep faces."""
     vertex_normal = expr(material, unreal.MaterialExpressionVertexNormalWS, -1600, y)
     mask_z = expr(material, unreal.MaterialExpressionComponentMask, -1400, y)
@@ -182,76 +221,55 @@ def configure_texture(texture, suffix):
     unreal.EditorAssetLibrary.save_loaded_asset(texture)
 
 
-def make_layer_uvs(material, tile_meters, y):
-    """World-plan UVs: XY position over the tiling size, so tiles of any LOD agree."""
-    world_position = expr(material, unreal.MaterialExpressionWorldPosition, -2200, y)
-    mask_xy = expr(material, unreal.MaterialExpressionComponentMask, -2000, y)
-    mask_xy.set_editor_property("r", True)
-    mask_xy.set_editor_property("g", True)
-    mask_xy.set_editor_property("b", False)
-    mask_xy.set_editor_property("a", False)
-    connect(world_position, "", mask_xy, "")
+def make_world_aligned_sample(material, function_path, output_name, texture, sampler_type, tile_meters, x, y):
+    """
+    One texture projected on all three world axes and blended by the surface
+    normal. The tile meshes carry no UVs, and a plan projection alone stretches
+    every cliff face into vertical streaks; world-aligned sampling costs three
+    samples and removes both problems. Leaving WorldPosition unconnected lets
+    the function use its own world-position node.
+    """
+    texture_object = expr(material, unreal.MaterialExpressionTextureObject, x - 400, y)
+    texture_object.set_editor_property("texture", texture)
+    texture_object.set_editor_property("sampler_type", sampler_type)
 
-    to_uv = expr(material, unreal.MaterialExpressionMultiply, -1800, y)
-    to_uv.set_editor_property("const_b", 0.01 / tile_meters)
-    connect(mask_xy, "", to_uv, "A")
-    return to_uv
+    texture_size = expr(material, unreal.MaterialExpressionConstant3Vector, x - 400, y + 90)
+    centimeters = tile_meters * 100.0
+    texture_size.set_editor_property(
+        "constant", unreal.LinearColor(centimeters, centimeters, centimeters, 1.0)
+    )
+
+    # unreal.load_asset, not EditorAssetLibrary: the engine's material function
+    # folders are not all in the asset registry of a commandlet session.
+    function = unreal.load_asset(function_path)
+    if function is None:
+        raise RuntimeError(f"Material function not found: {function_path}")
+
+    call = expr(material, unreal.MaterialExpressionMaterialFunctionCall, x, y)
+    call.set_material_function(function)
+    connect(texture_object, "", call, "TextureObject")
+    connect(texture_size, "", call, "TextureSize")
+    return call, output_name
 
 
-def make_texture_sample(material, texture, sampler_type, uv_expr, x, y):
-    sample = expr(material, unreal.MaterialExpressionTextureSample, x, y)
-    sample.set_editor_property("texture", texture)
-    sample.set_editor_property("sampler_type", sampler_type)
-    connect(uv_expr, "", sample, "UVs")
-    return sample
+def connect_pin(pin, to_expr, to_input):
+    """Pins are (expression, output name) pairs: material functions have several named outputs."""
+    source, output_name = pin
+    connect(source, output_name, to_expr, to_input)
 
 
-def make_layer_blend(material, layer_outputs, ground_mask, snow_mask, x, y, output_index=""):
+def make_layer_blend(material, layer_pins, ground_mask, snow_mask, x, y):
     """rock -> ground -> snow, each stage keyed by its mask."""
     ground_blend = expr(material, unreal.MaterialExpressionLinearInterpolate, x, y)
-    connect(layer_outputs["rock"], output_index, ground_blend, "A")
-    connect(layer_outputs["ground"], output_index, ground_blend, "B")
+    connect_pin(layer_pins["rock"], ground_blend, "A")
+    connect_pin(layer_pins["ground"], ground_blend, "B")
     connect(ground_mask, "", ground_blend, "Alpha")
 
     snow_blend = expr(material, unreal.MaterialExpressionLinearInterpolate, x + 200, y)
     connect(ground_blend, "", snow_blend, "A")
-    connect(layer_outputs["snow"], output_index, snow_blend, "B")
+    connect_pin(layer_pins["snow"], snow_blend, "B")
     connect(snow_mask, "", snow_blend, "Alpha")
     return snow_blend
-
-
-def make_world_space_normal(material, blended_normal, x, y):
-    """
-    The tile meshes carry no UVs, so there is no tangent basis to decode a
-    normal map in. With world-plan UVs the tangent frame is the world axes:
-    tilt the vertex normal by the map's XY and renormalise, and output in
-    world space (the material has tangent-space normals switched off).
-    """
-    mask_xy = expr(material, unreal.MaterialExpressionComponentMask, x, y)
-    mask_xy.set_editor_property("r", True)
-    mask_xy.set_editor_property("g", True)
-    mask_xy.set_editor_property("b", False)
-    mask_xy.set_editor_property("a", False)
-    connect(blended_normal, "", mask_xy, "")
-
-    strength = expr(material, unreal.MaterialExpressionMultiply, x + 150, y)
-    strength.set_editor_property("const_b", 0.6)
-    connect(mask_xy, "", strength, "A")
-
-    flat_z = expr(material, unreal.MaterialExpressionConstant, x + 150, y + 100)
-    flat_z.set_editor_property("r", 0.0)
-    tilt = expr(material, unreal.MaterialExpressionAppendVector, x + 300, y)
-    connect(strength, "", tilt, "A")
-    connect(flat_z, "", tilt, "B")
-
-    vertex_normal = expr(material, unreal.MaterialExpressionVertexNormalWS, x + 300, y + 100)
-    tilted = expr(material, unreal.MaterialExpressionAdd, x + 450, y)
-    connect(vertex_normal, "", tilted, "A")
-    connect(tilt, "", tilted, "B")
-
-    normalised = expr(material, unreal.MaterialExpressionNormalize, x + 600, y)
-    connect(tilted, "", normalised, "")
-    return normalised
 
 
 def build_flat_color_graph(material, ground_mask, snow_mask):
@@ -260,7 +278,9 @@ def build_flat_color_graph(material, ground_mask, snow_mask):
     grass = color_constant(material, GRASS_COLOR, -400, 200)
 
     final_color = make_layer_blend(
-        material, {"rock": rock, "ground": grass, "snow": snow}, ground_mask, snow_mask, -200, -350
+        material,
+        {"rock": (rock, ""), "ground": (grass, ""), "snow": (snow, "")},
+        ground_mask, snow_mask, -200, -350,
     )
 
     roughness = expr(material, unreal.MaterialExpressionLinearInterpolate, -100, 150)
@@ -287,50 +307,64 @@ def make_macro_noise(material, wavelength_meters, output_min, output_max, y):
     return noise
 
 
-def make_variant_sample(material, textures, layer, variants, suffix, sampler_type, variant_mask, y):
-    """One map of one layer: both variants sampled at their own tiling, blended by the macro mask."""
-    samples = []
+def make_color_variants(material, textures, layer, variants, variant_mask, y):
+    """One layer's base color: both texture sets world-aligned at their own tiling, blended by the macro mask."""
+    pins = []
     for variant, (_, _, tile_meters) in enumerate(variants):
-        uvs = make_layer_uvs(material, tile_meters, y + variant * 60)
-        samples.append(make_texture_sample(
-            material, textures[(layer, variant, suffix)], sampler_type, uvs, -1600, y + variant * 60
+        pins.append(make_world_aligned_sample(
+            material, WORLD_ALIGNED_TEXTURE, "XYZ Texture",
+            textures[(layer, variant, "D")], unreal.MaterialSamplerType.SAMPLERTYPE_COLOR,
+            tile_meters, -1600, y + variant * 200,
         ))
-    blend = expr(material, unreal.MaterialExpressionLinearInterpolate, -1350, y)
-    connect(samples[0], "", blend, "A")
-    connect(samples[1], "", blend, "B")
+    blend = expr(material, unreal.MaterialExpressionLinearInterpolate, -1250, y)
+    connect_pin(pins[0], blend, "A")
+    connect_pin(pins[1], blend, "B")
     connect(variant_mask, "", blend, "Alpha")
-    return blend
+    return blend, ""
+
+
+def make_macro_tint(material, tint_noise, y):
+    """Kilometre-scale hue and value drift, so distant slopes stop reading as one sheet."""
+    cool = color_constant(material, TINT_COOL, -1000, y)
+    warm = color_constant(material, TINT_WARM, -1000, y + 100)
+    tint = expr(material, unreal.MaterialExpressionLinearInterpolate, -800, y)
+    connect(cool, "", tint, "A")
+    connect(warm, "", tint, "B")
+    connect(tint_noise, "", tint, "Alpha")
+    return tint
 
 
 def build_textured_graph(material, textures, ground_mask, snow_mask):
     variant_mask = make_macro_noise(material, VARIANT_NOISE_WAVELENGTH_METERS, 0.0, 1.0, -1100)
 
-    color_samples = {}
-    normal_samples = {}
-    rough_samples = {}
+    color_pins = {}
+    normal_pins = {}
+    rough_pins = {}
     for index, (layer, variants) in enumerate(LAYERS):
-        row = -700 + index * 500
-        color_samples[layer] = make_variant_sample(
-            material, textures, layer, variants, "D", unreal.MaterialSamplerType.SAMPLERTYPE_COLOR, variant_mask, row
+        row = -1400 + index * 900
+        base_tile_meters = variants[0][2]
+        color_pins[layer] = make_color_variants(material, textures, layer, variants, variant_mask, row)
+        # Normal and roughness take the first variant only: a second set of
+        # them costs six more samples for detail the base color already carries.
+        normal_pins[layer] = make_world_aligned_sample(
+            material, WORLD_ALIGNED_NORMAL, "XYZ Texture",
+            textures[(layer, 0, "N")], unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL,
+            base_tile_meters, -1600, row + 420,
         )
-        normal_samples[layer] = make_variant_sample(
-            material, textures, layer, variants, "N", unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL, variant_mask, row + 150
-        )
-        rough_samples[layer] = make_variant_sample(
-            material, textures, layer, variants, "R", unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_COLOR, variant_mask, row + 300
+        rough_pins[layer] = make_world_aligned_sample(
+            material, WORLD_ALIGNED_TEXTURE, "XYZ Texture",
+            textures[(layer, 0, "R")], unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_COLOR,
+            base_tile_meters, -1600, row + 620,
         )
 
-    blended_color = make_layer_blend(material, color_samples, ground_mask, snow_mask, -200, -400)
-    roughness = make_layer_blend(material, rough_samples, ground_mask, snow_mask, -200, 200)
-    blended_normal = make_layer_blend(material, normal_samples, ground_mask, snow_mask, -200, 500)
-    world_normal = make_world_space_normal(material, blended_normal, 100, 500)
+    blended_color = make_layer_blend(material, color_pins, ground_mask, snow_mask, -200, -400)
+    roughness = make_layer_blend(material, rough_pins, ground_mask, snow_mask, -200, 200)
+    world_normal = make_layer_blend(material, normal_pins, ground_mask, snow_mask, -200, 500)
 
-    # Kilometre-scale brightness variation, so distant slopes stop reading as
-    # one uniform sheet even where the texture repeats are too small to see.
-    tint = make_macro_noise(material, TINT_NOISE_WAVELENGTH_METERS, 0.82, 1.12, -1250)
+    tint_noise = make_macro_noise(material, TINT_NOISE_WAVELENGTH_METERS, 0.0, 1.0, -1250)
     final_color = expr(material, unreal.MaterialExpressionMultiply, 150, -400)
     connect(blended_color, "", final_color, "A")
-    connect(tint, "", final_color, "B")
+    connect(make_macro_tint(material, tint_noise, -250), "", final_color, "B")
 
     material.set_editor_property("tangent_space_normal", False)
     unreal.MaterialEditingLibrary.connect_material_property(
@@ -355,9 +389,8 @@ def create_material():
     material.set_editor_property("two_sided", True)
 
     altitude = make_altitude_meters(material)
-    flatness = make_flatness(material)
-    # Snow clings to steeper faces than grass can grow on.
-    snow_flatness = make_flatness(material, threshold_z=0.45, sharpen_factor=2.5, y=250)
+    flatness = make_flatness(material, GRASS_FLATNESS_THRESHOLD, GRASS_FLATNESS_SHARPEN)
+    snow_flatness = make_flatness(material, SNOW_FLATNESS_THRESHOLD, SNOW_FLATNESS_SHARPEN, y=250)
 
     snow_altitude = make_band_mask(
         material, altitude, SNOW_LINE_METERS, SNOW_BAND_METERS, False, -500
