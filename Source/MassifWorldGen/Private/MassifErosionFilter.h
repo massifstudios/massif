@@ -2,12 +2,12 @@
 
 #include "CoreMinimal.h"
 
-/** The macro surface under one point: where it is, how it leans, how high up the local relief it sits. */
+/** The macro surface under one point: where it is and how far up the local relief it sits. */
 struct FMassifErosionInput
 {
 	FVector2f PositionMeters = FVector2f::ZeroVector;
 
-	/** Gradient of the macro surface, meters of rise per meter travelled. Water runs against it. */
+	/** Gradient of the macro surface here, meters of rise per meter travelled. Sets how deep the gullies cut. */
 	FVector2f SlopeMetersPerMeter = FVector2f::ZeroVector;
 
 	/** 0 on a valley floor, 1 at the top of the local relief. Decides where gullies fade out. */
@@ -16,28 +16,32 @@ struct FMassifErosionInput
 
 struct FMassifErosionSettings
 {
-	int32 OctaveCount = 5;
+	int32 OctaveCount = 4;
 
 	/** Spacing of the widest gullies; each octave divides it by WavelengthGain's reciprocal. */
-	float LargestGullyWavelengthMeters = 480.0f;
-	float LargestGullyDepthMeters = 90.0f;
+	float LargestGullyWavelengthMeters = 220.0f;
+	float LargestGullyDepthMeters = 18.0f;
 	float WavelengthGain = 0.5f;
 	float DepthGain = 0.55f;
 
-	/** Pivot lattice spacing as a multiple of the wavelength; below 1 the stripes lose coherence. */
-	float CellsPerWavelength = 1.0f;
+	/**
+	 * Pivot lattice spacing as a multiple of the wavelength. This is what sets
+	 * how long a gully runs before the phase shifts and it dies out, so at 1 a
+	 * gully is about as long as it is wide and the slope comes out dimpled
+	 * rather than grooved.
+	 */
+	float CellsPerWavelength = 3.0f;
 
 	/** Surface gradient at which gullies reach full depth; gentler ground gets less. */
 	float SlopeReference = 0.35f;
 
 	/** Above 1, later octaves keep cutting on ground where the earlier ones had already faded. */
-	float DetailPersistence = 1.6f;
+	float DetailPersistence = 1.0f;
 
 	/**
-	 * How far a gully may bend the flow the next octave reads, as a fraction of
-	 * the macro slope. This is what makes fine gullies branch off coarse ones,
-	 * and the one dial that trades branching against a smooth surface: past
-	 * roughly 0.3 the bending outruns the stripe pattern and tears it.
+	 * How far a gully drags the finer gullies sideways, as a fraction of its own
+	 * wavelength. This is what makes them branch off it instead of running
+	 * parallel to it.
 	 */
 	float BranchStrength = 0.25f;
 
@@ -48,15 +52,22 @@ struct FMassifErosionSettings
 	uint32 Seed = 0;
 };
 
+/** Macro surface gradient anywhere, which the filter needs at each of its stripe pivots. */
+using FMassifMacroSlopeSampler = TFunctionRef<FVector2f(FVector2f PositionMeters)>;
+
 /**
  * Analytic erosion filter after Rune Skovbo Johansen, "Fast and Gorgeous
  * Erosion Filter" (2026).
  *
  * Instead of moving water and sediment over a grid, it lays cosine stripes
  * across the local flow direction, so every trough is a gully running downhill.
- * Each octave folds its own gully slopes back into the flow direction before
- * the next, smaller octave is laid down, which is what makes the small gullies
- * branch off the large ones the way a drainage network does.
+ * Each octave then drags the next, finer one sideways, which is what makes
+ * small gullies branch off large ones the way a drainage network does.
+ *
+ * Stripes are oriented per pivot cell rather than per point. A point reads its
+ * phase from a pivot up to a cell away, so orienting per point levers any
+ * turn in the flow direction into a large phase shift and tears the pattern
+ * into cliffs; per cell the phase is exactly linear in position.
  *
  * Every point is evaluated from its own inputs alone: no grid, no iteration, no
  * neighbours, so the result is identical whatever order or chunking is used.
@@ -73,5 +84,8 @@ namespace MassifErosionFilter
 	 * gullies at all. Ground too flat to hold gullies therefore comes out
 	 * untouched, at both ends of the relief.
 	 */
-	float EvaluateDisplacementMeters(const FMassifErosionInput& Input, const FMassifErosionSettings& Settings);
+	float EvaluateDisplacementMeters(
+		const FMassifErosionInput& Input,
+		const FMassifErosionSettings& Settings,
+		FMassifMacroSlopeSampler SampleMacroSlope);
 }

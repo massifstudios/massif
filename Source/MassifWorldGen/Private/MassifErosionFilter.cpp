@@ -4,7 +4,7 @@
 
 namespace
 {
-	/** What one octave of stripes reads at a point: height in [-1, 1] and the sine that drives its cross slope. */
+	/** What one octave of stripes reads at a point: height in [-1, 1] and the sine that drags the next octave. */
 	struct FStripeSample
 	{
 		float Value = 0.0f;
@@ -14,7 +14,8 @@ namespace
 	/** Carried from octave to octave: the stripes each one lays depend on what the ones before it cut. */
 	struct FErosionState
 	{
-		FVector2f CombinedSlope = FVector2f::ZeroVector;
+		/** Sideways displacement the coarser gullies have dragged this point by. */
+		float DragMeters = 0.0f;
 		float FadeTarget = 0.0f;
 		float Mask = 1.0f;
 		float CutMeters = 0.0f;
@@ -59,13 +60,34 @@ namespace
 	}
 
 	/**
-	 * The four cells around the point each propose a stripe pattern of the same
-	 * wavelength at their own phase, and the proposals are blended. Two sine
-	 * waves out of step blend into one weaker sine rather than into mush, so the
-	 * result stays a clean stripe pattern; dividing by its own magnitude puts
-	 * the depth back, capped so a near-cancellation cannot blow up.
+	 * Direction the stripes are measured along: across the slope, so the gullies
+	 * themselves run down it. Ground flat enough to have no direction is masked
+	 * out anyway, so any fixed fallback will do.
 	 */
-	FStripeSample SampleStripes(FVector2f PositionMeters, FVector2f AcrossFlow, float WavelengthMeters, float CellSizeMeters, uint32 Seed)
+	FVector2f AcrossFlowDirection(FVector2f Slope)
+	{
+		const FVector2f Perpendicular = FVector2f(-Slope.Y, Slope.X).GetSafeNormal();
+		if (Perpendicular.IsNearlyZero())
+		{
+			return FVector2f(1.0f, 0.0f);
+		}
+		return Perpendicular;
+	}
+
+	/**
+	 * The four cells around the point each lay a stripe pattern of the same
+	 * wavelength, at their own phase and along their own pivot's flow direction,
+	 * and the four are blended. Two sine waves out of step blend into one weaker
+	 * sine rather than into mush, so the result stays a clean stripe pattern.
+	 *
+	 * The blend is only partly normalised back to full depth. Forcing it all the
+	 * way makes every gully exactly as deep as every other, which over several
+	 * octaves reads as woven fabric rather than ground; leaving some of the
+	 * variation in lets gullies fade in and out along their length.
+	 */
+	FStripeSample SampleStripes(
+		FVector2f PositionMeters, float DragMeters, float WavelengthMeters, float CellSizeMeters,
+		uint32 Seed, FMassifMacroSlopeSampler SampleMacroSlope)
 	{
 		const float CellSpaceX = PositionMeters.X / CellSizeMeters;
 		const float CellSpaceY = PositionMeters.Y / CellSizeMeters;
@@ -82,44 +104,31 @@ namespace
 			const int32 OffsetX = Corner & 1;
 			const int32 OffsetY = Corner >> 1;
 			const FVector2f Pivot = CellPivot(LowCellX + OffsetX, LowCellY + OffsetY, CellSizeMeters, Seed);
+			const FVector2f AcrossFlow = AcrossFlowDirection(SampleMacroSlope(Pivot));
 			const float Weight =
 				FMath::Lerp(1.0f - FadeX, FadeX, static_cast<float>(OffsetX)) *
 				FMath::Lerp(1.0f - FadeY, FadeY, static_cast<float>(OffsetY));
 
 			float Sine = 0.0f;
 			float Cosine = 0.0f;
-			FMath::SinCos(&Sine, &Cosine, FVector2f::DotProduct(PositionMeters - Pivot, AcrossFlow) * RadiansPerMeter);
+			FMath::SinCos(&Sine, &Cosine, (FVector2f::DotProduct(PositionMeters - Pivot, AcrossFlow) + DragMeters) * RadiansPerMeter);
 			CosineSum += Weight * Cosine;
 			SineSum += Weight * Sine;
 		}
 
-		const float Restore = 1.0f / FMath::Max(0.5f, FMath::Sqrt(CosineSum * CosineSum + SineSum * SineSum));
+		const float Restore = 1.0f / FMath::Max(0.8f, FMath::Sqrt(CosineSum * CosineSum + SineSum * SineSum));
 		return FStripeSample{ CosineSum * Restore, SineSum * Restore };
 	}
 
-	/**
-	 * Direction the stripes are measured along: across the slope, so the gullies
-	 * themselves run down it. Ground flat enough to have no direction is masked
-	 * out anyway, so any fixed fallback will do.
-	 */
-	FVector2f AcrossFlowDirection(FVector2f Slope)
+	void ApplyOctave(
+		FErosionState& State, FVector2f PositionMeters, float WavelengthMeters, float DepthMeters,
+		float SlopeMask, const FMassifErosionSettings& Settings, uint32 OctaveSeed, FMassifMacroSlopeSampler SampleMacroSlope)
 	{
-		const FVector2f Perpendicular = FVector2f(-Slope.Y, Slope.X).GetSafeNormal();
-		if (Perpendicular.IsNearlyZero())
-		{
-			return FVector2f(1.0f, 0.0f);
-		}
-		return Perpendicular;
-	}
-
-	void ApplyOctave(FErosionState& State, FVector2f PositionMeters, float WavelengthMeters, float DepthMeters, float MacroSlopeMagnitude, const FMassifErosionSettings& Settings, uint32 OctaveSeed)
-	{
-		const float SlopeMask = EaseOut(State.CombinedSlope.Size() / FMath::Max(UE_SMALL_NUMBER, Settings.SlopeReference));
 		State.Mask = PowerTowardsOne(State.Mask, Settings.DetailPersistence) * SlopeMask;
 
-		const FVector2f AcrossFlow = AcrossFlowDirection(State.CombinedSlope);
 		const float CellSizeMeters = WavelengthMeters * FMath::Max(0.25f, Settings.CellsPerWavelength);
-		const FStripeSample Stripes = SampleStripes(PositionMeters, AcrossFlow, WavelengthMeters, CellSizeMeters, OctaveSeed);
+		const FStripeSample Stripes = SampleStripes(
+			PositionMeters, State.DragMeters, WavelengthMeters, CellSizeMeters, OctaveSeed, SampleMacroSlope);
 
 		// Ridges sit at +1 and creases at -1, so the profile below cuts nothing
 		// on a crest and a full depth in a crease.
@@ -127,29 +136,39 @@ namespace
 		State.CutMeters += (Profile - 1.0f) * 0.5f * DepthMeters;
 		State.FadeTarget = Profile;
 
-		// Bending is measured against the macro slope, not the running one, so
-		// successive octaves cannot compound each other's bend.
-		const float BendSlope = FMath::Min(DepthMeters * UE_PI / WavelengthMeters, MacroSlopeMagnitude * FMath::Max(0.0f, Settings.BranchStrength));
-		State.CombinedSlope -= AcrossFlow * Stripes.CrossSine * BendSlope * State.Mask;
+		// Dragging the finer gullies sideways bends them into this one. Doing it
+		// by displacement rather than by turning their stripes keeps the phase
+		// linear in position, so no amount of drag can tear the pattern.
+		//
+		// The drag already carried is shrunk by the same factor as the
+		// wavelength, so what each octave hands on stays a fixed fraction of the
+		// wavelength it is handing it to. Accumulating it undiminished instead
+		// leaves the finest octave dragged by several of its own wavelengths,
+		// which stirs it into swirls rather than bending it.
+		const float DragGain = FMath::Clamp(Settings.WavelengthGain, 0.05f, 0.95f);
+		State.DragMeters = State.DragMeters * DragGain
+			+ Stripes.CrossSine * WavelengthMeters * FMath::Max(0.0f, Settings.BranchStrength) * State.Mask;
 	}
 }
 
-float MassifErosionFilter::EvaluateDisplacementMeters(const FMassifErosionInput& Input, const FMassifErosionSettings& Settings)
+float MassifErosionFilter::EvaluateDisplacementMeters(
+	const FMassifErosionInput& Input,
+	const FMassifErosionSettings& Settings,
+	FMassifMacroSlopeSampler SampleMacroSlope)
 {
 	const float ReliefFraction = FMath::Clamp(Input.ReliefFraction, 0.0f, 1.0f);
+	const float SlopeMask = EaseOut(Input.SlopeMetersPerMeter.Size() / FMath::Max(UE_SMALL_NUMBER, Settings.SlopeReference));
 
 	FErosionState State;
-	State.CombinedSlope = Input.SlopeMetersPerMeter;
 	State.FadeTarget = ReliefFraction * 2.0f - 1.0f;
 
-	const float MacroSlopeMagnitude = Input.SlopeMetersPerMeter.Size();
 	float WavelengthMeters = Settings.LargestGullyWavelengthMeters;
 	float DepthMeters = Settings.LargestGullyDepthMeters;
 	float TotalDepthMeters = 0.0f;
 	for (int32 Octave = 0; Octave < Settings.OctaveCount; ++Octave)
 	{
 		const uint32 OctaveSeed = Settings.Seed + static_cast<uint32>(Octave) * 0x9E3779B9u;
-		ApplyOctave(State, Input.PositionMeters, WavelengthMeters, DepthMeters, MacroSlopeMagnitude, Settings, OctaveSeed);
+		ApplyOctave(State, Input.PositionMeters, WavelengthMeters, DepthMeters, SlopeMask, Settings, OctaveSeed, SampleMacroSlope);
 		TotalDepthMeters += DepthMeters;
 		WavelengthMeters *= FMath::Clamp(Settings.WavelengthGain, 0.05f, 0.95f);
 		DepthMeters *= FMath::Clamp(Settings.DepthGain, 0.0f, 1.0f);

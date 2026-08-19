@@ -72,17 +72,32 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
 	float RiverSlopeHeadwater = 0.14f;
 
-	/** How far the ground rises above the valley floor before it levels off. */
+	/** How far the ground rises above a trunk valley's floor before it levels off. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	float ValleyReliefMeters = 900.0f;
+	float ValleyReliefMeters = 1500.0f;
+
+	/**
+	 * The same for a headwater stream. Well below the trunk figure: a headwater
+	 * cannot stand its own crest higher than the ground the trunk it drains into
+	 * allows around it, or the stream ends up floating above the surface.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
+	float HeadwaterReliefMeters = 300.0f;
 
 	/** Horizontal scale of the valley side on a trunk river; smaller is steeper. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	float TrunkValleyWidthMeters = 1200.0f;
+	float TrunkValleyWidthMeters = 1600.0f;
 
 	/** The same for a headwater stream, which only notches the slope it runs down. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	float HeadwaterValleyWidthMeters = 420.0f;
+	float HeadwaterValleyWidthMeters = 500.0f;
+
+	/** Flat ground either side of the water before the valley side starts to climb. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
+	float TrunkFloorHalfWidthMeters = 120.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
+	float HeadwaterFloorHalfWidthMeters = 25.0f;
 
 	/**
 	 * Ground keeps climbing this much per meter away from a watercourse even
@@ -93,23 +108,28 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	float InterfluveRiseSlope = 0.02f;
 
 	/**
-	 * Highest a watercourse may start, as a fraction of the altitude range.
-	 * Ground above it drains nowhere and reads as an undissected plateau, so
-	 * this sits just below the crests rather than partway up them.
+	 * Highest a watercourse may start, as a fraction of the altitude range. Has
+	 * to stay under what the trunk valleys' relief lifts the ground to, or the
+	 * headwaters end up above their own terrain.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	float RiverMaxSourceAltitudeFraction = 0.8f;
+	float RiverMaxSourceAltitudeFraction = 0.6f;
 
 	/** Rounding of the crest where two catchments meet, meters. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
 	float RidgeBlendMeters = 450.0f;
 
-	/** Ridge features per map side. */
+	/**
+	 * Ridge features per map side. Low and few: this layer only varies how high
+	 * the crests stand, and the erosion filter shapes everything below that. Run
+	 * at a fine enough scale it out-steepens the valley sides, and the filter
+	 * then orients its gullies to the noise instead of to the mountain.
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
-	float RidgeFrequency = 6.0f;
+	float RidgeFrequency = 2.5f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
-	int32 RidgeOctaveCount = 4;
+	int32 RidgeOctaveCount = 3;
 
 	/** Ridge crest profile: 1.0 soft and rounded, 2.0 knife edges. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
@@ -117,7 +137,7 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 
 	/** How much the ridge noise pushes the crests up and down, meters. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
-	float RidgeAmplitudeMeters = 400.0f;
+	float RidgeAmplitudeMeters = 220.0f;
 
 	/** Sideways displacement of the query point, meters; bends the valleys off the graph's straight segments. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Noise")
@@ -132,14 +152,14 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 
 	/** Gully scales the erosion filter cuts, coarsest first; 0 leaves the macro surface bare. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
-	int32 GullyOctaveCount = 5;
+	int32 GullyOctaveCount = 4;
 
 	/** Spacing of the coarsest gullies. Keep it under the valley spacing or gullies compete with valleys. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
-	float LargestGullyWavelengthMeters = 480.0f;
+	float LargestGullyWavelengthMeters = 220.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
-	float LargestGullyDepthMeters = 90.0f;
+	float LargestGullyDepthMeters = 18.0f;
 
 	/** Wavelength and depth left per octave. Equal values keep gully steepness the same at every scale. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
@@ -148,9 +168,13 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
 	float GullyDepthGain = 0.55f;
 
-	/** Spacing of the stripe pivot lattice as a multiple of the wavelength; below 1 the gullies lose coherence. */
+	/**
+	 * Spacing of the stripe pivot lattice as a multiple of the wavelength. Sets
+	 * how long a gully runs before it dies out: at 1 a gully is about as long as
+	 * it is wide and the slope comes out dimpled rather than grooved.
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
-	float GullyCellsPerWavelength = 1.0f;
+	float GullyCellsPerWavelength = 3.0f;
 
 	/** Surface gradient at which gullies cut to full depth; gentler ground gets proportionally less. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
@@ -158,7 +182,7 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 
 	/** Above 1, fine gullies keep cutting on ground where the coarse ones had already faded out. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")
-	float GullyDetailPersistence = 1.6f;
+	float GullyDetailPersistence = 1.0f;
 
 	/**
 	 * How strongly a gully bends the flow the finer gullies follow, as a

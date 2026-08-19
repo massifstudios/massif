@@ -142,28 +142,51 @@ namespace
 		}
 	}
 
+	/** Cross-section of the valley one watercourse has cut. */
+	struct FValleyShape
+	{
+		float FloorHalfWidthMeters = 0.0f;
+		float SideWidthMeters = 0.0f;
+		float ReliefMeters = 0.0f;
+	};
+
 	/**
-	 * Valley width for one watercourse. A trunk carrying a whole catchment cuts
-	 * a broad valley; a headwater stream only notches the slope it sits on, so
-	 * its sides climb away steeply and the trunk keeps defining the landform.
+	 * A trunk carrying a whole catchment cuts a broad, deep valley with a floor
+	 * to it; a headwater stream only notches the slope it sits on, and the trunk
+	 * keeps defining the landform. Discharge is what separates the two, and the
+	 * whole cross-section scales with it, not just the width: a headwater given
+	 * a trunk's relief would stand its own crest higher than the ground the
+	 * trunk allows around it, leaving the stream floating above the surface.
 	 */
-	float ValleyWidthForNode(const FRiverNode& Node, const FWorldGenConfig& Config)
+	FValleyShape ValleyShapeForNode(const FRiverNode& Node, const FWorldGenConfig& Config)
 	{
 		const float Discharge = FMath::Loge(1.0f + static_cast<float>(Node.UpstreamNodeCount));
 		const float TrunkDischarge = FMath::Loge(1.0f + static_cast<float>(Config.RiverMaxNodeCount));
 		const float Fraction = FMath::Clamp(Discharge / FMath::Max(1.0f, TrunkDischarge), 0.0f, 1.0f);
-		return FMath::Lerp(Config.HeadwaterValleyWidthMeters, Config.TrunkValleyWidthMeters, Fraction);
+
+		FValleyShape Shape;
+		Shape.FloorHalfWidthMeters = FMath::Lerp(Config.HeadwaterFloorHalfWidthMeters, Config.TrunkFloorHalfWidthMeters, Fraction);
+		Shape.SideWidthMeters = FMath::Lerp(Config.HeadwaterValleyWidthMeters, Config.TrunkValleyWidthMeters, Fraction);
+		Shape.ReliefMeters = FMath::Lerp(Config.HeadwaterReliefMeters, Config.ValleyReliefMeters, Fraction);
+		return Shape;
 	}
 
 	/**
-	 * Height the ground rises to at a given distance from a watercourse.
-	 * Saturating rather than linear, so valley sides ease off into rounded
-	 * crests instead of meeting in a spike.
+	 * Height the ground rises to at a given distance from a watercourse: a flat
+	 * floor out to the floor half-width, then a side that leaves the floor at
+	 * zero gradient, steepens, and eases off into a rounded crest.
+	 *
+	 * The steepest point sits partway up the side, which is what a valley looks
+	 * like. A profile that saturates from the water outwards is steepest right
+	 * at the water instead, so every watercourse ends up in a one-cell V-notch
+	 * with no floor to it.
 	 */
-	float ValleySideProfile(float DistanceMeters, float ValleyWidthMeters, const FWorldGenConfig& Config)
+	float ValleySideProfile(float DistanceMeters, const FValleyShape& Shape, const FWorldGenConfig& Config)
 	{
-		const float Width = FMath::Max(1.0f, ValleyWidthMeters);
-		const float ValleySide = Config.ValleyReliefMeters * (1.0f - FMath::Exp(-DistanceMeters / Width));
+		const float SideDistance = FMath::Max(0.0f, DistanceMeters - Shape.FloorHalfWidthMeters);
+		const float Climb = SideDistance / FMath::Max(1.0f, Shape.SideWidthMeters);
+		const float ClimbSquared = Climb * Climb;
+		const float ValleySide = Shape.ReliefMeters * ClimbSquared / (1.0f + ClimbSquared);
 		return ValleySide + Config.InterfluveRiseSlope * DistanceMeters;
 	}
 
@@ -238,7 +261,7 @@ FRiverTerrainSample FRiverNetwork::Sample(FVector2f PositionMeters, const FWorld
 		float AlongFraction = 0.0f;
 		const float Distance = DistanceToSegment(PositionMeters, Node.PositionMeters, Downstream.PositionMeters, AlongFraction);
 		const float WaterElevation = FMath::Lerp(Node.ElevationMeters, Downstream.ElevationMeters, AlongFraction);
-		const float ProposedHeight = WaterElevation + ValleySideProfile(Distance, ValleyWidthForNode(Node, Config), Config);
+		const float ProposedHeight = WaterElevation + ValleySideProfile(Distance, ValleyShapeForNode(Node, Config), Config);
 
 		if (ProposedHeight < LowestHeight)
 		{
