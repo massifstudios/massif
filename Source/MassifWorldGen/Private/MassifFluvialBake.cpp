@@ -14,13 +14,8 @@ namespace
 	 */
 	const double FillEpsilonMeters = 0.0001;
 
-	/**
-	 * Noise added to the initial surface so the uplift field's smooth ceilings
-	 * do not hand the flood fill kilometre-wide plateaus with no descent to
-	 * choose. Small against the relief; the solve carves far past it.
-	 */
-	const double TieBreakAmplitudeMeters = 1.0;
-	const double TieBreakWavelengthCells = 3.0;
+	/** Octaves of the fractal relief the solve starts from. */
+	const int32 InitialReliefOctaveCount = 7;
 
 	const int32 NeighborStepsX[8] = { -1, 0, 1, -1, 1, -1, 0, 1 };
 	const int32 NeighborStepsY[8] = { -1, -1, -1, 0, 0, 1, 1, 1 };
@@ -168,17 +163,26 @@ namespace
 			});
 		}
 
-		void InitializeSurfaceRow(int32 CellY, const FMassifUpliftField& Uplift, uint32 TieBreakSeed)
+		void InitializeSurfaceRow(int32 CellY, const FMassifUpliftField& Uplift, uint32 ReliefSeed)
 		{
-			const double NoiseScale = 1.0 / (CellSizeMeters * TieBreakWavelengthCells);
+			// Starting from the bare uplift ceiling hands D8 a near-flat surface
+			// where flow has nothing to follow but the grid axes, and the whole
+			// drainage network comes out as an axis-aligned maze. Fractal relief
+			// below the ceiling gives the first iteration coherent slopes at
+			// every scale, so channels organise along the noise valleys and
+			// inherit their irregularity.
+			const double NoiseScale = 1.0 / FMath::Max(1.0, static_cast<double>(Config.BakeInitialReliefWavelengthMeters));
+			const double ReliefFraction = FMath::Clamp(static_cast<double>(Config.BakeInitialReliefFraction), 0.0, 1.0);
 			for (int32 CellX = 0; CellX < CellsPerSide; ++CellX)
 			{
 				const int32 CellIndex = CellY * CellsPerSide + CellX;
 				const FVector2d Position = CellPosition(CellIndex);
 				const FMassifUpliftSample UpliftSample = Uplift.Sample(Position);
-				const double TieBreak = TieBreakAmplitudeMeters
-					* MassifNoise::GradientNoise(Position.X * NoiseScale, Position.Y * NoiseScale, TieBreakSeed);
-				HeightMeters[CellIndex] = UpliftSample.CrestAltitudeMeters + TieBreak;
+				const double Noise = 0.5 + 0.5 * MassifNoise::Fractal(
+					Position.X * NoiseScale, Position.Y * NoiseScale, ReliefSeed, InitialReliefOctaveCount, 2.0, 0.5f);
+				const double AvailableRelief = FMath::Max(0.0, UpliftSample.CrestAltitudeMeters - Config.MinAltitudeMeters);
+				HeightMeters[CellIndex] = UpliftSample.CrestAltitudeMeters
+					- AvailableRelief * ReliefFraction * FMath::Clamp(Noise, 0.0, 1.0);
 				UpliftStepMeters[CellIndex] = static_cast<double>(Config.BakeUpliftMetersPerStep) * UpliftSample.RangeFraction;
 				if (IsBorder(CellIndex))
 				{
@@ -366,6 +370,26 @@ namespace
 			}
 		}
 
+		/**
+		 * D8 quantises flow into eight headings, so raw solved channels zigzag
+		 * between the axes and the diagonals at cell scale, and a hillshade of
+		 * the surface reads as a rectilinear maze. A few smoothing passes take
+		 * the zigzag walls out while the valleys themselves survive; the carve
+		 * restores sub-cell channel sharpness along the smoothed polylines.
+		 */
+		void ApplyPostSolveSmoothing()
+		{
+			for (int32 Pass = 0; Pass < Config.BakePostSmoothPasses; ++Pass)
+			{
+				TArray<double> Smoothed = HeightMeters;
+				ParallelFor(CellsPerSide, [this, &Smoothed](int32 CellY)
+				{
+					SmoothRow(CellY, 0.5, Smoothed);
+				});
+				HeightMeters = MoveTemp(Smoothed);
+			}
+		}
+
 		void Solve()
 		{
 			for (int32 Iteration = 0; Iteration < Config.BakeMaxIterationCount; ++Iteration)
@@ -380,6 +404,7 @@ namespace
 					break;
 				}
 			}
+			ApplyPostSolveSmoothing();
 			// Route once more so receivers, drainage and pop order describe the
 			// final surface the sampling products are derived from.
 			FloodFill();
@@ -400,6 +425,10 @@ FMassifFluvialBake FMassifFluvialBake::Build(const FWorldGenConfig& Config, cons
 	Bake.CellsPerSide = Solver.CellsPerSide;
 	Bake.CellSizeMeters = Solver.CellSizeMeters;
 	Bake.OriginMeters = Solver.OriginMeters;
+	Bake.SampleWarpMeters = FMath::Max(0.0, static_cast<double>(Config.BakeSampleWarpMeters));
+	Bake.SampleWarpWavelengthMeters = FMath::Max(1.0, static_cast<double>(Config.BakeSampleWarpWavelengthMeters));
+	Bake.SampleWarpSeedX = BakeSeed ^ 0x9E3779B9u;
+	Bake.SampleWarpSeedY = BakeSeed ^ 0x7F4A7C15u;
 	Bake.HeightGridMeters = MoveTemp(Solver.HeightMeters);
 	Bake.DrainageAreaSquareMeters = MoveTemp(Solver.DrainageAreaSquareMeters);
 	Bake.ReceiverIndices = MoveTemp(Solver.ReceiverIndices);
@@ -472,6 +501,36 @@ void FMassifFluvialBake::ComputeDrainWaterGrid(const TArray<int32>& PopOrder, do
 			continue;
 		}
 		DrainWaterElevationMeters[CellIndex] = DrainWaterElevationMeters[ReceiverIndices[CellIndex]];
+	}
+
+	// The grid is piecewise constant per catchment, and the relief fraction
+	// built on it would step wherever two catchments meet — visible as gully
+	// depth changing along a hard rectilinear line on the ridge. A couple of
+	// cells of blur round the divide without moving any water meaningfully.
+	for (int32 Pass = 0; Pass < 2; ++Pass)
+	{
+		TArray<double> Blurred = DrainWaterElevationMeters;
+		ParallelFor(CellsPerSide, [this, &Blurred](int32 CellY)
+		{
+			BlurDrainWaterRow(CellY, Blurred);
+		});
+		DrainWaterElevationMeters = MoveTemp(Blurred);
+	}
+}
+
+void FMassifFluvialBake::BlurDrainWaterRow(int32 CellY, TArray<double>& Blurred) const
+{
+	if (CellY == 0 || CellY == CellsPerSide - 1)
+	{
+		return;
+	}
+	for (int32 CellX = 1; CellX < CellsPerSide - 1; ++CellX)
+	{
+		const int32 CellIndex = CellY * CellsPerSide + CellX;
+		const double NeighborMean = 0.25 * (
+			DrainWaterElevationMeters[CellIndex - 1] + DrainWaterElevationMeters[CellIndex + 1]
+			+ DrainWaterElevationMeters[CellIndex - CellsPerSide] + DrainWaterElevationMeters[CellIndex + CellsPerSide]);
+		Blurred[CellIndex] = FMath::Lerp(DrainWaterElevationMeters[CellIndex], NeighborMean, 0.5);
 	}
 }
 
@@ -626,8 +685,19 @@ void FMassifFluvialBake::BuildRiverSegmentIndex(const FWorldGenConfig& Config)
 	}
 }
 
-double FMassifFluvialBake::SampleHeightMeters(FVector2d PositionMeters) const
+FVector2d FMassifFluvialBake::WarpedPositionMeters(FVector2d PositionMeters) const
 {
+	const double NoiseScale = 1.0 / SampleWarpWavelengthMeters;
+	const double NoiseX = PositionMeters.X * NoiseScale;
+	const double NoiseY = PositionMeters.Y * NoiseScale;
+	return PositionMeters + FVector2d(
+		MassifNoise::GradientNoise(NoiseX, NoiseY, SampleWarpSeedX),
+		MassifNoise::GradientNoise(NoiseX, NoiseY, SampleWarpSeedY)) * SampleWarpMeters;
+}
+
+double FMassifFluvialBake::SampleHeightMeters(FVector2d InPositionMeters) const
+{
+	const FVector2d PositionMeters = WarpedPositionMeters(InPositionMeters);
 	const double GridX = (PositionMeters.X + OriginMeters) / CellSizeMeters;
 	const double GridY = (PositionMeters.Y + OriginMeters) / CellSizeMeters;
 	const int32 BaseX = FMath::FloorToInt32(FMath::Clamp(GridX, -1.0, static_cast<double>(CellsPerSide)));
@@ -649,8 +719,9 @@ double FMassifFluvialBake::SampleHeightMeters(FVector2d PositionMeters) const
 	return CubicInterpolateDouble(Rows[0], Rows[1], Rows[2], Rows[3], FractionY);
 }
 
-FVector2d FMassifFluvialBake::SampleGradientMetersPerMeter(FVector2d PositionMeters) const
+FVector2d FMassifFluvialBake::SampleGradientMetersPerMeter(FVector2d InPositionMeters) const
 {
+	const FVector2d PositionMeters = WarpedPositionMeters(InPositionMeters);
 	const double GridX = (PositionMeters.X + OriginMeters) / CellSizeMeters;
 	const double GridY = (PositionMeters.Y + OriginMeters) / CellSizeMeters;
 	const int32 BaseX = FMath::FloorToInt32(FMath::Clamp(GridX, -1.0, static_cast<double>(CellsPerSide)));
@@ -677,8 +748,9 @@ FVector2d FMassifFluvialBake::SampleGradientMetersPerMeter(FVector2d PositionMet
 		CubicInterpolate(RowsY[0], RowsY[1], RowsY[2], RowsY[3], FractionY));
 }
 
-double FMassifFluvialBake::SampleDrainWaterElevationMeters(FVector2d PositionMeters) const
+double FMassifFluvialBake::SampleDrainWaterElevationMeters(FVector2d InPositionMeters) const
 {
+	const FVector2d PositionMeters = WarpedPositionMeters(InPositionMeters);
 	const double GridX = (PositionMeters.X + OriginMeters) / CellSizeMeters;
 	const double GridY = (PositionMeters.Y + OriginMeters) / CellSizeMeters;
 	const int32 BaseX = FMath::FloorToInt32(FMath::Clamp(GridX, 0.0, static_cast<double>(CellsPerSide - 1)));
@@ -697,8 +769,9 @@ double FMassifFluvialBake::SampleDrainWaterElevationMeters(FVector2d PositionMet
 }
 
 double FMassifFluvialBake::SampleChannelCarveMeters(
-	FVector2d PositionMeters, double MacroHeightMeters, const FWorldGenConfig& Config) const
+	FVector2d InPositionMeters, double MacroHeightMeters, const FWorldGenConfig& Config) const
 {
+	const FVector2d PositionMeters = WarpedPositionMeters(InPositionMeters);
 	double DeepestCutMeters = 0.0;
 	double SecondDeepestCutMeters = 0.0;
 	GatherChannelCuts(PositionMeters, MacroHeightMeters, Config, DeepestCutMeters, SecondDeepestCutMeters);

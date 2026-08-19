@@ -205,11 +205,43 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 
 	/** Uplift added per iteration on a range axis; basins get none. This is what erosion works against. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
-	float BakeUpliftMetersPerStep = 15.0f;
+	float BakeUpliftMetersPerStep = 30.0f;
 
 	/** 0..1 blend towards the four-neighbour mean each iteration, for softer interfluves. 0 disables. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
-	float BakeHillslopeSmoothing = 0.0f;
+	float BakeHillslopeSmoothing = 0.15f;
+
+	/**
+	 * Fractal relief the solve starts from, as a share of the height between
+	 * the uplift ceiling and base level. Zero starts on the bare ceiling,
+	 * where flow has nothing to follow but the grid axes and drainage comes
+	 * out as an axis-aligned maze.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
+	float BakeInitialReliefFraction = 0.5f;
+
+	/** Wavelength of the coarsest initial relief octave. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
+	float BakeInitialReliefWavelengthMeters = 16000.0f;
+
+	/**
+	 * Smoothing passes over the solved surface before sampling products are
+	 * derived. Takes the D8 zigzag out of the cell-scale channel walls; the
+	 * channel carve puts sub-cell sharpness back along the smoothed polylines.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
+	int32 BakePostSmoothPasses = 2;
+
+	/**
+	 * Smooth domain warp on every bake sample, a couple of cell sizes strong.
+	 * The solve's channels run along the lattice's eight headings; the warp
+	 * bends those straight lines at render time. Zero disables.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
+	float BakeSampleWarpMeters = 260.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
+	float BakeSampleWarpWavelengthMeters = 2600.0f;
 
 	/** Drained area above which a cell counts as a channel and joins the river polylines. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")

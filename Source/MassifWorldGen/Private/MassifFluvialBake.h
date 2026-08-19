@@ -90,6 +90,7 @@ public:
 private:
 	void ComputeGradientGrid();
 	void ComputeDrainWaterGrid(const TArray<int32>& PopOrder, double ChannelAreaThresholdSquareMeters);
+	void BlurDrainWaterRow(int32 CellY, TArray<double>& Blurred) const;
 	void ExtractRiverPolylines(const TArray<int32>& PopOrder, double ChannelAreaThresholdSquareMeters);
 	void SmoothRiverPolylines();
 	FVector2d SmoothedNodePosition(int32 NodeIndex, const TArray<int32>& SingleChildOfNode, const TArray<int32>& ChildCounts) const;
@@ -97,6 +98,15 @@ private:
 
 	int32 ClampGridNode(int32 NodeIndex) const;
 	FVector2d CellPositionMeters(int32 CellIndex) const;
+
+	/**
+	 * All sampling goes through a smooth domain warp. The solve runs on a
+	 * square lattice and D8 leaves channel segments locked to its eight
+	 * headings; warping the query by a couple of cell sizes of low-frequency
+	 * noise bends every straight lattice line without touching the solve, and
+	 * the polylines warp identically because the carve queries warp too.
+	 */
+	FVector2d WarpedPositionMeters(FVector2d PositionMeters) const;
 
 	/** Best two channel cuts near a point, so crossing channels can merge smoothly. */
 	void GatherChannelCuts(
@@ -112,6 +122,11 @@ private:
 	int32 CellsPerSide = 0;
 	double CellSizeMeters = 0.0;
 	double OriginMeters = 0.0;
+
+	double SampleWarpMeters = 0.0;
+	double SampleWarpWavelengthMeters = 1.0;
+	uint32 SampleWarpSeedX = 0;
+	uint32 SampleWarpSeedY = 0;
 
 	TArray<double> HeightGridMeters;
 	TArray<double> DrainageAreaSquareMeters;

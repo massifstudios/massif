@@ -18,6 +18,10 @@ namespace
 		Config.BakeCellSizeMeters = 64.0f;
 		Config.BakeMaxIterationCount = 30;
 		Config.RiverDrainageAreaThresholdSquareMeters = 1.0e6f;
+		// Probes below compare grid cells against samples at their unwarped
+		// positions, so the sampling warp stays off here. It has no effect on
+		// the solve itself.
+		Config.BakeSampleWarpMeters = 0.0f;
 		return Config;
 	}
 
