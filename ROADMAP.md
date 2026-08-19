@@ -44,7 +44,7 @@ commit.
   command applied on tick boundary, not mid-frame; speed change alters
   tick count, not tick delta.
 
-### M3 — Erosion (GPU) 
+### M3 — Erosion (GPU) — done, partly superseded
 - Hydraulic erosion (virtual pipes model) + thermal erosion as compute
   shader passes over the generated heightfield, results read back into
   `FWorldGenResult`. Skipped gracefully under `-nullrhi`.
@@ -53,8 +53,37 @@ commit.
 - **Verify:** GPU reproducibility test (two runs, same seed, identical
   hash; auto-skips headless); CPU-stage tests unchanged; manual —
   drainage gullies, smoothed flanks, sediment-flattened valley floors.
+- **Superseded in part by M4.** A grid-and-neighbours erosion pass cannot
+  be part of a terrain field that must be evaluable point-by-point at any
+  resolution. Incising is now analytic (ARCHITECTURE §5.1 layer 3). The
+  compute passes stay in tree, off by default, usable as an offline pass
+  over the baked playable-region grid.
 
-### M4 — Masks, Textured Terrain & PCG Forests
+### M4 — Terrain Field, World Scale & LOD Streaming
+Replaces the stored 8 × 8 km heightfield with a terrain field evaluable at
+any point and any resolution, and opens the world to 150 × 150 km.
+See ARCHITECTURE §5 and §12.
+
+- `FMassifTerrainField`: `Height(x, y, spacing)` and slope, CPU-only,
+  deterministic, no global grid. Octave count keyed to sample spacing;
+  finest octave faded in, never switched, so LOD levels agree.
+- Hydrology graph reworked: hierarchical, lazily refined from stable node
+  ids, uniform spatial index over segments so point queries are local
+  instead of looping every node.
+- Uplift/range layer (20–80 km) so a 150 km world has ranges and basins
+  rather than one massif tiled.
+- Playable region selection at new-game time; `FWorldGenResult` re-scoped
+  to it and baked at 4 m. Sim-facing query API unchanged.
+- Terrain rendering moves from fixed 128 m chunks to clipmap rings with
+  vertex morphing.
+- **Verify:** tests — chunk independence (a tile sampled alone is
+  bit-identical to the same tile sampled inside a larger block), LOD
+  agreement across ring boundaries, surface sanity (max step between
+  adjacent samples, local-minimum fraction), determinism hash, sim grid
+  bake reproducibility. Manual — fly from ground level out to the 150 km
+  horizon with no seams, popping, or terracing.
+
+### M5 — Masks, Textured Terrain & PCG Forests
 - Derived masks from eroded terrain: flow accumulation, deposition,
   slope → semantic masks (river, scree, forest, rock face, buildable);
   debug visualization mode per mask.
@@ -66,7 +95,7 @@ commit.
 - **Verify:** manual — masks match geology, forests and textures read
   naturally; headless suite still green.
 
-### M5 — Snow: Sim Grid + Visual Prototype
+### M6 — Snow: Sim Grid + Visual Prototype
 - `FSnowGrid` in sim: snowfall and altitude/temperature-driven melt on
   sim tick, deterministic.
 - Snow material on terrain: coverage/depth from GPU copy of sim grid;
@@ -77,7 +106,7 @@ commit.
   stable across runs; manual — snow visibly accumulates, a dragged debug
   brush leaves tracks that do not affect sim hash.
 
-### M6 — Building Tools: Lift & Slope Placement
+### M7 — Building Tools: Lift & Slope Placement
 - Placement mode UI shell (toolbar, ghost preview, validity coloring).
 - Lift placement: pick two station points → towers auto-spaced along the
   line; validation (length, slope under stations, buildable mask) in sim
@@ -90,7 +119,7 @@ commit.
   expected graph delta, graph connectivity query; manual — place a lift
   and a connected slope on the generated terrain.
 
-### M7 — Lift Simulation
+### M8 — Lift Simulation
 - Chairs advance along the lift line each sim tick; guest queue with
   `LiftQueueCapacity`; board/alight at stations.
 - Presentation: station/tower/chair placeholder meshes from sim data,
@@ -99,7 +128,7 @@ commit.
   boarding conservation (nobody duplicated/lost), determinism hash;
   manual — chairs visibly cycle.
 
-### M8 — Guest Agents
+### M9 — Guest Agents
 - `FGuestAgent` array in sim: spawn at resort entry, state machine
   Arrive → QueueLift → RideLift → SkiSlope → loop → Leave; ski speed from
   slope angle + snow condition + seeded skill.
@@ -110,7 +139,7 @@ commit.
   and never wedge in a state), determinism hash with 200 agents;
   manual — guests queue, ride up, ski down, repeat.
 
-### M9 — Playable Loop & Save/Load
+### M10 — Playable Loop & Save/Load
 - New-game flow: seed entry → generate → play. Minimal HUD (sim speed,
   guest count, seed display).
 - Save/load: seed + worldgen result + full sim state; versioned per
