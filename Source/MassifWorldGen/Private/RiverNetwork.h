@@ -15,6 +15,16 @@ struct FRiverNode
 	int32 DownstreamDepth = 0;
 	/** Nodes draining into this one. Stands in for discharge: high on trunks, zero at headwaters. */
 	int32 UpstreamNodeCount = 0;
+
+	/**
+	 * How much of a river this still is, 1 at a mouth. A main stem keeps nearly
+	 * all of it upstream; a tributary starts with a fraction of what it joins.
+	 * Segment length and gradient come from this rather than from depth, so a
+	 * tributary becomes a steep little stream as soon as it leaves its trunk
+	 * instead of inheriting the trunk's character for as many steps as the
+	 * trunk had taken.
+	 */
+	float StreamStrength = 1.0f;
 };
 
 /** Terrain shape under one point, derived from the watercourses around it. */

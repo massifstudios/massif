@@ -73,9 +73,16 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
 	float HeadwaterSegmentLengthMeters = 380.0f;
 
-	/** Steps upstream from a mouth over which segment length and gradient reach their headwater values. */
+	/**
+	 * Strength a main stem keeps per step upstream, and the share of it a
+	 * tributary starts with. The stem holds together over tens of kilometres
+	 * while every tributary drops straight to a smaller, steeper watercourse.
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	int32 StepsToHeadwater = 30;
+	float MainStemStrengthRetention = 0.988f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
+	float TributaryStrengthFactor = 0.55f;
 
 	/**
 	 * Share of the remaining headroom under the local crest a watercourse may
@@ -90,17 +97,17 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
 	float RiverMinNodeSpacingMeters = 300.0f;
 
-	/** Chance that a node forks into two tributaries instead of continuing. */
+	/** Chance a tributary joins at a node. The stem always continues regardless. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	float RiverBranchProbability = 0.62f;
+	float TributaryProbability = 0.42f;
 
 	/** Heading change allowed between successive nodes, degrees. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
 	float RiverTurnDegrees = 26.0f;
 
-	/** Half-angle between the two branches of a fork, degrees. */
+	/** Angle a tributary leaves the stem at, degrees. Wide, so junctions read as joins rather than forks. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	float RiverForkDegrees = 38.0f;
+	float TributaryJoinDegrees = 52.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
 	int32 RiverMaxNodeCount = 220000;
@@ -123,7 +130,7 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	float TrunkValleyWidthMeters = 2200.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")
-	float HeadwaterValleyWidthMeters = 420.0f;
+	float HeadwaterValleyWidthMeters = 950.0f;
 
 	/** Flat ground either side of the water before the valley side starts to climb. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Hydrology")

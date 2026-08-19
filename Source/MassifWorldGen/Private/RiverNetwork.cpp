@@ -15,29 +15,36 @@ namespace
 			Direction.X * SinAngle + Direction.Y * CosAngle);
 	}
 
-	/** How far upstream a node sits, 0 at a mouth and 1 once it counts as a headwater. */
-	double HeadwaterProgress(const FWorldGenConfig& Config, int32 DownstreamDepth)
+	/**
+	 * 0 for a full river, 1 for a headwater trickle.
+	 *
+	 * Squared, so a watercourse only takes on headwater gradients once it really
+	 * is one. Straight off the strength, the first tributary off a trunk is
+	 * already half way to a mountain torrent, and its valley floor climbs away
+	 * from the trunk fast enough to close off hollows along the junction.
+	 */
+	double HeadwaterProgress(float StreamStrength)
 	{
-		const double Steps = FMath::Max(1, Config.StepsToHeadwater);
-		return FMath::Clamp(static_cast<double>(DownstreamDepth) / Steps, 0.0, 1.0);
+		const double Weakness = FMath::Clamp(1.0 - static_cast<double>(StreamStrength), 0.0, 1.0);
+		return Weakness * Weakness;
 	}
 
-	/** River gradient, gentle near the mouth and steep in the headwaters. */
-	double RiverSlopeAtDepth(const FWorldGenConfig& Config, int32 DownstreamDepth)
+	/** River gradient, gentle on a full river and steep in the headwaters. */
+	double RiverSlopeForStrength(const FWorldGenConfig& Config, float StreamStrength)
 	{
 		return FMath::Lerp(
 			static_cast<double>(Config.RiverSlopeNearMouth),
 			static_cast<double>(Config.RiverSlopeHeadwater),
-			HeadwaterProgress(Config, DownstreamDepth));
+			HeadwaterProgress(StreamStrength));
 	}
 
-	/** Segments shorten upstream, so one graph carries trunk valleys and the streams feeding them. */
-	double SegmentLengthAtDepth(const FWorldGenConfig& Config, int32 DownstreamDepth)
+	/** Segments shorten as a watercourse weakens, so one graph carries trunk valleys and the streams feeding them. */
+	double SegmentLengthForStrength(const FWorldGenConfig& Config, float StreamStrength)
 	{
 		return FMath::Lerp(
 			static_cast<double>(Config.TrunkSegmentLengthMeters),
 			static_cast<double>(Config.HeadwaterSegmentLengthMeters),
-			HeadwaterProgress(Config, DownstreamDepth));
+			HeadwaterProgress(StreamStrength));
 	}
 
 	bool IsInsideWorld(const FWorldGenConfig& Config, FVector2d PositionMeters)
@@ -216,7 +223,7 @@ namespace
 			{
 				continue;
 			}
-			Nodes.Add(FRiverNode{ SidePositions[Side], static_cast<double>(Config.MinAltitudeMeters), INDEX_NONE, 0, 0 });
+			Nodes.Add(FRiverNode{ SidePositions[Side], static_cast<double>(Config.MinAltitudeMeters), INDEX_NONE, 0, 0, 1.0f });
 			GrowthDirections.Add(SideDirections[Side]);
 			SpacingIndex.Add(Nodes.Num() - 1, SidePositions[Side]);
 		}
@@ -234,10 +241,10 @@ namespace
 	};
 
 	/** One upstream step: turns off the parent's heading, climbs by the local river gradient. */
-	bool TryAppendChild(FGrowthContext& Context, int32 ParentIndex, double TurnRadians)
+	bool TryAppendChild(FGrowthContext& Context, int32 ParentIndex, double TurnRadians, float ChildStrength)
 	{
 		const FRiverNode& Parent = Context.Nodes[ParentIndex];
-		const double Length = SegmentLengthAtDepth(Context.Config, Parent.DownstreamDepth) * Context.Stream.FRandRange(0.75f, 1.25f);
+		const double Length = SegmentLengthForStrength(Context.Config, ChildStrength) * Context.Stream.FRandRange(0.75f, 1.25f);
 		const FVector2d Direction = RotateVector(Context.GrowthDirections[ParentIndex], TurnRadians).GetSafeNormal();
 		const FVector2d Position = Parent.PositionMeters + Direction * Length;
 		if (!IsInsideWorld(Context.Config, Position))
@@ -259,7 +266,7 @@ namespace
 			return false;
 		}
 		const double Climb = FMath::Min(
-			Length * RiverSlopeAtDepth(Context.Config, Parent.DownstreamDepth),
+			Length * RiverSlopeForStrength(Context.Config, ChildStrength),
 			Headroom * Context.Config.RiverHeadroomClimbFraction);
 		if (Climb < UE_DOUBLE_KINDA_SMALL_NUMBER)
 		{
@@ -272,7 +279,7 @@ namespace
 			return false;
 		}
 
-		Context.Nodes.Add(FRiverNode{ Position, Elevation, ParentIndex, Parent.DownstreamDepth + 1, 0 });
+		Context.Nodes.Add(FRiverNode{ Position, Elevation, ParentIndex, Parent.DownstreamDepth + 1, 0, ChildStrength });
 		Context.GrowthDirections.Add(Direction);
 		Context.SpacingIndex.Add(Context.Nodes.Num() - 1, Position);
 		Context.Frontier.Add(Context.Nodes.Num() - 1);
@@ -280,13 +287,13 @@ namespace
 	}
 
 	/** A branch that fails on its first heading tries a few others before dying out. */
-	bool TryAppendChildAnyHeading(FGrowthContext& Context, int32 ParentIndex, double BaseTurnRadians)
+	bool TryAppendChildAnyHeading(FGrowthContext& Context, int32 ParentIndex, double BaseTurnRadians, float ChildStrength)
 	{
 		const double MaxTurn = FMath::DegreesToRadians(static_cast<double>(Context.Config.RiverTurnDegrees));
 		for (int32 Attempt = 0; Attempt < 5; ++Attempt)
 		{
 			const double TurnRadians = BaseTurnRadians + Context.Stream.FRandRange(-MaxTurn, MaxTurn);
-			if (TryAppendChild(Context, ParentIndex, TurnRadians))
+			if (TryAppendChild(Context, ParentIndex, TurnRadians, ChildStrength))
 			{
 				return true;
 			}
@@ -294,18 +301,34 @@ namespace
 		return false;
 	}
 
+	/**
+	 * A watercourse continues, and now and then a tributary joins it.
+	 *
+	 * Not a symmetric fork. Sending both children off at equal angles with equal
+	 * standing gives dichotomous branching — the shape of a lung, not of a river
+	 * basin — and no trunk survives more than a couple of steps, so nothing ever
+	 * runs far enough through the land to read as a river. Here one child
+	 * carries the stem on with barely a turn and keeps almost all its strength,
+	 * and the other leaves at a wide angle with a fraction of it.
+	 */
 	void AppendChildren(FGrowthContext& Context, int32 ParentIndex)
 	{
-		if (Context.Stream.FRand() >= Context.Config.RiverBranchProbability)
+		const float ParentStrength = Context.Nodes[ParentIndex].StreamStrength;
+		const float StemStrength = ParentStrength * Context.Config.MainStemStrengthRetention;
+		TryAppendChildAnyHeading(Context, ParentIndex, 0.0, StemStrength);
+
+		if (Context.Stream.FRand() >= Context.Config.TributaryProbability)
 		{
-			TryAppendChildAnyHeading(Context, ParentIndex, 0.0);
 			return;
 		}
 
-		// A fork sends its two branches to either side of the parent's heading.
-		const double ForkTurn = FMath::DegreesToRadians(static_cast<double>(Context.Config.RiverForkDegrees)) * Context.Stream.FRandRange(0.7f, 1.3f);
-		TryAppendChildAnyHeading(Context, ParentIndex, ForkTurn);
-		TryAppendChildAnyHeading(Context, ParentIndex, -ForkTurn);
+		const double JoinAngle = FMath::DegreesToRadians(static_cast<double>(Context.Config.TributaryJoinDegrees)) * Context.Stream.FRandRange(0.7f, 1.3f);
+		double TurnRadians = JoinAngle;
+		if (Context.Stream.FRand() < 0.5f)
+		{
+			TurnRadians = -JoinAngle;
+		}
+		TryAppendChildAnyHeading(Context, ParentIndex, TurnRadians, ParentStrength * Context.Config.TributaryStrengthFactor);
 	}
 
 	/**
