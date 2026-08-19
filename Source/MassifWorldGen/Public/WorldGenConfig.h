@@ -14,17 +14,17 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 
 	/** Side of the world square. Finite, and playable throughout. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen")
-	float WorldSizeMeters = 150000.0f;
+	float WorldSizeMeters = 20000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen")
-	float MinAltitudeMeters = 300.0f;
+	float MinAltitudeMeters = 500.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen")
-	float MaxAltitudeMeters = 4800.0f;
+	float MaxAltitudeMeters = 3400.0f;
 
 	/** Distance between range axes. The largest thing in the world. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Uplift")
-	float RangeSpacingMeters = 42000.0f;
+	float RangeSpacingMeters = 14000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Uplift")
 	int32 RangeOctaveCount = 4;
@@ -35,17 +35,17 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 
 	/** Sideways displacement of the range pattern, so ranges bend and throw off spurs. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Uplift")
-	float RangeWarpWavelengthMeters = 60000.0f;
+	float RangeWarpWavelengthMeters = 9000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Uplift")
-	float RangeWarpMeters = 12000.0f;
+	float RangeWarpMeters = 2200.0f;
 
 	/** Altitude the crests reach on a basin floor, and on a range axis. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Uplift")
-	float BasinCrestAltitudeMeters = 900.0f;
+	float BasinCrestAltitudeMeters = 800.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Uplift")
-	float PeakCrestAltitudeMeters = 4300.0f;
+	float PeakCrestAltitudeMeters = 3000.0f;
 
 	/**
 	 * Ridged relief added to the crest altitude inside the ranges, so summits
@@ -60,9 +60,9 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Uplift")
 	float PeakWavelengthMeters = 4500.0f;
 
-	/** Spacing of the fluvial bake grid; 128 m over 150 km is ~1.4 M cells and tens of MB. */
+	/** Spacing of the fluvial bake grid; 16 m over 20 km is ~1.6 M cells and tens of MB. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
-	float BakeCellSizeMeters = 128.0f;
+	float BakeCellSizeMeters = 16.0f;
 
 	/** Solve iterations before the surface is taken as quasi-steady. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
@@ -124,7 +124,7 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 
 	/** Wavelength of the coarsest initial relief octave. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
-	float BakeInitialReliefWavelengthMeters = 16000.0f;
+	float BakeInitialReliefWavelengthMeters = 4500.0f;
 
 	/**
 	 * Smoothing passes over the solved surface before sampling products are
@@ -140,14 +140,14 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	 * bends those straight lines at render time. Zero disables.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
-	float BakeSampleWarpMeters = 400.0f;
+	float BakeSampleWarpMeters = 150.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
-	float BakeSampleWarpWavelengthMeters = 4000.0f;
+	float BakeSampleWarpWavelengthMeters = 1500.0f;
 
 	/** Drained area above which a cell counts as a channel and joins the river polylines. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
-	float RiverDrainageAreaThresholdSquareMeters = 12.0e6f;
+	float RiverDrainageAreaThresholdSquareMeters = 2.0e6f;
 
 	/**
 	 * Channel cross-section from drained area, hydraulic-geometry style: floor

@@ -12,8 +12,8 @@ class FMassifFluvialBake;
  *
  *     Height(Position, SampleSpacing)
  *
- * There is no fine heightfield. At 150 km across, a grid fine enough for the
- * detail we want could not exist — a centimeter lattice would be 10^15
+ * There is no fine heightfield. At 20 km across, a grid fine enough for the
+ * detail we want could not exist — a centimeter lattice would be 4×10^12
  * samples — so on-demand evaluation is not an optimisation, it is the only
  * representation that works. The bake is coarse, global and immutable after
  * construction, and everything below its resolution is evaluated per point in

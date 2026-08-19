@@ -84,9 +84,9 @@ and `MassifCore` tests must pass headless.
   never a spacing derived from camera distance. Presentation samples freely
   at whatever LOD it needs.
 - The whole world is playable. The only terrain-shaped grid is the coarse
-  fluvial bake (§5.1): ~128 m cells, tens of MB, derived in memory from
+  fluvial bake (§5.1): ~16 m cells, tens of MB, derived in memory from
   the seed at world creation and never serialized. Everything finer is
-  evaluated on demand — 150 km at 4 m would already be 1.4 × 10^9 cells.
+  evaluated on demand — 20 km at 25 cm would already be 6.4 × 10^9 cells.
 - **Consequence, accepted:** terrain is no longer frozen into the save, so
   a save carried to a machine whose float math differs would sit on
   near-identical rather than identical ground. Single-player and offline,
@@ -106,18 +106,19 @@ Height(FVector2d WorldMeters, double SampleSpacingMeters) → double meters
 ```
 
 **Positions are double precision, not float.** `float32` resolves about
-4 mm at 75 km from the origin and 8 mm at 150 km, which would spend most
-of the centimeter detail budget on coordinate error before any terrain is
-evaluated. Seeds and noise lattices stay integer; only positions widen.
+1 mm at 10 km from the origin, which would spend a real share of the
+centimeter detail budget on coordinate error before any terrain is
+evaluated — and doubles keep the field API stable if the extent grows
+again. Seeds and noise lattices stay integer; only positions widen.
 
 `SampleSpacingMeters` selects how far down the octave stack to evaluate:
 detail finer than roughly twice the spacing is skipped, and the finest
 octave included is faded in smoothly rather than switched on, so a coarse
 sample and a fine sample of the same point agree.
 
-At the world extent in §12 no full-resolution grid can exist — 150 km at
-1 cm is 10^15 samples — so on-demand evaluation is not an optimisation
-here, it is the only representation that works.
+At the world extent in §12 no full-resolution grid can exist — 20 km at
+1 cm is 4 × 10^12 samples — so on-demand evaluation is not an
+optimisation here, it is the only representation that works.
 
 The whole world is playable. Nothing is scoped to a sub-region: what is
 scoped instead is *residency*, since anything needing neighbours or
@@ -131,10 +132,10 @@ Each is a pure function of position and the master seed:
 ```
 MasterSeed
   └► 0. Uplift field — where ranges and basins sit. Warped ridged noise
-        at 20–80 km. Sets the continental shape and the uplift rate the
+        at 5–15 km. Sets the continental shape and the uplift rate the
         bake works against.
      1. Coarse fluvial bake — stream-power erosion solve over the whole
-        world at ~128 m cells, world border as base level, iterated to a
+        world at ~16 m cells, world border as base level, iterated to a
         quasi-steady state. Real flow routing: watersheds, discharge and
         outlets are consistent by construction (§5.2). A grid, but
         global, coarse, built once per seed, never serialized.
@@ -355,16 +356,19 @@ when cells change) with the deformation RT for close-range detail.
 
 ## 12. World Scale (decided)
 
-- **Extent:** 150 × 150 km, finite, **playable throughout**. Finite because
+- **Extent:** 20 × 20 km, finite, **playable throughout**. Finite because
   rivers need real outlets: globally consistent drainage is worth more than
   unbounded extent, and it is what lets large landforms come from real
-  drainage rather than from noise.
+  drainage rather than from noise. Kept small so the bake grid resolves
+  valley-floor shape (~16 m cells) instead of faking it analytically —
+  buildable valleys are the game, and 400 km² is already larger than the
+  largest real ski domains.
 - **Nothing terrain-shaped is saved.** No fine heightfield, no world-sized
   arrays. The coarse fluvial bake lives in memory only, regenerated from
   the seed at world creation. What is scoped is residency, not area
   (§5.4).
 - **Coordinates:** double precision throughout the field API. See §5.
-- **Altitude range:** valley floors ~400–900 m, peaks to ~4500 m.
+- **Altitude range:** valley floors ~500–900 m, peaks to ~3400 m.
 - **Sim sampling:** fixed spacings only — 0.5 m for agent contact and
   placement validation, 4 m for wide-area scans. Never view-derived.
 - **Resident tiles:** 512 m square, 4 m cells (128² per tile) for masks and
@@ -375,7 +379,7 @@ when cells change) with the deformation RT for close-range detail.
   meshes, not geometry. Centimeter *geometry* is not a target: 1 cm over
   50 × 50 m is 50 M triangles, and snow drapes over everything under
   roughly half a meter regardless.
-- **Fluvial bake:** ~128 m cells world-wide (~1.4 M cells, tens of MB),
+- **Fluvial bake:** ~16 m cells world-wide (~1.6 M cells, tens of MB),
   stream-power solve once per seed at world creation; river polylines
   extracted above a discharge threshold.
 - `FWorldGenResult` as a monolithic heightfield is retired. Its sim-facing

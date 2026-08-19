@@ -183,10 +183,9 @@ void AMassifGameMode::ConfigureSpectatorPawn()
 	UFloatingPawnMovement* Movement = Cast<UFloatingPawnMovement>(Pawn->GetMovementComponent());
 	if (Movement != nullptr)
 	{
-		// 3 km/s, which crosses the 150 km world in under a minute. At the old
-		// massif-sized speed getting anywhere took longer than looking at it.
-		Movement->MaxSpeed = 300000.0f;
-		Movement->Acceleration = 600000.0f;
-		Movement->Deceleration = 1200000.0f;
+		// 600 m/s crosses the 20 km world in about half a minute.
+		Movement->MaxSpeed = 60000.0f;
+		Movement->Acceleration = 120000.0f;
+		Movement->Deceleration = 240000.0f;
 	}
 }

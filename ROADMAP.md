@@ -124,6 +124,25 @@ stream-power erosion bake plus analytic amplification. See ARCHITECTURE
   closes the boundary. Manual — fly from ground level to the horizon with
   no seams or holes.
 
+### M5c — Small World Rescale & Live Erosion Tuning
+World shrinks to 20 × 20 km (ARCHITECTURE §12) so the fluvial bake grid
+resolves valley-floor shape (~16 m cells) instead of faking it below cell
+size — the 150 km world's valleys were not buildable.
+
+- Rescale worldgen defaults: extent, altitude band, uplift wavelengths,
+  bake cell size, river threshold, sample warp.
+- Terrain field can adopt an existing bake, so a rebuild that only touches
+  the analytic erosion-filter layer skips the stream-power solve.
+- Live tuning: `massif.Gully.*` console variables for the erosion-filter
+  knobs (depth, wavelength, branch strength, ridge/crease rounding, slope
+  reference); changing one rebuilds the field with the shared bake and
+  resets the terrain quadtree. `massif.Regenerate` forces a full rebuild
+  including the bake, picking up `massif.Seed` without a level restart.
+- **Verify:** tests — shared-bake field bit-identical to a freshly built
+  field, gully-knob change leaves the macro layer identical; suite green.
+  Manual — tweak a gully cvar in the console, terrain regenerates within
+  ~1 s plus tile rebuild; hillshade export shows broad connected valleys.
+
 ### M6 — Masks, Textured Terrain & PCG Forests
 - Derived masks from eroded terrain: flow accumulation, deposition,
   slope → semantic masks (river, scree, forest, rock face, buildable);
