@@ -1,7 +1,7 @@
 #include "WorldGenPipeline.h"
 
+#include "MassifFluvialBake.h"
 #include "MassifTerrainField.h"
-#include "RiverNetwork.h"
 
 FWorldGenResult FWorldGenPipeline::MaterialisePreviewWindow(const FMassifTerrainField& Field)
 {
@@ -38,8 +38,8 @@ FWorldGenResult FWorldGenPipeline::Generate(const FWorldGenConfig& Config)
 	const FMassifTerrainField Field(Config);
 	const double FieldSeconds = FPlatformTime::Seconds() - FieldStartSeconds;
 
-	UE_LOG(LogTemp, Display, TEXT("WorldGen field: %d river nodes, %d orientation nodes, built in %.2f s"),
-		Field.GetRiverNetwork().GetNodes().Num(), Field.GetOrientationNodeCount(), FieldSeconds);
+	UE_LOG(LogTemp, Display, TEXT("WorldGen field: %d^2 bake cells, %d river nodes, built in %.2f s"),
+		Field.GetFluvialBake().GetCellsPerSide(), Field.GetFluvialBake().GetRiverNodes().Num(), FieldSeconds);
 
 	const double WindowStartSeconds = FPlatformTime::Seconds();
 	FWorldGenResult Result = MaterialisePreviewWindow(Field);

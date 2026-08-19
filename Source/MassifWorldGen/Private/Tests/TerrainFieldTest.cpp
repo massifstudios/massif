@@ -13,12 +13,9 @@ namespace
 		Config.RangeSpacingMeters = 9000.0f;
 		Config.RangeWarpWavelengthMeters = 12000.0f;
 		Config.RangeWarpMeters = 2500.0f;
-		Config.RiverMouthCount = 6;
-		Config.RiverMouthSpacingMeters = 4000.0f;
-		Config.TrunkSegmentLengthMeters = 900.0f;
-		Config.HeadwaterSegmentLengthMeters = 240.0f;
-		Config.RiverMinNodeSpacingMeters = 200.0f;
-		Config.RiverMaxNodeCount = 20000;
+		Config.BakeCellSizeMeters = 64.0f;
+		Config.BakeMaxIterationCount = 30;
+		Config.RiverDrainageAreaThresholdSquareMeters = 1.0e6f;
 		return Config;
 	}
 
