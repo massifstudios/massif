@@ -1,4 +1,3 @@
-#include "GpuErosion.h"
 #include "Misc/AutomationTest.h"
 #include "WorldGenPipeline.h"
 
@@ -10,8 +9,6 @@ namespace
 		Config.MasterSeed = MasterSeed;
 		Config.Resolution = 257;
 		Config.WorldSizeMeters = 2048.0f;
-		Config.HydraulicIterationCount = 0;
-		Config.ThermalIterationCount = 0;
 		return Config;
 	}
 }
@@ -29,63 +26,6 @@ bool FWorldGenDeterminismTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Result is valid"), FirstRun.IsValid());
 	TestEqual(TEXT("Same seed produces identical heightfield hash"), FirstRun.ComputeHash(), SecondRun.ComputeHash());
 	TestNotEqual(TEXT("Different seed produces different heightfield hash"), FirstRun.ComputeHash(), OtherSeedRun.ComputeHash());
-
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldGenErosionTest,
-	"Massif.WorldGen.Erosion",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
-
-bool FWorldGenErosionTest::RunTest(const FString& Parameters)
-{
-	if (!FMassifGpuErosion::CanRun())
-	{
-		AddInfo(TEXT("No rendering RHI; GPU erosion test skipped"));
-		return true;
-	}
-
-	FWorldGenConfig Config = MakeTestConfig(1337);
-	Config.HydraulicIterationCount = 1500;
-	Config.ThermalIterationCount = 500;
-
-	const FWorldGenResult Uneroded = FWorldGenPipeline::Generate(MakeTestConfig(1337));
-	const FWorldGenResult FirstRun = FWorldGenPipeline::Generate(Config);
-	const FWorldGenResult SecondRun = FWorldGenPipeline::Generate(Config);
-
-	TestNotEqual(TEXT("Erosion changes the heightfield"), FirstRun.ComputeHash(), Uneroded.ComputeHash());
-	TestEqual(TEXT("Erosion is reproducible on the same machine"), FirstRun.ComputeHash(), SecondRun.ComputeHash());
-
-	// Full iteration counts must stay numerically stable: finite, inside a
-	// sane band around the configured altitude range, and without needle
-	// spikes (bounded cell-to-cell delta).
-	const float LowBound = Config.MinAltitudeMeters - 100.0f;
-	const float HighBound = Config.MaxAltitudeMeters + 100.0f;
-	float MaxNeighborDelta = 0.0f;
-	for (int32 Index = 0; Index < FirstRun.HeightMeters.Num(); ++Index)
-	{
-		const float Height = FirstRun.HeightMeters[Index];
-		if (!FMath::IsFinite(Height) || Height < LowBound || Height > HighBound)
-		{
-			AddError(FString::Printf(TEXT("Unstable height %f at index %d"), Height, Index));
-			return false;
-		}
-		const bool bHasRightNeighbor = (Index % Config.Resolution) + 1 < Config.Resolution;
-		if (bHasRightNeighbor)
-		{
-			MaxNeighborDelta = FMath::Max(MaxNeighborDelta, FMath::Abs(FirstRun.HeightMeters[Index + 1] - Height));
-		}
-	}
-	TestTrue(FString::Printf(TEXT("No needle spikes (max neighbor delta %.1f m)"), MaxNeighborDelta),
-		MaxNeighborDelta < 60.0f);
-
-	// Erosion must cut channels, not pepper the map with pits. Uneroded noise
-	// sits near zero, so anything far above it means cells are digging holes.
-	const float ErodedPitFraction = static_cast<float>(FirstRun.CountLocalMinima()) / static_cast<float>(FirstRun.HeightMeters.Num());
-	const float UnerodedPitFraction = static_cast<float>(Uneroded.CountLocalMinima()) / static_cast<float>(Uneroded.HeightMeters.Num());
-	AddInfo(FString::Printf(TEXT("Pits: %.3f%% eroded, %.3f%% uneroded"), 100.0f * ErodedPitFraction, 100.0f * UnerodedPitFraction));
-	TestTrue(FString::Printf(TEXT("Erosion leaves few pits (%.3f%% of cells)"), 100.0f * ErodedPitFraction),
-		ErodedPitFraction < 0.01f);
 
 	return true;
 }

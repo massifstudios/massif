@@ -13,12 +13,5 @@ public class MassifWorldGen : ModuleRules
 			"Engine",
 			"MassifCore"
 		});
-
-		PrivateDependencyModuleNames.AddRange(new string[]
-		{
-			"RenderCore",
-			"RHI",
-			"Projects"
-		});
 	}
 }
