@@ -30,15 +30,14 @@ namespace
 		TEXT("massif.WorldGenResolution"), 4097,
 		TEXT("Heightfield samples per side; (value - 1) must be divisible by 256."));
 
-	// Erosion-filter knobs, live: a change rebuilds the terrain field around the
-	// already-solved bake once the value has settled. Defaults mirror
-	// FWorldGenConfig.
+	// Erosion-filter knobs, live: a change rebuilds the terrain field once the
+	// value has settled. Defaults mirror FWorldGenConfig.
 	TAutoConsoleVariable<float> CVarMassifGullyDepth(
-		TEXT("massif.Gully.Depth"), 9.0f,
+		TEXT("massif.Gully.Depth"), 140.0f,
 		TEXT("Largest gully depth in meters — overall erosion-filter strength."));
 
 	TAutoConsoleVariable<float> CVarMassifGullyWavelength(
-		TEXT("massif.Gully.Wavelength"), 220.0f,
+		TEXT("massif.Gully.Wavelength"), 1800.0f,
 		TEXT("Spacing of the coarsest gullies in meters."));
 
 	TAutoConsoleVariable<float> CVarMassifGullyBranchStrength(
@@ -61,7 +60,7 @@ namespace
 
 	FAutoConsoleCommand CmdMassifRegenerate(
 		TEXT("massif.Regenerate"),
-		TEXT("Rebuild the terrain field including the fluvial bake, picking up massif.Seed."),
+		TEXT("Rebuild the terrain field, picking up massif.Seed."),
 		FConsoleCommandDelegate::CreateLambda([]()
 		{
 			bMassifRegenerateRequested = true;
@@ -140,7 +139,7 @@ void AMassifGameMode::Tick(float DeltaSeconds)
 	{
 		bMassifRegenerateRequested = false;
 		PendingKnobsSinceSeconds = -1.0;
-		RebuildTerrainField(MakeWorldGenConfig(), false);
+		RebuildTerrainField(MakeWorldGenConfig());
 		return;
 	}
 
@@ -170,7 +169,7 @@ void AMassifGameMode::PollGullyKnobs()
 	}
 
 	PendingKnobsSinceSeconds = -1.0;
-	RebuildTerrainField(Desired, true);
+	RebuildTerrainField(Desired);
 }
 
 void AMassifGameMode::ToggleTuningPanel()
@@ -207,24 +206,13 @@ void AMassifGameMode::ToggleTuningPanel()
 	bTuningPanelVisible = true;
 }
 
-void AMassifGameMode::RebuildTerrainField(const FWorldGenConfig& Config, bool bReuseBake)
+void AMassifGameMode::RebuildTerrainField(const FWorldGenConfig& Config)
 {
 	const double StartSeconds = FPlatformTime::Seconds();
-	TSharedPtr<const FMassifTerrainField> NewField;
-	if (bReuseBake)
-	{
-		NewField = MakeShared<const FMassifTerrainField>(Config, TerrainField->GetFluvialBakeShared());
-	}
-	else
-	{
-		NewField = MakeShared<const FMassifTerrainField>(Config);
-	}
-
+	TSharedPtr<const FMassifTerrainField> NewField = MakeShared<const FMassifTerrainField>(Config);
 	TerrainField = NewField;
 	TerrainManager->ResetField(NewField);
-	UE_LOG(LogTemp, Display, TEXT("Terrain field rebuilt in %.2f s (%s)"),
-		FPlatformTime::Seconds() - StartSeconds,
-		bReuseBake ? TEXT("bake reused") : TEXT("bake re-solved"));
+	UE_LOG(LogTemp, Display, TEXT("Terrain field rebuilt in %.2f s"), FPlatformTime::Seconds() - StartSeconds);
 }
 
 void AMassifGameMode::ScheduleDebugScreenshot()

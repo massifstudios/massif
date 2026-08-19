@@ -14,10 +14,9 @@ class FMassifTerrainField;
  * terrain manager, and places the spectator above the massif.
  *
  * Also owns the live-tuning loop: the massif.Gully.* console variables feed
- * the erosion-filter config, and a change rebuilds the terrain field around
- * the already-solved fluvial bake; massif.Regenerate forces a full rebuild
- * including the bake. Dev tooling only — the field itself stays a pure
- * function of its config.
+ * the erosion-filter config, and a change rebuilds the terrain field;
+ * massif.Regenerate rebuilds it picking up massif.Seed. Dev tooling only —
+ * the field itself stays a pure function of its config.
  */
 UCLASS()
 class AMassifGameMode : public AGameModeBase
@@ -40,9 +39,9 @@ private:
 	/** Config assembled from the console variables and command line. */
 	FWorldGenConfig MakeWorldGenConfig() const;
 
-	/** Debounced gully-knob watcher; rebuilds with the shared bake once the knobs settle. */
+	/** Debounced gully-knob watcher; rebuilds the field once the knobs settle. */
 	void PollGullyKnobs();
-	void RebuildTerrainField(const FWorldGenConfig& Config, bool bReuseBake);
+	void RebuildTerrainField(const FWorldGenConfig& Config);
 
 	/** F1: slider overlay over the massif.* console variables. */
 	void ToggleTuningPanel();

@@ -22,11 +22,11 @@ void SMassifTuningPanel::Construct(const FArguments& InArgs)
 			]
 			+ SVerticalBox::Slot().AutoHeight()
 			[
-				MakeKnobRow(NSLOCTEXT("Massif", "GullyDepth", "Erosion strength (gully depth m)"), TEXT("massif.Gully.Depth"), 0.0f, 30.0f)
+				MakeKnobRow(NSLOCTEXT("Massif", "GullyDepth", "Erosion strength (gully depth m)"), TEXT("massif.Gully.Depth"), 0.0f, 400.0f)
 			]
 			+ SVerticalBox::Slot().AutoHeight()
 			[
-				MakeKnobRow(NSLOCTEXT("Massif", "GullyWavelength", "Gully wavelength (m)"), TEXT("massif.Gully.Wavelength"), 50.0f, 600.0f)
+				MakeKnobRow(NSLOCTEXT("Massif", "GullyWavelength", "Gully wavelength (m)"), TEXT("massif.Gully.Wavelength"), 100.0f, 5000.0f)
 			]
 			+ SVerticalBox::Slot().AutoHeight()
 			[
@@ -88,7 +88,7 @@ TSharedRef<SWidget> SMassifTuningPanel::MakeRegenerateButton()
 {
 	return SNew(SButton)
 		.HAlign(HAlign_Center)
-		.Text(NSLOCTEXT("Massif", "Regenerate", "Regenerate world (new bake)"))
+		.Text(NSLOCTEXT("Massif", "Regenerate", "Regenerate world"))
 		.OnClicked_Lambda([]()
 		{
 			IConsoleManager::Get().FindConsoleObject(TEXT("massif.Regenerate"))->AsCommand()->Execute(

@@ -13,9 +13,6 @@ namespace
 		Config.RangeSpacingMeters = 9000.0f;
 		Config.RangeWarpWavelengthMeters = 12000.0f;
 		Config.RangeWarpMeters = 2500.0f;
-		Config.BakeCellSizeMeters = 64.0f;
-		Config.BakeMaxIterationCount = 30;
-		Config.RiverDrainageAreaThresholdSquareMeters = 1.0e6f;
 		return Config;
 	}
 }

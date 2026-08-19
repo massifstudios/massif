@@ -18,12 +18,10 @@ struct FMassifUpliftSample
  * The tectonic layer: where mountain ranges stand and where basins lie,
  * varying over tens of kilometers.
  *
- * At 150 km erosion alone cannot carry the largest scale: every catchment
- * would be drawn from the same distribution and the world would come out as
- * one undifferentiated field of valleys. This decides instead that one part
- * of the world is high alpine and another is a broad valley floor. The
- * fluvial bake starts from the ceiling this sets and keeps uplifting the
- * ranges while erosion carves them, so relief concentrates where the
+ * Base relief and the erosion filter draw from the same distribution
+ * everywhere; this decides instead that one part of the world is high alpine
+ * and another is a broad valley floor. The base surface lerps between base
+ * level and the crest ceiling this sets, so relief concentrates where the
  * tectonics say.
  */
 class FMassifUpliftField

@@ -1,6 +1,5 @@
 #include "WorldGenPipeline.h"
 
-#include "MassifFluvialBake.h"
 #include "MassifTerrainField.h"
 
 FWorldGenResult FWorldGenPipeline::MaterialisePreviewWindow(const FMassifTerrainField& Field)
@@ -38,8 +37,7 @@ FWorldGenResult FWorldGenPipeline::Generate(const FWorldGenConfig& Config)
 	const FMassifTerrainField Field(Config);
 	const double FieldSeconds = FPlatformTime::Seconds() - FieldStartSeconds;
 
-	UE_LOG(LogTemp, Display, TEXT("WorldGen field: %d^2 bake cells, %d river nodes, built in %.2f s"),
-		Field.GetFluvialBake().GetCellsPerSide(), Field.GetFluvialBake().GetRiverNodes().Num(), FieldSeconds);
+	UE_LOG(LogTemp, Display, TEXT("WorldGen field built in %.2f s"), FieldSeconds);
 
 	const double WindowStartSeconds = FPlatformTime::Seconds();
 	FWorldGenResult Result = MaterialisePreviewWindow(Field);

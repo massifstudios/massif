@@ -143,6 +143,17 @@ size — the 150 km world's valleys were not buildable.
   Manual — tweak a gully cvar in the console, terrain regenerates within
   ~1 s plus tile rebuild; hillshade export shows broad connected valleys.
 
+### M5d — Filter-Only Terrain
+The fluvial bake (M4b) and its channel carve never produced buildable,
+natural valleys at any tuning; deleted (git carries it). Terrain is now
+uplift envelope + fractal base relief + the erosion filter alone
+(ARCHITECTURE §5.1). Rivers and global drainage are open again — future
+milestone, per-tile from the sampled surface.
+
+- **Verify:** tests — field contract suite still green without the bake;
+  knob changes reach the ground. Manual — fly-through; filter fidelity
+  against the reference article is the active tuning question.
+
 ### M6 — Masks, Textured Terrain & PCG Forests
 - Derived masks from eroded terrain: flow accumulation, deposition,
   slope → semantic masks (river, scree, forest, rock face, buildable);

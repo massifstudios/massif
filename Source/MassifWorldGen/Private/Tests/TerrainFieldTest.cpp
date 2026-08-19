@@ -13,9 +13,6 @@ namespace
 		Config.RangeSpacingMeters = 9000.0f;
 		Config.RangeWarpWavelengthMeters = 12000.0f;
 		Config.RangeWarpMeters = 2500.0f;
-		Config.BakeCellSizeMeters = 64.0f;
-		Config.BakeMaxIterationCount = 30;
-		Config.RiverDrainageAreaThresholdSquareMeters = 1.0e6f;
 		return Config;
 	}
 
@@ -221,39 +218,29 @@ bool FTerrainFieldPrecisionTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainFieldSharedBakeTest,
-	"Massif.WorldGen.TerrainField.SharedBake",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainFieldKnobsTest,
+	"Massif.WorldGen.TerrainField.Knobs",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
 
-bool FTerrainFieldSharedBakeTest::RunTest(const FString& Parameters)
+bool FTerrainFieldKnobsTest::RunTest(const FString& Parameters)
 {
+	// The live-tuning loop rebuilds the field with changed filter knobs; a knob
+	// change has to reach the ground somewhere or the sliders are dead.
 	const FWorldGenConfig Config = MakeFieldTestConfig(1337);
-	const FMassifTerrainField Fresh(Config);
+	const FMassifTerrainField Baseline(Config);
 
-	// Adopting a solved bake is only usable for live tuning if it changes
-	// nothing: with identical config, a field around the donor's bake has to be
-	// bit-identical to one that ran the solve itself.
-	const FMassifTerrainField SharedSameConfig(Config, Fresh.GetFluvialBakeShared());
-
-	// And a gully-knob change on top of the shared bake must reach the ground:
-	// same macro surface, different heights where slopes hold gullies.
 	FWorldGenConfig DeeperGullies = Config;
 	DeeperGullies.LargestGullyDepthMeters *= 2.0f;
-	const FMassifTerrainField SharedDeeperGullies(DeeperGullies, Fresh.GetFluvialBakeShared());
+	const FMassifTerrainField Deeper(DeeperGullies);
 
-	bool bGullyChangeReachedGround = false;
+	bool bKnobChangeReachedGround = false;
 	for (int32 Step = 0; Step < 64; ++Step)
 	{
 		const FVector2d Position(-2000.0 + Step * 61.0, 900.0 - Step * 37.0);
-		const double FreshHeight = Fresh.SampleHeightMeters(Position, 2.0);
-		if (SharedSameConfig.SampleHeightMeters(Position, 2.0) != FreshHeight)
-		{
-			AddError(FString::Printf(TEXT("Shared bake changed the ground at (%.0f, %.0f)"), Position.X, Position.Y));
-			return false;
-		}
-		bGullyChangeReachedGround |= SharedDeeperGullies.SampleHeightMeters(Position, 2.0) != FreshHeight;
+		bKnobChangeReachedGround |=
+			Deeper.SampleHeightMeters(Position, 2.0) != Baseline.SampleHeightMeters(Position, 2.0);
 	}
-	TestTrue(TEXT("Deeper gullies on the shared bake make different ground"), bGullyChangeReachedGround);
+	TestTrue(TEXT("Deeper gullies make different ground"), bKnobChangeReachedGround);
 
 	return true;
 }

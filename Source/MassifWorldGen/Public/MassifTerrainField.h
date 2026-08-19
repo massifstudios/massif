@@ -4,20 +4,17 @@
 #include "WorldGenConfig.h"
 
 class FMassifUpliftField;
-class FMassifFluvialBake;
 
 /**
- * The terrain, as a pure function of world position and the once-per-seed
- * coarse fluvial bake:
+ * The terrain, as a pure function of world position:
  *
  *     Height(Position, SampleSpacing)
  *
- * There is no fine heightfield. At 20 km across, a grid fine enough for the
- * detail we want could not exist — a centimeter lattice would be 4×10^12
- * samples — so on-demand evaluation is not an optimisation, it is the only
- * representation that works. The bake is coarse, global and immutable after
- * construction, and everything below its resolution is evaluated per point in
- * isolation, which is what lets terrain be sampled in tiles, at any
+ * The surface is the uplift envelope shaped by fractal base relief, with the
+ * analytic erosion filter cutting everything below the base wavelength —
+ * after Rune Skovbo Johansen's "Fast and Gorgeous Erosion Filter" (2026).
+ * There is no grid and no solve: every point is evaluated from its own
+ * inputs alone, which is what lets terrain be sampled in tiles, at any
  * resolution, without generating anything around them.
  *
  * SampleSpacing is the distance between the samples the caller intends to take.
@@ -25,9 +22,9 @@ class FMassifFluvialBake;
  * kept is faded rather than switched off, so a coarse sampling and a fine
  * sampling of the same point agree instead of stepping where they meet.
  *
- * Positions are doubles throughout. A float coordinate 75 km from the origin
- * resolves about 4 mm, which would spend most of the detail budget on
- * coordinate error before any terrain was evaluated.
+ * Positions are doubles throughout. A float coordinate at the world edge
+ * resolves only about a millimeter, which would spend the fine-detail budget
+ * on coordinate error before any terrain was evaluated.
  *
  * Thread-safe once constructed: sampling touches only immutable state.
  */
@@ -35,16 +32,6 @@ class MASSIFWORLDGEN_API FMassifTerrainField
 {
 public:
 	explicit FMassifTerrainField(const FWorldGenConfig& InConfig);
-
-	/**
-	 * Builds the field around an already-solved bake instead of running the
-	 * stream-power solve again. Only valid when no bake-affecting config field
-	 * differs from the one the bake was built with; the analytic layers on top
-	 * (channel carve, erosion filter) may differ freely, which is what makes
-	 * live tuning of those layers cheap.
-	 */
-	FMassifTerrainField(const FWorldGenConfig& InConfig, TSharedPtr<const FMassifFluvialBake> ExistingBake);
-
 	~FMassifTerrainField();
 
 	FMassifTerrainField(const FMassifTerrainField&) = delete;
@@ -63,19 +50,21 @@ public:
 		return Config;
 	}
 
-	const FMassifFluvialBake& GetFluvialBake() const;
-
-	/** The solved bake, shareable into a field rebuilt with different analytic-layer config. */
-	TSharedPtr<const FMassifFluvialBake> GetFluvialBakeShared() const;
-
 	/** Octaves worth evaluating at a spacing, and the weight the finest of them gets. */
 	int32 OctavesForSpacing(double SampleSpacingMeters, float& OutFinestWeight) const;
 
 private:
-	/** 0 at the water the ground here drains to, 1 at the crest altitude overhead. */
+	/** Uplift envelope shaped by the fractal base relief; the surface the filter erodes. */
+	double SampleBaseHeightMeters(FVector2d PositionMeters) const;
+
+	/** Base-surface gradient by central differences at a fixed step, so it cannot depend on the caller. */
+	FVector2d SampleBaseGradient(FVector2d PositionMeters) const;
+
+	/** 0 at base level, 1 at the crest altitude overhead. Decides where the filter fades out. */
 	float ComputeReliefFraction(FVector2d PositionMeters, double GroundHeightMeters) const;
 
 	FWorldGenConfig Config;
 	TUniquePtr<FMassifUpliftField> Uplift;
-	TSharedPtr<const FMassifFluvialBake> FluvialBake;
+	uint32 BaseReliefSeed = 0;
+	uint32 ErosionSeed = 0;
 };
