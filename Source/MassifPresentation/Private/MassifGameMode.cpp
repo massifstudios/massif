@@ -89,6 +89,14 @@ namespace
 	/** Long enough that dragging a value in steps triggers one rebuild, not one per step. */
 	constexpr double GullyRebuildDebounceSeconds = 0.5;
 
+	/** Gap between posing the spectator and shooting, so the quadtree can stream the new view in. */
+	constexpr float DebugScreenshotSettleSeconds = 3.0f;
+
+	/** Where the close debug shot stands, how far above the ground, and which way it faces. */
+	const FVector2d GroundShotCenterMeters(-3000.0, -3000.0);
+	constexpr double GroundShotEyeHeightMeters = 40.0;
+	const FRotator GroundShotRotation(-8.0f, 45.0f, 0.0f);
+
 	/** -MassifScreenshotAfter=N: debug screenshot after N seconds, then quit. Command-line
 	 *  arg instead of a cvar because -ExecCmds runs only after GameMode::BeginPlay. */
 	float GetAutoScreenshotDelaySeconds()
@@ -215,6 +223,24 @@ void AMassifGameMode::RebuildTerrainField(const FWorldGenConfig& Config)
 	UE_LOG(LogTemp, Display, TEXT("Terrain field rebuilt in %.2f s"), FPlatformTime::Seconds() - StartSeconds);
 }
 
+void AMassifGameMode::SchedulePosedScreenshot(
+	float PoseDelaySeconds, FVector LocationCentimeters, FRotator Rotation, FString ShotName)
+{
+	FTimerHandle PoseTimer;
+	GetWorldTimerManager().SetTimer(PoseTimer, [this, LocationCentimeters, Rotation]()
+	{
+		APlayerController* PlayerController = GetWorld()->GetFirstPlayerController();
+		PlayerController->GetPawn()->SetActorLocation(LocationCentimeters);
+		PlayerController->SetControlRotation(Rotation);
+	}, PoseDelaySeconds, false);
+
+	FTimerHandle ShotTimer;
+	GetWorldTimerManager().SetTimer(ShotTimer, [ShotName]()
+	{
+		FScreenshotRequest::RequestScreenshot(ShotName, false, false);
+	}, PoseDelaySeconds + DebugScreenshotSettleSeconds, false);
+}
+
 void AMassifGameMode::ScheduleDebugScreenshot()
 {
 	const float DelaySeconds = GetAutoScreenshotDelaySeconds();
@@ -229,25 +255,22 @@ void AMassifGameMode::ScheduleDebugScreenshot()
 		FScreenshotRequest::RequestScreenshot(TEXT("MassifShot_Profile"), false, false);
 	}, DelaySeconds, false);
 
-	FTimerHandle OverviewPoseTimer;
-	GetWorldTimerManager().SetTimer(OverviewPoseTimer, [this]()
-	{
-		APlayerController* PlayerController = GetWorld()->GetFirstPlayerController();
-		PlayerController->GetPawn()->SetActorLocation(FVector(0.0, 0.0, (SpawnAltitudeMeters + 2800.0) * 100.0));
-		PlayerController->SetControlRotation(FRotator(-55.0f, 90.0f, 0.0f));
-	}, DelaySeconds + 3.0f, false);
+	SchedulePosedScreenshot(DelaySeconds + 3.0f,
+		FVector(0.0, 0.0, (SpawnAltitudeMeters + 2800.0) * 100.0),
+		FRotator(-55.0f, 90.0f, 0.0f), TEXT("MassifShot_Overview"));
 
-	FTimerHandle OverviewShotTimer;
-	GetWorldTimerManager().SetTimer(OverviewShotTimer, []()
-	{
-		FScreenshotRequest::RequestScreenshot(TEXT("MassifShot_Overview"), false, false);
-	}, DelaySeconds + 6.0f, false);
+	// Eye level on the ground: the only pose that shows texture tiling, layer
+	// blending and foliage at the scale a player will actually see them.
+	const double GroundAltitudeMeters = TerrainField->SampleHeightMeters(GroundShotCenterMeters, 1.0);
+	SchedulePosedScreenshot(DelaySeconds + 9.0f,
+		FVector(GroundShotCenterMeters.X, GroundShotCenterMeters.Y, GroundAltitudeMeters + GroundShotEyeHeightMeters) * 100.0,
+		GroundShotRotation, TEXT("MassifShot_Ground"));
 
 	FTimerHandle QuitTimer;
 	GetWorldTimerManager().SetTimer(QuitTimer, [this]()
 	{
 		GetWorld()->GetFirstPlayerController()->ConsoleCommand(TEXT("quit"));
-	}, DelaySeconds + 9.0f, false);
+	}, DelaySeconds + 15.0f, false);
 }
 
 void AMassifGameMode::SpawnEnvironmentActors()

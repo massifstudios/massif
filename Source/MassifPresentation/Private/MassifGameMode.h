@@ -36,6 +36,9 @@ private:
 	void ConfigureSpectatorPawn();
 	void ScheduleDebugScreenshot();
 
+	/** Poses the spectator, then shoots a few seconds later once tiles have streamed in. */
+	void SchedulePosedScreenshot(float PoseDelaySeconds, FVector LocationCentimeters, FRotator Rotation, FString ShotName);
+
 	/** Config assembled from the console variables and command line. */
 	FWorldGenConfig MakeWorldGenConfig() const;
 
