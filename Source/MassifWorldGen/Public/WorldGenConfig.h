@@ -84,9 +84,17 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
 	float BakeDrainageExponent = 0.5f;
 
-	/** Uplift added per iteration on a range axis; basins get none. This is what erosion works against. */
+	/**
+	 * Uplift added per iteration on a range axis. Steady-state relief scales
+	 * with this over the stream-power factor, so it is the primary control of
+	 * how tall the solved mountains stand.
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
-	float BakeUpliftMetersPerStep = 30.0f;
+	float BakeUpliftMetersPerStep = 120.0f;
+
+	/** Share of the uplift a basin floor keeps, so basins roll instead of relaxing dead flat. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
+	float BakeBasinUpliftFraction = 0.1f;
 
 	/** 0..1 blend towards the four-neighbour mean each iteration, for softer interfluves. 0 disables. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
@@ -134,22 +142,22 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	 * under a hard cap. The caps bound how far a carve query has to look.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Channels")
-	float ChannelWidthPerSqrtArea = 0.004f;
+	float ChannelWidthPerSqrtArea = 0.008f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Channels")
 	float ChannelMaxFloorHalfWidthMeters = 120.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Channels")
-	float ChannelSideWidthPerSqrtArea = 0.008f;
+	float ChannelSideWidthPerSqrtArea = 0.025f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Channels")
-	float ChannelMaxSideWidthMeters = 200.0f;
+	float ChannelMaxSideWidthMeters = 300.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Channels")
-	float ChannelDepthPerSqrtArea = 0.003f;
+	float ChannelDepthPerSqrtArea = 0.0015f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Channels")
-	float ChannelNotchDepthCapMeters = 40.0f;
+	float ChannelNotchDepthCapMeters = 25.0f;
 
 	/** Gully scales the erosion filter cuts, coarsest first; 0 leaves the macro surface bare. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")

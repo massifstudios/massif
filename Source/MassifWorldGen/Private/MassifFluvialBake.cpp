@@ -183,7 +183,12 @@ namespace
 				const double AvailableRelief = FMath::Max(0.0, UpliftSample.CrestAltitudeMeters - Config.MinAltitudeMeters);
 				HeightMeters[CellIndex] = UpliftSample.CrestAltitudeMeters
 					- AvailableRelief * ReliefFraction * FMath::Clamp(Noise, 0.0, 1.0);
-				UpliftStepMeters[CellIndex] = static_cast<double>(Config.BakeUpliftMetersPerStep) * UpliftSample.RangeFraction;
+				// Basins keep a floor of uplift. At steady state relief scales
+				// with uplift over erodibility, so zero uplift relaxes a basin
+				// to a dead-flat plain instead of rolling foothills.
+				const double UpliftShare = FMath::Lerp(
+					static_cast<double>(Config.BakeBasinUpliftFraction), 1.0, static_cast<double>(UpliftSample.RangeFraction));
+				UpliftStepMeters[CellIndex] = static_cast<double>(Config.BakeUpliftMetersPerStep) * UpliftShare;
 				if (IsBorder(CellIndex))
 				{
 					HeightMeters[CellIndex] = Config.MinAltitudeMeters;
