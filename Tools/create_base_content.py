@@ -32,14 +32,20 @@ TEXTURE_SOURCE_ROOT = os.path.join(
 )
 TEXTURE_ASSET_ROOT = "/Game/Textures/PolyHaven"
 
-# One texture set per surface layer: (layer, source group folder, asset name, tiling meters).
+# Two texture sets per surface layer, blended by a macro noise so no single
+# tiling pattern covers a whole mountainside: (group folder, asset name,
+# tiling meters). Deliberately different tiling per variant, so even where
+# the blend lingers the repeats never line up.
 LAYERS = [
-    ("rock", "rock", "T_AerialRocks02", 14.0),
-    ("ground", "rock", "T_AerialGrassRock", 7.0),
-    ("snow", "snow", "T_SnowFieldAerial", 9.0),
+    ("rock", [("rock", "T_RockFace03", 13.0), ("rock", "T_GrayRocks", 21.0)]),
+    ("ground", [("rock", "T_AerialGrassRock", 7.0), ("ground", "T_RockyTerrain02", 11.0)]),
+    ("snow", [("snow", "T_SnowFieldAerial", 9.0), ("snow", "T_Snow01", 5.0)]),
 ]
 
 MAP_SUFFIXES = ("D", "N", "R")
+
+VARIANT_NOISE_WAVELENGTH_METERS = 340.0
+TINT_NOISE_WAVELENGTH_METERS = 1700.0
 
 
 def create_level():
@@ -131,31 +137,39 @@ def color_constant(material, rgb, x, y):
 
 
 def import_layer_textures():
-    """Imports the D/N/R maps every layer needs; returns loaded textures keyed by (layer, suffix)."""
+    """Imports the D/N/R maps every layer variant needs; returns textures keyed by (layer, variant, suffix)."""
     asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
     textures = {}
-    for layer, group, asset_name, _ in LAYERS:
-        for suffix in MAP_SUFFIXES:
-            asset_path = f"{TEXTURE_ASSET_ROOT}/{group}/{asset_name}_{suffix}"
-            if not unreal.EditorAssetLibrary.does_asset_exist(asset_path):
-                source = os.path.join(TEXTURE_SOURCE_ROOT, group, f"{asset_name}_{suffix}.jpg")
-                if not os.path.isfile(source):
-                    unreal.log_warning(f"Missing texture source {source}")
+    for layer, variants in LAYERS:
+        for variant, (group, asset_name, _) in enumerate(variants):
+            for suffix in MAP_SUFFIXES:
+                texture = import_one_texture(asset_tools, group, asset_name, suffix)
+                if texture is None:
                     return None
-                task = unreal.AssetImportTask()
-                task.filename = source
-                task.destination_path = f"{TEXTURE_ASSET_ROOT}/{group}"
-                task.automated = True
-                task.save = True
-                asset_tools.import_asset_tasks([task])
-
-            texture = unreal.EditorAssetLibrary.load_asset(asset_path)
-            if texture is None:
-                unreal.log_warning(f"Import produced no asset at {asset_path}")
-                return None
-            configure_texture(texture, suffix)
-            textures[(layer, suffix)] = texture
+                textures[(layer, variant, suffix)] = texture
     return textures
+
+
+def import_one_texture(asset_tools, group, asset_name, suffix):
+    asset_path = f"{TEXTURE_ASSET_ROOT}/{group}/{asset_name}_{suffix}"
+    if not unreal.EditorAssetLibrary.does_asset_exist(asset_path):
+        source = os.path.join(TEXTURE_SOURCE_ROOT, group, f"{asset_name}_{suffix}.jpg")
+        if not os.path.isfile(source):
+            unreal.log_warning(f"Missing texture source {source}")
+            return None
+        task = unreal.AssetImportTask()
+        task.filename = source
+        task.destination_path = f"{TEXTURE_ASSET_ROOT}/{group}"
+        task.automated = True
+        task.save = True
+        asset_tools.import_asset_tasks([task])
+
+    texture = unreal.EditorAssetLibrary.load_asset(asset_path)
+    if texture is None:
+        unreal.log_warning(f"Import produced no asset at {asset_path}")
+        return None
+    configure_texture(texture, suffix)
+    return texture
 
 
 def configure_texture(texture, suffix):
@@ -262,27 +276,61 @@ def build_flat_color_graph(material, ground_mask, snow_mask):
     )
 
 
+def make_macro_noise(material, wavelength_meters, output_min, output_max, y):
+    noise = expr(material, unreal.MaterialExpressionNoise, -2400, y)
+    noise.set_editor_property("scale", 1.0 / (wavelength_meters * 100.0))
+    noise.set_editor_property("quality", 2)
+    noise.set_editor_property("levels", 2)
+    noise.set_editor_property("output_min", output_min)
+    noise.set_editor_property("output_max", output_max)
+    noise.set_editor_property("turbulence", False)
+    return noise
+
+
+def make_variant_sample(material, textures, layer, variants, suffix, sampler_type, variant_mask, y):
+    """One map of one layer: both variants sampled at their own tiling, blended by the macro mask."""
+    samples = []
+    for variant, (_, _, tile_meters) in enumerate(variants):
+        uvs = make_layer_uvs(material, tile_meters, y + variant * 60)
+        samples.append(make_texture_sample(
+            material, textures[(layer, variant, suffix)], sampler_type, uvs, -1600, y + variant * 60
+        ))
+    blend = expr(material, unreal.MaterialExpressionLinearInterpolate, -1350, y)
+    connect(samples[0], "", blend, "A")
+    connect(samples[1], "", blend, "B")
+    connect(variant_mask, "", blend, "Alpha")
+    return blend
+
+
 def build_textured_graph(material, textures, ground_mask, snow_mask):
+    variant_mask = make_macro_noise(material, VARIANT_NOISE_WAVELENGTH_METERS, 0.0, 1.0, -1100)
+
     color_samples = {}
     normal_samples = {}
     rough_samples = {}
-    for index, (layer, _, _, tile_meters) in enumerate(LAYERS):
+    for index, (layer, variants) in enumerate(LAYERS):
         row = -700 + index * 500
-        uvs = make_layer_uvs(material, tile_meters, row)
-        color_samples[layer] = make_texture_sample(
-            material, textures[(layer, "D")], unreal.MaterialSamplerType.SAMPLERTYPE_COLOR, uvs, -1600, row
+        color_samples[layer] = make_variant_sample(
+            material, textures, layer, variants, "D", unreal.MaterialSamplerType.SAMPLERTYPE_COLOR, variant_mask, row
         )
-        normal_samples[layer] = make_texture_sample(
-            material, textures[(layer, "N")], unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL, uvs, -1600, row + 150
+        normal_samples[layer] = make_variant_sample(
+            material, textures, layer, variants, "N", unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL, variant_mask, row + 150
         )
-        rough_samples[layer] = make_texture_sample(
-            material, textures[(layer, "R")], unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_COLOR, uvs, -1600, row + 300
+        rough_samples[layer] = make_variant_sample(
+            material, textures, layer, variants, "R", unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_COLOR, variant_mask, row + 300
         )
 
-    final_color = make_layer_blend(material, color_samples, ground_mask, snow_mask, -200, -400)
-    roughness = make_layer_blend(material, rough_samples, ground_mask, snow_mask, -200, 200, "R")
+    blended_color = make_layer_blend(material, color_samples, ground_mask, snow_mask, -200, -400)
+    roughness = make_layer_blend(material, rough_samples, ground_mask, snow_mask, -200, 200)
     blended_normal = make_layer_blend(material, normal_samples, ground_mask, snow_mask, -200, 500)
     world_normal = make_world_space_normal(material, blended_normal, 100, 500)
+
+    # Kilometre-scale brightness variation, so distant slopes stop reading as
+    # one uniform sheet even where the texture repeats are too small to see.
+    tint = make_macro_noise(material, TINT_NOISE_WAVELENGTH_METERS, 0.82, 1.12, -1250)
+    final_color = expr(material, unreal.MaterialExpressionMultiply, 150, -400)
+    connect(blended_color, "", final_color, "A")
+    connect(tint, "", final_color, "B")
 
     material.set_editor_property("tangent_space_normal", False)
     unreal.MaterialEditingLibrary.connect_material_property(
