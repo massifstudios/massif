@@ -78,7 +78,7 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	 * it directly sets hillslope steepness.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
-	float BakeStreamPowerFactor = 0.7f;
+	float BakeStreamPowerFactor = 0.1f;
 
 	/**
 	 * Exponent on drained area in the stream power law. Higher concentrates
@@ -92,10 +92,12 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	/**
 	 * Uplift added per iteration on a range axis. Steady-state relief scales
 	 * with this over the stream-power factor, so it is the primary control of
-	 * how tall the solved mountains stand.
+	 * how tall the solved mountains stand. The steady-state drop it buys is
+	 * per cell hop, so it must scale with the bake cell size or hillslopes
+	 * steepen as the grid refines.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
-	float BakeUpliftMetersPerStep = 170.0f;
+	float BakeUpliftMetersPerStep = 32.0f;
 
 	/** Share of the uplift a basin floor keeps, so basins roll instead of relaxing dead flat. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
@@ -103,15 +105,27 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 
 	/**
 	 * Drained cells below which fluvial erosion fades out. 1 disables. Keep
-	 * mild: starving hillslopes of erosion entirely lets uplift inflate them
-	 * into worm ridges between the channels that still cut.
+	 * mild or off: any full shutoff starves hillslopes of erosion and uplift
+	 * inflates them into worm ridges with cliff walls where the channels
+	 * still cut. Relief separation comes from the drainage exponent instead.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
 	float BakeChannelInitCells = 1.0f;
 
 	/** 0..1 blend towards the four-neighbour mean each iteration, for softer interfluves. 0 disables. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
-	float BakeHillslopeSmoothing = 0.3f;
+	float BakeHillslopeSmoothing = 0.5f;
+
+	/**
+	 * Steepest rise per meter of travel a hillside can hold; ground standing
+	 * steeper than this over its downstream neighbours fails down to it each
+	 * iteration. Stream power alone has no slope limit, so on a fine grid every
+	 * local crest cell would stand uplift-over-factor above a neighbour one
+	 * cell away — a field of knobs. This is the landslide limit that real
+	 * hillslopes have, and it is what bounds cell-scale relief. 0 disables.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
+	float BakeTalusSlope = 0.7f;
 
 	/**
 	 * Fractal relief the solve starts from, as a share of the height between

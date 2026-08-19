@@ -401,7 +401,16 @@ namespace
 				* CellSizeMeters / DownstreamDistance;
 			const double PreviousHeight = HeightMeters[CellIndex];
 			const double RaisedHeight = PreviousHeight + UpliftStepMeters[CellIndex];
-			const double ErodedHeight = (RaisedHeight + ErosionFactor * DownstreamHeight) / (1.0 + ErosionFactor);
+			double ErodedHeight = (RaisedHeight + ErosionFactor * DownstreamHeight) / (1.0 + ErosionFactor);
+			// Landslide limit: ground steeper than the talus slope over its lower
+			// neighbours fails down to it. Stream power alone has no slope bound,
+			// so without this every fine-grid crest cell stands uplift-over-factor
+			// above a neighbour one cell away.
+			const double TalusSlope = static_cast<double>(Config.BakeTalusSlope);
+			if (TalusSlope > 0.0)
+			{
+				ErodedHeight = FMath::Min(ErodedHeight, DownstreamHeight + TalusSlope * DownstreamDistance);
+			}
 			HeightMeters[CellIndex] = FMath::Min(ErodedHeight, static_cast<double>(Config.MaxAltitudeMeters));
 			return FMath::Abs(HeightMeters[CellIndex] - PreviousHeight);
 		}

@@ -49,6 +49,43 @@ bool FFluvialBakeDeterminismTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFluvialBakeTalusTest,
+	"Massif.WorldGen.FluvialBake.Talus",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FFluvialBakeTalusTest::RunTest(const FString& Parameters)
+{
+	const FWorldGenConfig Config = MakeBakeTestConfig(1337);
+	const FMassifFluvialBake Bake = BuildBake(Config);
+	const TArray<double>& Heights = Bake.GetHeightGridMeters();
+	const int32 CellsPerSide = Bake.GetCellsPerSide();
+	const double CellSizeMeters = Config.WorldSizeMeters / (CellsPerSide - 1);
+
+	// The landslide limit is what keeps the fine grid from growing a knob field:
+	// no interior cell may tower over an adjacent one much beyond the talus
+	// slope. The clamp acts on the slope-weighted blend of the lower neighbours
+	// over up-to-diagonal distances, and smoothing shifts heights after the last
+	// clamp, so single-neighbour drops legitimately reach ~1.5x the talus slope;
+	// 2x headroom still fails the unclamped regime, which stood past 4x. Border
+	// cells are pinned at base level and get a pass.
+	const double AllowedDropPerMeter = static_cast<double>(Config.BakeTalusSlope) * 2.0;
+	double SteepestDropPerMeter = 0.0;
+	for (int32 CellY = 1; CellY < CellsPerSide - 2; ++CellY)
+	{
+		for (int32 CellX = 1; CellX < CellsPerSide - 2; ++CellX)
+		{
+			const int32 CellIndex = CellY * CellsPerSide + CellX;
+			const double EastDrop = FMath::Abs(Heights[CellIndex] - Heights[CellIndex + 1]);
+			const double NorthDrop = FMath::Abs(Heights[CellIndex] - Heights[CellIndex + CellsPerSide]);
+			SteepestDropPerMeter = FMath::Max(SteepestDropPerMeter, FMath::Max(EastDrop, NorthDrop) / CellSizeMeters);
+		}
+	}
+	TestTrue(FString::Printf(TEXT("No cell stands past the talus limit over its neighbour (%.2f of %.2f rise per meter)"),
+		SteepestDropPerMeter, AllowedDropPerMeter), SteepestDropPerMeter <= AllowedDropPerMeter);
+
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFluvialBakeDrainageTest,
 	"Massif.WorldGen.FluvialBake.Drainage",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
