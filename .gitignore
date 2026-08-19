@@ -25,3 +25,6 @@ crashinfo--*
 
 # Poly Haven downloads: re-fetchable via Tools/fetch_polyhaven_textures.py
 Content/Textures/PolyHaven/
+
+# Poly Haven downloads: re-fetchable via Tools/fetch_polyhaven_models.py
+Content/Models/PolyHaven/
