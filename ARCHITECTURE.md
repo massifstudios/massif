@@ -83,9 +83,10 @@ and `MassifCore` tests must pass headless.
   placement validation, `SimSurveySpacing` (4 m) for wide-area scans — and
   never a spacing derived from camera distance. Presentation samples freely
   at whatever LOD it needs.
-- The whole world is playable, so nothing terrain-shaped is baked: 150 km
-  at 4 m would be 1.4 × 10^9 cells. The field is cheap and deterministic
-  enough to query directly.
+- The whole world is playable. The only terrain-shaped grid is the coarse
+  fluvial bake (§5.1): ~128 m cells, tens of MB, derived in memory from
+  the seed at world creation and never serialized. Everything finer is
+  evaluated on demand — 150 km at 4 m would already be 1.4 × 10^9 cells.
 - **Consequence, accepted:** terrain is no longer frozen into the save, so
   a save carried to a machine whose float math differs would sit on
   near-identical rather than identical ground. Single-player and offline,
@@ -97,7 +98,8 @@ and `MassifCore` tests must pass headless.
 ## 5. World Generation
 
 Seed-driven, no hardcoded maps. Terrain is a **pure function of world
-position**, never a stored grid:
+position and the once-per-seed coarse bake** (§5.1) — immutable after
+construction, so every query is still deterministic and order-independent:
 
 ```
 Height(FVector2d WorldMeters, double SampleSpacingMeters) → double meters
@@ -129,12 +131,16 @@ Each is a pure function of position and the master seed:
 ```
 MasterSeed
   └► 0. Uplift field — where ranges and basins sit. Warped ridged noise
-        at 20–80 km. Sets the continental shape.
-     1. Hydrology graph — outlets on the world border, trunk rivers
-        inland, recursively subdivided into tributaries (§5.2).
-        A graph, not a grid.
-     2. Macro surface — valley floors and cross-sections from the graph,
-        crest height from the uplift field. Analytic per point.
+        at 20–80 km. Sets the continental shape and the uplift rate the
+        bake works against.
+     1. Coarse fluvial bake — stream-power erosion solve over the whole
+        world at ~128 m cells, world border as base level, iterated to a
+        quasi-steady state. Real flow routing: watersheds, discharge and
+        outlets are consistent by construction (§5.2). A grid, but
+        global, coarse, built once per seed, never serialized.
+     2. Amplification — bicubic interpolation of the bake surface plus
+        discharge-scaled channel carving along the river polylines
+        extracted from the bake. Analytic per point.
      3. Erosion filter — analytic gully field: cosine stripes laid across
         the local flow direction, each octave dragging the next finer one
         sideways so gullies branch. O(1) per point.
@@ -142,37 +148,32 @@ MasterSeed
         scree meshes, snow deformation. Not heightfield.
 ```
 
-Layer 3 is what makes the scheme work: it needs no neighbours and no
-iteration, so any point at any resolution is evaluable in isolation.
-**Grid-based erosion cannot meet that contract.** The hydraulic pipe model
-and thermal erosion from M3 need the whole grid and its neighbours, so
-they are no longer part of the terrain definition. The code stays in tree
-and can be run as an offline pass over a resident tile, but it is off by
-default and nothing depends on it.
+Layers 2–3 are what make the scheme work below bake resolution: they need
+no neighbours and no iteration, so any point at any resolution is
+evaluable in isolation. The bake is grid-based, but global, coarse and
+built once per seed — bounded in memory and time no matter where the
+player goes. **Fine-grid erosion over the play area cannot meet that
+contract** and is not part of the terrain definition; the M3 GPU passes
+are deleted.
 
 Layer 4 is where centimeter-scale *appearance* comes from. Centimeter
 geometry is not a target: a 1 cm mesh over 50 × 50 m is 50 M triangles,
 and for a ski game the skiable surface is snow, which drapes over
 everything below roughly half a meter anyway.
 
-### 5.2 Hydrology graph
+### 5.2 River polylines
 
-The graph is the terrain's skeleton and stays **global** — a valley
-floor's elevation depends on the whole path to its outlet, so it cannot be
-made chunk-local without giving up consistency. It is affordable because
-it is a graph, not a grid.
+Drainage is **global** — a valley floor's elevation depends on the whole
+path to its outlet — and the bake resolves it globally: every cell drains
+to the world border through the D8 receiver graph of the solve.
 
-- Built hierarchically: outlets on the world border, then trunks, then
-  tributaries, each level roughly halving segment length down to ~200 m
-  headwater streams.
-- Each node's children derive from a hash of that node's stable id, so
-  refinement is deterministic and order-independent.
-- Levels down to ~1.25 km spacing are built eagerly for the whole world
-  (~15 k nodes, milliseconds). Finer levels are refined on demand around
-  the camera and wherever the player has built.
-- Segments are held in a uniform spatial index. Point queries touch only
-  nearby segments, which is what lets the macro surface be evaluated
-  analytically at any point instead of via a precomputed lattice.
+- River polylines are extracted from that graph above a discharge
+  threshold. Each node carries water elevation (clamped monotone
+  non-increasing downstream) and drainage area.
+- Polylines are smoothed to remove the grid's 45° staircase, then held in
+  a uniform spatial index. Point queries touch only nearby segments,
+  which is what lets channel carving be evaluated analytically at any
+  point.
 
 ### 5.3 Terrain representation
 
@@ -221,9 +222,10 @@ tiles would not agree at their shared edge, which is exactly the stitching
 problem the field is there to remove.
 
 **Flow accumulation** is the one genuinely global derived quantity — water
-arrives from far outside the tile. The hydrology graph already carries
-that: it supplies discharge entering the tile, and the tile only has to
-resolve the last few hundred meters locally.
+arrives from far outside the tile. The fluvial bake already carries that:
+its flow accumulation and river polylines supply discharge entering the
+tile, and the tile only has to resolve the last few hundred meters
+locally.
 
 Only tiles the player has modified are saved (§9). Everything else is
 regenerated from the seed on demand.
@@ -355,10 +357,12 @@ when cells change) with the deformation RT for close-range detail.
 
 - **Extent:** 150 × 150 km, finite, **playable throughout**. Finite because
   rivers need real outlets: globally consistent drainage is worth more than
-  unbounded extent, and it is what lets large landforms come from the
-  hydrology graph rather than from noise.
-- **Nothing terrain-shaped is stored.** No heightfield, no world-sized
-  arrays. What is scoped is residency, not area (§5.4).
+  unbounded extent, and it is what lets large landforms come from real
+  drainage rather than from noise.
+- **Nothing terrain-shaped is saved.** No fine heightfield, no world-sized
+  arrays. The coarse fluvial bake lives in memory only, regenerated from
+  the seed at world creation. What is scoped is residency, not area
+  (§5.4).
 - **Coordinates:** double precision throughout the field API. See §5.
 - **Altitude range:** valley floors ~400–900 m, peaks to ~4500 m.
 - **Sim sampling:** fixed spacings only — 0.5 m for agent contact and
@@ -371,8 +375,9 @@ when cells change) with the deformation RT for close-range detail.
   meshes, not geometry. Centimeter *geometry* is not a target: 1 cm over
   50 × 50 m is 50 M triangles, and snow drapes over everything under
   roughly half a meter regardless.
-- **Hydrology graph:** eager to ~1.25 km node spacing world-wide
-  (~15 k nodes), refined on demand to ~200 m headwaters near activity.
+- **Fluvial bake:** ~128 m cells world-wide (~1.4 M cells, tens of MB),
+  stream-power solve once per seed at world creation; river polylines
+  extracted above a discharge threshold.
 - `FWorldGenResult` as a monolithic heightfield is retired. Its sim-facing
   query API (`SampleHeightMeters`, `SampleSlopeDegrees`, `SampleNormal`)
   survives on the terrain field, so §6–§8 are unaffected.

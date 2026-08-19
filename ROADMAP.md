@@ -53,10 +53,11 @@ commit.
 - **Verify:** GPU reproducibility test (two runs, same seed, identical
   hash; auto-skips headless); CPU-stage tests unchanged; manual —
   drainage gullies, smoothed flanks, sediment-flattened valley floors.
-- **Superseded in part by M4.** A grid-and-neighbours erosion pass cannot
-  be part of a terrain field that must be evaluable point-by-point at any
-  resolution. Incising is now analytic (ARCHITECTURE §5.1 layer 3). The
-  compute passes stay in tree, off by default.
+- **Superseded by M4 and M4b.** A grid-and-neighbours erosion pass over
+  the play area cannot be part of a terrain field that must be evaluable
+  point-by-point at any resolution. Macro relief now comes from the
+  coarse fluvial bake (M4b), incising below it is analytic (ARCHITECTURE
+  §5.1). The compute passes are deleted.
 
 ### M4 — Terrain Field & World Scale
 Replaces the stored 8 x 8 km heightfield with a terrain field evaluable at
@@ -82,6 +83,30 @@ playable throughout. See ARCHITECTURE §5 and §12.
   agreement across spacings, surface sanity (max step between adjacent
   samples, local-minimum fraction), determinism hash. Manual — fly from
   ground level out to the 150 km horizon.
+- **Hydrology bullets superseded by M4b:** the hierarchical river graph
+  is replaced by river polylines extracted from the fluvial bake.
+
+### M4b — Fluvial Macro Rework
+Replaces the synthetic river-graph growth with a coarse whole-world
+stream-power erosion bake plus analytic amplification. See ARCHITECTURE
+§5.1–§5.2.
+
+- `FMassifFluvialBake`: priority-flood pit removal, D8 receivers,
+  drainage accumulation, implicit stream-power solve against the uplift
+  field, world border as base level. ~128 m cells, once per seed,
+  CPU-only, deterministic, never serialized.
+- River polylines extracted from the receiver graph above a discharge
+  threshold, water elevation clamped monotone downstream, uniform
+  spatial index.
+- Field query becomes bake bicubic + discharge-scaled channel carve +
+  gully erosion filter; the orientation lattice is replaced by bake
+  gradients.
+- River-graph growth (`RiverNetwork`) and the M3 GPU erosion passes are
+  deleted, along with their config parameters.
+- **Verify:** tests — bake determinism hash, every cell drains to the
+  border, water elevation monotone downstream, existing field contract
+  tests unchanged. Manual — debug-export heightfield/hillshade show
+  dendritic drainage; fly-through reads as a real massif.
 
 ### M5 — LOD Streaming & Terrain Rendering
 - Quadtree of mesh tiles sampled from the field: the root tile covers the
