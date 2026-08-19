@@ -9,6 +9,7 @@
 #include "GameFramework/PawnMovementComponent.h"
 #include "GameFramework/FloatingPawnMovement.h"
 #include "GameFramework/SpectatorPawn.h"
+#include "MassifTerrainField.h"
 #include "Materials/MaterialInterface.h"
 #include "Terrain/MassifTerrainManager.h"
 #include "UObject/SoftObjectPath.h"
@@ -117,18 +118,9 @@ void AMassifGameMode::SpawnEnvironmentActors()
 	World->SpawnActor<AExponentialHeightFog>();
 }
 
-void AMassifGameMode::GenerateWorldAndSpawnTerrain()
+void AMassifGameMode::ExportWorldGenDebug(const FWorldGenConfig& Config)
 {
-	FWorldGenConfig Config;
-	Config.MasterSeed = CVarMassifSeed.GetValueOnGameThread();
-	Config.Resolution = CVarMassifWorldGenResolution.GetValueOnGameThread();
-	FParse::Value(FCommandLine::Get(), TEXT("MassifSeed="), Config.MasterSeed);
-
-	const double GenerateStartSeconds = FPlatformTime::Seconds();
 	FWorldGenResult Result = FWorldGenPipeline::Generate(Config);
-	UE_LOG(LogTemp, Display, TEXT("WorldGen: seed %d, %dx%d heightfield in %.2f s, hash %016llx"),
-		Config.MasterSeed, Config.Resolution, Config.Resolution,
-		FPlatformTime::Seconds() - GenerateStartSeconds, Result.ComputeHash());
 
 	float MaxNeighborDeltaMeters = 0.0f;
 	for (int32 Index = 0; Index + 1 < Result.HeightMeters.Num(); ++Index)
@@ -145,20 +137,35 @@ void AMassifGameMode::GenerateWorldAndSpawnTerrain()
 		MaxNeighborDeltaMeters, LocalMinimumCount,
 		100.0f * static_cast<float>(LocalMinimumCount) / static_cast<float>(Result.HeightMeters.Num()));
 
+	const FString ExportDirectory = FPaths::ProjectSavedDir() / TEXT("WorldGenDebug");
+	const bool bExported = FWorldGenDebugExport::SaveHeightfieldPngs(Result, ExportDirectory);
+	UE_LOG(LogTemp, Display, TEXT("WorldGen debug export %s: %s"),
+		bExported ? TEXT("written to") : TEXT("FAILED for"), *ExportDirectory);
+	FPlatformMisc::RequestExit(false);
+}
+
+void AMassifGameMode::GenerateWorldAndSpawnTerrain()
+{
+	FWorldGenConfig Config;
+	Config.MasterSeed = CVarMassifSeed.GetValueOnGameThread();
+	Config.Resolution = CVarMassifWorldGenResolution.GetValueOnGameThread();
+	FParse::Value(FCommandLine::Get(), TEXT("MassifSeed="), Config.MasterSeed);
+
 	if (FParse::Param(FCommandLine::Get(), TEXT("MassifExportWorldGen")))
 	{
-		const FString ExportDirectory = FPaths::ProjectSavedDir() / TEXT("WorldGenDebug");
-		const bool bExported = FWorldGenDebugExport::SaveHeightfieldPngs(Result, ExportDirectory);
-		UE_LOG(LogTemp, Display, TEXT("WorldGen debug export %s: %s"),
-			bExported ? TEXT("written to") : TEXT("FAILED for"), *ExportDirectory);
-		FPlatformMisc::RequestExit(false);
+		ExportWorldGenDebug(Config);
 		return;
 	}
+
+	const double FieldStartSeconds = FPlatformTime::Seconds();
+	TSharedPtr<const FMassifTerrainField> Field = MakeShared<const FMassifTerrainField>(Config);
+	UE_LOG(LogTemp, Display, TEXT("WorldGen: seed %d, terrain field over %.0f m built in %.2f s"),
+		Config.MasterSeed, Config.WorldSizeMeters, FPlatformTime::Seconds() - FieldStartSeconds);
 
 	SpawnAltitudeMeters = Config.MaxAltitudeMeters + 2200.0f;
 
 	AMassifTerrainManager* TerrainManager = GetWorld()->SpawnActor<AMassifTerrainManager>();
-	TerrainManager->Initialize(MakeShared<FWorldGenResult>(MoveTemp(Result)), LoadTerrainMaterial());
+	TerrainManager->Initialize(Field, LoadTerrainMaterial());
 }
 
 void AMassifGameMode::ConfigureSpectatorPawn()

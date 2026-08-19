@@ -3,100 +3,19 @@
 #include "Async/Async.h"
 #include "Components/DynamicMeshComponent.h"
 #include "DynamicMesh/DynamicMesh3.h"
-#include "DynamicMesh/DynamicMeshAttributeSet.h"
-#include "Generators/RectangleMeshGenerator.h"
 #include "Kismet/GameplayStatics.h"
+#include "MassifTerrainField.h"
+#include "MassifTerrainTileMesh.h"
 
 using UE::Geometry::FDynamicMesh3;
-using UE::Geometry::FDynamicMeshNormalOverlay;
 
 namespace
 {
-	constexpr float MetersToCentimeters = 100.0f;
+	constexpr double MetersToCentimeters = 100.0;
 
-	FVector3f AnalyticNormal(const FWorldGenResult& WorldGen, float WorldXMeters, float WorldYMeters)
+	uint64 PackNodeKey(int32 Depth, int32 GridX, int32 GridY)
 	{
-		return WorldGen.SampleNormal(WorldXMeters, WorldYMeters);
-	}
-
-	void DisplaceGridToHeightfield(FDynamicMesh3& Mesh, const FWorldGenResult& WorldGen, const FVector2f ChunkCenterMeters)
-	{
-		for (const int32 VertexId : Mesh.VertexIndicesItr())
-		{
-			const FVector3d LocalPosition = Mesh.GetVertex(VertexId);
-			const float WorldXMeters = ChunkCenterMeters.X + static_cast<float>(LocalPosition.X) / MetersToCentimeters;
-			const float WorldYMeters = ChunkCenterMeters.Y + static_cast<float>(LocalPosition.Y) / MetersToCentimeters;
-			const float AltitudeMeters = WorldGen.SampleHeightMeters(WorldXMeters, WorldYMeters);
-			Mesh.SetVertex(VertexId, FVector3d(LocalPosition.X, LocalPosition.Y, AltitudeMeters * MetersToCentimeters));
-		}
-	}
-
-	void AppendSkirts(FDynamicMesh3& Mesh, float SkirtDropCentimeters)
-	{
-		TArray<int32> BoundaryEdges;
-		for (const int32 EdgeId : Mesh.BoundaryEdgeIndicesItr())
-		{
-			BoundaryEdges.Add(EdgeId);
-		}
-
-		for (const int32 EdgeId : BoundaryEdges)
-		{
-			const UE::Geometry::FIndex2i EdgeVertices = Mesh.GetEdgeV(EdgeId);
-			const FVector3d PositionA = Mesh.GetVertex(EdgeVertices.A);
-			const FVector3d PositionB = Mesh.GetVertex(EdgeVertices.B);
-			const int32 DroppedA = Mesh.AppendVertex(PositionA - FVector3d(0, 0, SkirtDropCentimeters));
-			const int32 DroppedB = Mesh.AppendVertex(PositionB - FVector3d(0, 0, SkirtDropCentimeters));
-			Mesh.AppendTriangle(EdgeVertices.A, EdgeVertices.B, DroppedB);
-			Mesh.AppendTriangle(EdgeVertices.A, DroppedB, DroppedA);
-		}
-	}
-
-	void WriteAnalyticNormals(FDynamicMesh3& Mesh, const FWorldGenResult& WorldGen, const FVector2f ChunkCenterMeters)
-	{
-		Mesh.EnableAttributes();
-		FDynamicMeshNormalOverlay* NormalOverlay = Mesh.Attributes()->PrimaryNormals();
-		NormalOverlay->ClearElements();
-
-		TArray<int32> VertexToElement;
-		VertexToElement.SetNumUninitialized(Mesh.MaxVertexID());
-		for (const int32 VertexId : Mesh.VertexIndicesItr())
-		{
-			const FVector3d LocalPosition = Mesh.GetVertex(VertexId);
-			const float WorldXMeters = ChunkCenterMeters.X + static_cast<float>(LocalPosition.X) / MetersToCentimeters;
-			const float WorldYMeters = ChunkCenterMeters.Y + static_cast<float>(LocalPosition.Y) / MetersToCentimeters;
-			VertexToElement[VertexId] = NormalOverlay->AppendElement(AnalyticNormal(WorldGen, WorldXMeters, WorldYMeters));
-		}
-
-		for (const int32 TriangleId : Mesh.TriangleIndicesItr())
-		{
-			const UE::Geometry::FIndex3i Triangle = Mesh.GetTriangle(TriangleId);
-			NormalOverlay->SetTriangle(TriangleId,
-				UE::Geometry::FIndex3i(VertexToElement[Triangle.A], VertexToElement[Triangle.B], VertexToElement[Triangle.C]));
-		}
-	}
-
-	TSharedPtr<FDynamicMesh3> BuildChunkMesh(
-		const FWorldGenResult& WorldGen, FVector2f ChunkCenterMeters, float ChunkSizeMeters, int32 ChunkQuadCount, int32 Step)
-	{
-		const int32 QuadsPerSide = FMath::Max(1, ChunkQuadCount / Step);
-
-		UE::Geometry::FRectangleMeshGenerator Generator;
-		Generator.Width = ChunkSizeMeters * MetersToCentimeters;
-		Generator.Height = ChunkSizeMeters * MetersToCentimeters;
-		Generator.WidthVertexCount = QuadsPerSide + 1;
-		Generator.HeightVertexCount = QuadsPerSide + 1;
-		Generator.Origin = FVector3d::ZeroVector;
-		Generator.Normal = FVector3f::UnitZ();
-		Generator.Generate();
-
-		TSharedPtr<FDynamicMesh3> Mesh = MakeShared<FDynamicMesh3>(&Generator);
-		DisplaceGridToHeightfield(*Mesh, WorldGen, ChunkCenterMeters);
-
-		const float SkirtDropMeters = 4.0f + 2.0f * static_cast<float>(Step) * WorldGen.MetersPerPixel;
-		AppendSkirts(*Mesh, SkirtDropMeters * MetersToCentimeters);
-		WriteAnalyticNormals(*Mesh, WorldGen, ChunkCenterMeters);
-
-		return Mesh;
+		return (static_cast<uint64>(Depth) << 42) | (static_cast<uint64>(GridY) << 21) | static_cast<uint64>(GridX);
 	}
 }
 
@@ -106,149 +25,239 @@ AMassifTerrainManager::AMassifTerrainManager()
 	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 }
 
-void AMassifTerrainManager::Initialize(TSharedPtr<const FWorldGenResult> InWorldGen, UMaterialInterface* InTerrainMaterial)
+void AMassifTerrainManager::Initialize(TSharedPtr<const FMassifTerrainField> InField, UMaterialInterface* InTerrainMaterial)
 {
-	check(InWorldGen.IsValid() && InWorldGen->IsValid());
-	checkf((InWorldGen->Resolution - 1) % ChunkQuadCount == 0,
-		TEXT("Resolution-1 (%d) must be divisible by chunk quad count (%d)"), InWorldGen->Resolution - 1, ChunkQuadCount);
-
-	WorldGen = InWorldGen;
+	check(InField.IsValid());
+	Field = InField;
 	TerrainMaterial = InTerrainMaterial;
 	FinishedBuilds = MakeShared<FFinishedBuildQueue>();
-	ChunkCountPerSide = (WorldGen->Resolution - 1) / ChunkQuadCount;
-	ChunkSizeMeters = WorldGen->WorldSizeMeters / static_cast<float>(ChunkCountPerSide);
 
-	CreateChunkGrid();
+	// Depth at which one more split would put vertices closer than the finest
+	// spacing worth rendering. 150 km with 64-quad tiles bottoms out around
+	// depth 14, or 14 cm between vertices.
+	const double WorldSizeMeters = Field->GetConfig().WorldSizeMeters;
+	MaxTreeDepth = 0;
+	double VertexSpacingMeters = WorldSizeMeters / TileQuadCount;
+	while (VertexSpacingMeters > FinestVertexSpacingMeters && MaxTreeDepth < 24)
+	{
+		VertexSpacingMeters *= 0.5;
+		++MaxTreeDepth;
+	}
+
+	RootNode = MakeNode(0, 0, 0);
+	RootNode->bRendered = true;
 }
 
-void AMassifTerrainManager::CreateChunkGrid()
+TUniquePtr<AMassifTerrainManager::FQuadNode> AMassifTerrainManager::MakeNode(int32 Depth, int32 GridX, int32 GridY)
 {
-	const float HalfWorldMeters = WorldGen->WorldSizeMeters * 0.5f;
-	Chunks.SetNum(ChunkCountPerSide * ChunkCountPerSide);
-	ChunkComponents.SetNum(Chunks.Num());
+	const double WorldSizeMeters = Field->GetConfig().WorldSizeMeters;
+	const double SizeMeters = WorldSizeMeters / static_cast<double>(1 << Depth);
 
-	for (int32 ChunkIndex = 0; ChunkIndex < Chunks.Num(); ++ChunkIndex)
-	{
-		const int32 ChunkX = ChunkIndex % ChunkCountPerSide;
-		const int32 ChunkY = ChunkIndex / ChunkCountPerSide;
-		FChunkState& Chunk = Chunks[ChunkIndex];
-		Chunk.CenterMeters = FVector2f(
-			-HalfWorldMeters + (static_cast<float>(ChunkX) + 0.5f) * ChunkSizeMeters,
-			-HalfWorldMeters + (static_cast<float>(ChunkY) + 0.5f) * ChunkSizeMeters);
-
-		UDynamicMeshComponent* Component = NewObject<UDynamicMeshComponent>(this);
-		Component->SetupAttachment(RootComponent);
-		Component->RegisterComponent();
-		Component->SetWorldLocation(FVector(Chunk.CenterMeters.X, Chunk.CenterMeters.Y, 0.0) * MetersToCentimeters);
-		Component->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		Component->SetMaterial(0, TerrainMaterial);
-		ChunkComponents[ChunkIndex] = Component;
-	}
+	TUniquePtr<FQuadNode> Node = MakeUnique<FQuadNode>();
+	Node->Key = PackNodeKey(Depth, GridX, GridY);
+	Node->Depth = Depth;
+	Node->SizeMeters = SizeMeters;
+	Node->CenterMeters = FVector2d(
+		-WorldSizeMeters * 0.5 + (GridX + 0.5) * SizeMeters,
+		-WorldSizeMeters * 0.5 + (GridY + 0.5) * SizeMeters);
+	Node->CenterAltitudeMeters = Field->SampleHeightMeters(Node->CenterMeters, SizeMeters / TileQuadCount);
+	LiveNodes.Add(Node->Key, Node.Get());
+	return Node;
 }
 
 void AMassifTerrainManager::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
-	if (!WorldGen.IsValid())
+	if (!Field.IsValid())
 	{
 		return;
 	}
 
 	ApplyFinishedBuilds();
-	LaunchLodBuilds();
+
+	BuildRequests.Reset();
+	UpdateNode(*RootNode, GetViewLocationMeters());
+	LaunchBuilds();
 }
 
-FVector AMassifTerrainManager::GetViewLocation() const
+FVector AMassifTerrainManager::GetViewLocationMeters() const
 {
 	const APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0);
 	if (PlayerController == nullptr || PlayerController->PlayerCameraManager == nullptr)
 	{
 		return FVector::ZeroVector;
 	}
-	return PlayerController->PlayerCameraManager->GetCameraLocation();
+	return PlayerController->PlayerCameraManager->GetCameraLocation() / MetersToCentimeters;
 }
 
-int32 AMassifTerrainManager::DesiredStepForDistance(float DistanceMeters) const
+double AMassifTerrainManager::DistanceToNodeMeters(const FQuadNode& Node, const FVector& ViewMeters) const
 {
-	if (DistanceMeters < 768.0f)
-	{
-		return 1;
-	}
-	if (DistanceMeters < 1536.0f)
-	{
-		return 2;
-	}
-	if (DistanceMeters < 3072.0f)
-	{
-		return 4;
-	}
-	if (DistanceMeters < 6144.0f)
-	{
-		return 8;
-	}
-	return 16;
+	const double HalfSize = Node.SizeMeters * 0.5;
+	const double OutsideX = FMath::Max(FMath::Abs(ViewMeters.X - Node.CenterMeters.X) - HalfSize, 0.0);
+	const double OutsideY = FMath::Max(FMath::Abs(ViewMeters.Y - Node.CenterMeters.Y) - HalfSize, 0.0);
+	const double OutsideZ = ViewMeters.Z - Node.CenterAltitudeMeters;
+	return FMath::Sqrt(OutsideX * OutsideX + OutsideY * OutsideY + OutsideZ * OutsideZ);
 }
 
-void AMassifTerrainManager::LaunchLodBuilds()
+void AMassifTerrainManager::EnsureChildren(FQuadNode& Node)
 {
-	const FVector ViewLocationMeters = GetViewLocation() / MetersToCentimeters;
-
-	struct FBuildCandidate
+	if (Node.Children[0].IsValid())
 	{
-		int32 ChunkIndex = INDEX_NONE;
-		int32 DesiredStep = 0;
-		float DistanceMeters = 0.0f;
-	};
-	TArray<FBuildCandidate> Candidates;
-
-	for (int32 ChunkIndex = 0; ChunkIndex < Chunks.Num(); ++ChunkIndex)
+		return;
+	}
+	const int32 ChildBaseX = 2 * static_cast<int32>(Node.Key & 0x1FFFFF);
+	const int32 ChildBaseY = 2 * static_cast<int32>((Node.Key >> 21) & 0x1FFFFF);
+	for (int32 ChildIndex = 0; ChildIndex < 4; ++ChildIndex)
 	{
-		const FChunkState& Chunk = Chunks[ChunkIndex];
-		const float GroundAltitudeMeters = WorldGen->SampleHeightMeters(Chunk.CenterMeters.X, Chunk.CenterMeters.Y);
-		const FVector ChunkCenter(Chunk.CenterMeters.X, Chunk.CenterMeters.Y, GroundAltitudeMeters);
-		const float DistanceMeters = static_cast<float>(FVector::Dist(ViewLocationMeters, ChunkCenter));
-		const int32 DesiredStep = DesiredStepForDistance(DistanceMeters);
-		const bool bNeedsBuild = Chunk.PendingStep == 0 && Chunk.CurrentStep != DesiredStep;
-		if (bNeedsBuild)
+		Node.Children[ChildIndex] = MakeNode(Node.Depth + 1, ChildBaseX + (ChildIndex & 1), ChildBaseY + (ChildIndex >> 1));
+	}
+}
+
+bool AMassifTerrainManager::AreAllChildrenReady(const FQuadNode& Node) const
+{
+	for (int32 ChildIndex = 0; ChildIndex < 4; ++ChildIndex)
+	{
+		if (!Node.Children[ChildIndex].IsValid() || !Node.Children[ChildIndex]->bMeshReady)
 		{
-			Candidates.Add({ ChunkIndex, DesiredStep, DistanceMeters });
+			return false;
+		}
+	}
+	return true;
+}
+
+void AMassifTerrainManager::ActivateChildren(FQuadNode& Node)
+{
+	Node.bChildrenActive = true;
+	Node.bRendered = false;
+	SetNodeVisibility(Node, false);
+	for (int32 ChildIndex = 0; ChildIndex < 4; ++ChildIndex)
+	{
+		Node.Children[ChildIndex]->bRendered = true;
+		SetNodeVisibility(*Node.Children[ChildIndex], true);
+	}
+}
+
+void AMassifTerrainManager::CollapseChildren(FQuadNode& Node)
+{
+	Node.bChildrenActive = false;
+	Node.bRendered = true;
+	SetNodeVisibility(Node, true);
+	for (int32 ChildIndex = 0; ChildIndex < 4; ++ChildIndex)
+	{
+		DestroySubtree(*Node.Children[ChildIndex]);
+		Node.Children[ChildIndex].Reset();
+	}
+}
+
+void AMassifTerrainManager::DestroySubtree(FQuadNode& Node)
+{
+	for (int32 ChildIndex = 0; ChildIndex < 4; ++ChildIndex)
+	{
+		if (Node.Children[ChildIndex].IsValid())
+		{
+			DestroySubtree(*Node.Children[ChildIndex]);
+			Node.Children[ChildIndex].Reset();
+		}
+	}
+	ReleaseComponent(Node);
+	LiveNodes.Remove(Node.Key);
+}
+
+void AMassifTerrainManager::UpdateNode(FQuadNode& Node, const FVector& ViewMeters)
+{
+	const double DistanceMeters = DistanceToNodeMeters(Node, ViewMeters);
+	const bool bWantSplit = Node.Depth < MaxTreeDepth && DistanceMeters < Node.SizeMeters * SplitDistanceFactor;
+
+	if (bWantSplit && !Node.bChildrenActive)
+	{
+		EnsureChildren(Node);
+		if (AreAllChildrenReady(Node))
+		{
+			ActivateChildren(Node);
 		}
 	}
 
-	Candidates.Sort([](const FBuildCandidate& Left, const FBuildCandidate& Right)
+	if (Node.bChildrenActive)
+	{
+		const bool bWantMerge = DistanceMeters > Node.SizeMeters * MergeDistanceFactor;
+		if (bWantMerge && Node.bMeshReady)
+		{
+			CollapseChildren(Node);
+			return;
+		}
+		for (int32 ChildIndex = 0; ChildIndex < 4; ++ChildIndex)
+		{
+			UpdateNode(*Node.Children[ChildIndex], ViewMeters);
+		}
+		if (bWantMerge)
+		{
+			RequestBuild(Node, DistanceMeters);
+		}
+		return;
+	}
+
+	// This node draws its area. Its own mesh may still be pending, and children
+	// created for a split build theirs until all four are ready. Children of a
+	// split that never activated are kept through the hysteresis band and
+	// dropped once the camera is clearly gone.
+	RequestBuild(Node, DistanceMeters);
+	if (!Node.Children[0].IsValid())
+	{
+		return;
+	}
+	if (DistanceMeters > Node.SizeMeters * MergeDistanceFactor)
+	{
+		for (int32 ChildIndex = 0; ChildIndex < 4; ++ChildIndex)
+		{
+			DestroySubtree(*Node.Children[ChildIndex]);
+			Node.Children[ChildIndex].Reset();
+		}
+		return;
+	}
+	for (int32 ChildIndex = 0; ChildIndex < 4; ++ChildIndex)
+	{
+		RequestBuild(*Node.Children[ChildIndex], DistanceMeters);
+	}
+}
+
+void AMassifTerrainManager::RequestBuild(FQuadNode& Node, double DistanceMeters)
+{
+	if (Node.bMeshReady || Node.bBuildInFlight)
+	{
+		return;
+	}
+	BuildRequests.Add({ &Node, DistanceMeters });
+}
+
+void AMassifTerrainManager::LaunchBuilds()
+{
+	BuildRequests.Sort([](const FBuildRequest& Left, const FBuildRequest& Right)
 	{
 		return Left.DistanceMeters < Right.DistanceMeters;
 	});
 
-	for (const FBuildCandidate& Candidate : Candidates)
+	for (const FBuildRequest& Request : BuildRequests)
 	{
 		if (InFlightBuildCount >= MaxInFlightBuilds)
 		{
-			break;
+			return;
 		}
-		LaunchBuild(Candidate.ChunkIndex, Candidate.DesiredStep);
+		Request.Node->bBuildInFlight = true;
+		++InFlightBuildCount;
+
+		TSharedPtr<const FMassifTerrainField> FieldRef = Field;
+		TSharedPtr<FFinishedBuildQueue> QueueRef = FinishedBuilds;
+		const uint64 NodeKey = Request.Node->Key;
+		const FVector2d CenterMeters = Request.Node->CenterMeters;
+		const double SizeMeters = Request.Node->SizeMeters;
+		Async(EAsyncExecution::ThreadPool, [FieldRef, QueueRef, NodeKey, CenterMeters, SizeMeters]()
+		{
+			FFinishedBuild Finished;
+			Finished.NodeKey = NodeKey;
+			Finished.Mesh = MassifTerrainTileMesh::BuildTileMesh(*FieldRef, CenterMeters, SizeMeters, TileQuadCount);
+			QueueRef->Enqueue(MoveTemp(Finished));
+		});
 	}
-}
-
-void AMassifTerrainManager::LaunchBuild(int32 ChunkIndex, int32 Step)
-{
-	FChunkState& Chunk = Chunks[ChunkIndex];
-	Chunk.PendingStep = Step;
-	++InFlightBuildCount;
-
-	TSharedPtr<const FWorldGenResult> WorldGenRef = WorldGen;
-	TSharedPtr<FFinishedBuildQueue> QueueRef = FinishedBuilds;
-	const FVector2f CenterMeters = Chunk.CenterMeters;
-	const float SizeMeters = ChunkSizeMeters;
-
-	Async(EAsyncExecution::ThreadPool, [WorldGenRef, QueueRef, ChunkIndex, Step, CenterMeters, SizeMeters]()
-	{
-		FFinishedBuild Finished;
-		Finished.ChunkIndex = ChunkIndex;
-		Finished.Step = Step;
-		Finished.Mesh = BuildChunkMesh(*WorldGenRef, CenterMeters, SizeMeters, ChunkQuadCount, Step);
-		QueueRef->Enqueue(MoveTemp(Finished));
-	});
 }
 
 void AMassifTerrainManager::ApplyFinishedBuilds()
@@ -257,12 +266,60 @@ void AMassifTerrainManager::ApplyFinishedBuilds()
 	FFinishedBuild Finished;
 	while (AppliedCount < MaxMeshApplicationsPerFrame && FinishedBuilds->Dequeue(Finished))
 	{
-		FChunkState& Chunk = Chunks[Finished.ChunkIndex];
-		Chunk.CurrentStep = Finished.Step;
-		Chunk.PendingStep = 0;
 		--InFlightBuildCount;
+		FQuadNode** NodePointer = LiveNodes.Find(Finished.NodeKey);
+		if (NodePointer == nullptr)
+		{
+			// The subtree was collapsed while this build was in flight.
+			continue;
+		}
 
-		ChunkComponents[Finished.ChunkIndex]->SetMesh(MoveTemp(*Finished.Mesh));
+		FQuadNode& Node = **NodePointer;
+		Node.bBuildInFlight = false;
+		Node.bMeshReady = true;
+		if (Node.ComponentIndex == INDEX_NONE)
+		{
+			Node.ComponentIndex = AcquireComponent();
+		}
+		UDynamicMeshComponent* Component = ComponentPool[Node.ComponentIndex];
+		Component->SetWorldLocation(FVector(Node.CenterMeters.X, Node.CenterMeters.Y, 0.0) * MetersToCentimeters);
+		Component->SetMesh(MoveTemp(*Finished.Mesh));
+		Component->SetVisibility(Node.bRendered);
 		++AppliedCount;
+	}
+}
+
+int32 AMassifTerrainManager::AcquireComponent()
+{
+	if (FreeComponentIndices.Num() > 0)
+	{
+		return FreeComponentIndices.Pop();
+	}
+
+	UDynamicMeshComponent* Component = NewObject<UDynamicMeshComponent>(this);
+	Component->SetupAttachment(RootComponent);
+	Component->RegisterComponent();
+	Component->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	Component->SetMaterial(0, TerrainMaterial);
+	Component->SetVisibility(false);
+	return ComponentPool.Add(Component);
+}
+
+void AMassifTerrainManager::ReleaseComponent(FQuadNode& Node)
+{
+	if (Node.ComponentIndex == INDEX_NONE)
+	{
+		return;
+	}
+	ComponentPool[Node.ComponentIndex]->SetVisibility(false);
+	FreeComponentIndices.Add(Node.ComponentIndex);
+	Node.ComponentIndex = INDEX_NONE;
+}
+
+void AMassifTerrainManager::SetNodeVisibility(FQuadNode& Node, bool bVisible)
+{
+	if (Node.ComponentIndex != INDEX_NONE)
+	{
+		ComponentPool[Node.ComponentIndex]->SetVisibility(bVisible);
 	}
 }

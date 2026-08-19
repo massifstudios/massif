@@ -21,6 +21,7 @@ public:
 
 private:
 	void GenerateWorldAndSpawnTerrain();
+	void ExportWorldGenDebug(const struct FWorldGenConfig& Config);
 	void SpawnEnvironmentActors();
 	void ConfigureSpectatorPawn();
 	void ScheduleDebugScreenshot();

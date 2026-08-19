@@ -84,15 +84,20 @@ playable throughout. See ARCHITECTURE §5 and §12.
   ground level out to the 150 km horizon.
 
 ### M5 — LOD Streaming & Terrain Rendering
-- Clipmap rings sampled from the field, ~10 cm at the camera doubling
-  outward to the world edge, with vertex morphing across ring boundaries.
-- Replaces the fixed 128 m Geometry Script chunks from M1.
+- Quadtree of mesh tiles sampled from the field: the root tile covers the
+  whole world, tiles near the camera split in four down to ~14 cm vertex
+  spacing. One component per tile, so engine frustum culling applies.
+  **Done** — splits and merges swap only once replacement meshes are
+  built, skirts hide depth boundaries; startup no longer materialises a
+  preview window.
+- Still open: vertex morphing across depth boundaries (skirt-only now, so
+  fine detail pops in as tiles split), and collision meshes for gameplay.
 - Resident tile manager (§5.4): 512 m tiles generated on demand around
   camera and player activity, evicted when far, keyed by tile coordinate.
-- **Verify:** tests — tile residency is deterministic and independent of
-  the order tiles are requested; a tile generated alone matches the same
-  tile generated as a neighbour of another. Manual — fly and ski with no
-  seams, popping, or terracing at ring boundaries.
+  Not needed until something persists per-tile state.
+- **Verify:** tests — a tile mesh matches the field exactly, its skirt
+  closes the boundary. Manual — fly from ground level to the horizon with
+  no seams or holes.
 
 ### M6 — Masks, Textured Terrain & PCG Forests
 - Derived masks from eroded terrain: flow accumulation, deposition,
