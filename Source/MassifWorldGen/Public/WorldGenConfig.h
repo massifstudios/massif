@@ -73,16 +73,21 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	float BakeConvergenceMeters = 0.5f;
 
 	/**
-	 * Erodibility and step size folded into one coefficient: the implicit
-	 * update uses F = factor * area^exponent / distance. Higher cuts channels
-	 * flatter and reaches steady state in fewer iterations.
+	 * Erodibility and step size folded into one coefficient. A ridge cell's
+	 * steady-state drop towards its receiver is uplift-per-step over this, so
+	 * it directly sets hillslope steepness.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
-	float BakeStreamPowerFactor = 0.5f;
+	float BakeStreamPowerFactor = 0.7f;
 
-	/** Exponent on drained area in the stream power law. */
+	/**
+	 * Exponent on drained area in the stream power law. Higher concentrates
+	 * erosion in the big rivers: trunk valleys run broad and flat while small
+	 * drainages barely dent the ranges, which is what keeps massifs whole
+	 * instead of dissecting them into fake valleys.
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
-	float BakeDrainageExponent = 0.5f;
+	float BakeDrainageExponent = 0.55f;
 
 	/**
 	 * Uplift added per iteration on a range axis. Steady-state relief scales
@@ -96,9 +101,17 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
 	float BakeBasinUpliftFraction = 0.1f;
 
+	/**
+	 * Drained cells below which fluvial erosion fades out. 1 disables. Keep
+	 * mild: starving hillslopes of erosion entirely lets uplift inflate them
+	 * into worm ridges between the channels that still cut.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
+	float BakeChannelInitCells = 1.0f;
+
 	/** 0..1 blend towards the four-neighbour mean each iteration, for softer interfluves. 0 disables. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
-	float BakeHillslopeSmoothing = 0.15f;
+	float BakeHillslopeSmoothing = 0.2f;
 
 	/**
 	 * Fractal relief the solve starts from, as a share of the height between
@@ -119,7 +132,7 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	 * channel carve puts sub-cell sharpness back along the smoothed polylines.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
-	int32 BakePostSmoothPasses = 2;
+	int32 BakePostSmoothPasses = 3;
 
 	/**
 	 * Smooth domain warp on every bake sample, a couple of cell sizes strong.
@@ -127,10 +140,10 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	 * bends those straight lines at render time. Zero disables.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
-	float BakeSampleWarpMeters = 260.0f;
+	float BakeSampleWarpMeters = 400.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
-	float BakeSampleWarpWavelengthMeters = 2600.0f;
+	float BakeSampleWarpWavelengthMeters = 4000.0f;
 
 	/** Drained area above which a cell counts as a channel and joins the river polylines. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|FluvialBake")
@@ -142,10 +155,10 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	 * under a hard cap. The caps bound how far a carve query has to look.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Channels")
-	float ChannelWidthPerSqrtArea = 0.008f;
+	float ChannelWidthPerSqrtArea = 0.012f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Channels")
-	float ChannelMaxFloorHalfWidthMeters = 120.0f;
+	float ChannelMaxFloorHalfWidthMeters = 250.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Channels")
 	float ChannelSideWidthPerSqrtArea = 0.025f;
@@ -157,7 +170,7 @@ struct MASSIFWORLDGEN_API FWorldGenConfig
 	float ChannelDepthPerSqrtArea = 0.0015f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|Channels")
-	float ChannelNotchDepthCapMeters = 25.0f;
+	float ChannelNotchDepthCapMeters = 60.0f;
 
 	/** Gully scales the erosion filter cuts, coarsest first; 0 leaves the macro surface bare. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WorldGen|ErosionFilter")

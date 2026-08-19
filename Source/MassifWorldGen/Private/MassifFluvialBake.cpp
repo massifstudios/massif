@@ -332,10 +332,27 @@ namespace
 			{
 				return 0.0;
 			}
+			// Drained area is normalised to cells and distance to the cell
+			// size, so the factor means the same thing at any bake resolution:
+			// a ridge cell's steady-state drop towards its receiver is
+			// uplift-per-step over the factor. The exponent then sets how much
+			// flatter a big river runs than a headwater — the concavity that
+			// gathers relief into massifs with broad valleys between them.
 			const int32 Receiver = ReceiverIndices[CellIndex];
-			const double ErosionFactor = static_cast<double>(Config.BakeStreamPowerFactor)
-				* FMath::Pow(DrainageAreaSquareMeters[CellIndex], static_cast<double>(Config.BakeDrainageExponent))
-				/ ReceiverDistanceMeters[CellIndex];
+			const double DrainedCells = DrainageAreaSquareMeters[CellIndex] / (CellSizeMeters * CellSizeMeters);
+			// Above 1, the channel-initiation area holds fluvial erosion off the
+			// smallest drainages. Kept mild or off: starving hillslopes of
+			// erosion entirely lets uplift inflate them into worm ridges
+			// between the channels that still cut.
+			const double ChannelInitCells = static_cast<double>(Config.BakeChannelInitCells);
+			double Channelisation = 1.0;
+			if (ChannelInitCells > 1.0)
+			{
+				Channelisation = FMath::Clamp((DrainedCells - ChannelInitCells) / ChannelInitCells, 0.0, 1.0);
+			}
+			const double ErosionFactor = Channelisation * static_cast<double>(Config.BakeStreamPowerFactor)
+				* FMath::Pow(DrainedCells, static_cast<double>(Config.BakeDrainageExponent))
+				* CellSizeMeters / ReceiverDistanceMeters[CellIndex];
 			const double PreviousHeight = HeightMeters[CellIndex];
 			const double RaisedHeight = PreviousHeight + UpliftStepMeters[CellIndex];
 			const double ErodedHeight = (RaisedHeight + ErosionFactor * HeightMeters[Receiver]) / (1.0 + ErosionFactor);
