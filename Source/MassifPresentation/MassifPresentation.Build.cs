@@ -22,7 +22,9 @@ public class MassifPresentation : ModuleRules
 		{
 			"GeometryCore",
 			"GeometryFramework",
-			"GeometryScriptingCore"
+			"GeometryScriptingCore",
+			"Slate",
+			"SlateCore"
 		});
 	}
 }

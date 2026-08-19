@@ -44,6 +44,9 @@ private:
 	void PollGullyKnobs();
 	void RebuildTerrainField(const FWorldGenConfig& Config, bool bReuseBake);
 
+	/** F1: slider overlay over the massif.* console variables. */
+	void ToggleTuningPanel();
+
 	TSharedPtr<const FMassifTerrainField> TerrainField;
 
 	UPROPERTY()
@@ -51,6 +54,9 @@ private:
 
 	FWorldGenConfig PendingKnobConfig;
 	double PendingKnobsSinceSeconds = -1.0;
+
+	TSharedPtr<SWidget> TuningPanel;
+	bool bTuningPanelVisible = false;
 
 	float SpawnAltitudeMeters = 0.0f;
 };

@@ -9,10 +9,14 @@
 #include "GameFramework/PawnMovementComponent.h"
 #include "GameFramework/FloatingPawnMovement.h"
 #include "GameFramework/SpectatorPawn.h"
+#include "Components/InputComponent.h"
+#include "Engine/GameViewportClient.h"
 #include "MassifTerrainField.h"
+#include "MassifTuningPanel.h"
 #include "Materials/MaterialInterface.h"
 #include "Terrain/MassifTerrainManager.h"
 #include "UObject/SoftObjectPath.h"
+#include "Widgets/Layout/SBox.h"
 #include "WorldGenDebugExport.h"
 #include "WorldGenPipeline.h"
 
@@ -169,6 +173,40 @@ void AMassifGameMode::PollGullyKnobs()
 	RebuildTerrainField(Desired, true);
 }
 
+void AMassifGameMode::ToggleTuningPanel()
+{
+	UGameViewportClient* Viewport = GetWorld()->GetGameViewport();
+	APlayerController* PlayerController = GetWorld()->GetFirstPlayerController();
+	if (Viewport == nullptr || PlayerController == nullptr)
+	{
+		return;
+	}
+
+	if (bTuningPanelVisible)
+	{
+		Viewport->RemoveViewportWidgetContent(TuningPanel.ToSharedRef());
+		PlayerController->SetShowMouseCursor(false);
+		PlayerController->SetInputMode(FInputModeGameOnly());
+		bTuningPanelVisible = false;
+		return;
+	}
+
+	if (!TuningPanel.IsValid())
+	{
+		TuningPanel = SNew(SBox).HAlign(HAlign_Left).VAlign(VAlign_Top).Padding(FMargin(20.0f))
+		[
+			SNew(SBox).WidthOverride(430.0f)
+			[
+				SNew(SMassifTuningPanel)
+			]
+		];
+	}
+	Viewport->AddViewportWidgetContent(TuningPanel.ToSharedRef());
+	PlayerController->SetShowMouseCursor(true);
+	PlayerController->SetInputMode(FInputModeGameAndUI());
+	bTuningPanelVisible = true;
+}
+
 void AMassifGameMode::RebuildTerrainField(const FWorldGenConfig& Config, bool bReuseBake)
 {
 	const double StartSeconds = FPlatformTime::Seconds();
@@ -258,9 +296,17 @@ void AMassifGameMode::ExportWorldGenDebug(const FWorldGenConfig& Config)
 				FMath::Abs(Result.HeightMeters[Index + 1] - Result.HeightMeters[Index]));
 		}
 	}
+	float LowestMeters = TNumericLimits<float>::Max();
+	float HighestMeters = TNumericLimits<float>::Lowest();
+	for (const float HeightMeters : Result.HeightMeters)
+	{
+		LowestMeters = FMath::Min(LowestMeters, HeightMeters);
+		HighestMeters = FMath::Max(HighestMeters, HeightMeters);
+	}
+
 	const int32 LocalMinimumCount = Result.CountLocalMinima();
-	UE_LOG(LogTemp, Display, TEXT("WorldGen sanity: max neighbor height delta %.1f m, %d pits (%.3f%% of cells)"),
-		MaxNeighborDeltaMeters, LocalMinimumCount,
+	UE_LOG(LogTemp, Display, TEXT("WorldGen sanity: altitude %.0f-%.0f m, max neighbor height delta %.1f m, %d pits (%.3f%% of cells)"),
+		LowestMeters, HighestMeters, MaxNeighborDeltaMeters, LocalMinimumCount,
 		100.0f * static_cast<float>(LocalMinimumCount) / static_cast<float>(Result.HeightMeters.Num()));
 
 	const FString ExportDirectory = FPaths::ProjectSavedDir() / TEXT("WorldGenDebug");
@@ -311,6 +357,15 @@ void AMassifGameMode::ConfigureSpectatorPawn()
 	APawn* Pawn = PlayerController->GetPawn();
 	Pawn->SetActorLocation(FVector(0.0, -300000.0, SpawnAltitudeMeters * 100.0));
 	PlayerController->SetControlRotation(FRotator(-22.0f, 90.0f, 0.0f));
+
+	if (PlayerController->InputComponent != nullptr)
+	{
+		PlayerController->InputComponent->BindKey(EKeys::F1, IE_Pressed, this, &AMassifGameMode::ToggleTuningPanel);
+	}
+	if (GEngine != nullptr)
+	{
+		GEngine->AddOnScreenDebugMessage(INDEX_NONE, 10.0f, FColor::White, TEXT("F1: terrain tuning panel"));
+	}
 
 	UFloatingPawnMovement* Movement = Cast<UFloatingPawnMovement>(Pawn->GetMovementComponent());
 	if (Movement != nullptr)
