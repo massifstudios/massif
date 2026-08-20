@@ -42,17 +42,30 @@ TEXTURE_SOURCE_ROOT = os.path.join(
 )
 TEXTURE_ASSET_ROOT = "/Game/Textures/PolyHaven"
 
-# Two texture sets per surface layer, blended by a macro noise so no single
-# tiling pattern covers a whole mountainside: (group folder, asset name,
-# tiling meters). Deliberately different tiling per variant, so even where
-# the blend lingers the repeats never line up.
+# Two texture sets per surface layer: a detail set at human scale and a macro
+# set tiled an order of magnitude larger — (group folder, asset name, tiling
+# meters). A texture tiled at 10 m repeats a thousand times across a slope
+# seen from a kilometre away and reads as a grid; the macro set repeats a few
+# times over the same slope and reads as terrain. Distance picks between them.
 LAYERS = [
-    ("rock", [("rock", "T_RockFace03", 13.0), ("rock", "T_GrayRocks", 21.0)]),
-    ("ground", [("rock", "T_AerialGrassRock", 7.0), ("ground", "T_RockyTerrain02", 11.0)]),
-    ("snow", [("snow", "T_SnowFieldAerial", 9.0), ("snow", "T_Snow01", 5.0)]),
+    ("rock", [("rock", "T_RockFace03", 12.0), ("rock", "T_GrayRocks", 110.0)]),
+    ("ground", [("rock", "T_AerialGrassRock", 7.0), ("ground", "T_RockyTerrain02", 85.0)]),
+    ("snow", [("snow", "T_Snow01", 5.0), ("snow", "T_SnowFieldAerial", 95.0)]),
 ]
 
-MAP_SUFFIXES = ("D", "N", "R")
+# ARM packs ambient occlusion, roughness and metallic into one Poly Haven map,
+# so the layer gets its occlusion for free out of the sample roughness needed
+# anyway.
+MAP_SUFFIXES = ("D", "N", "ARM")
+
+# Where the detail set gives way to the macro set. The near end sits past the
+# distance a walking player reads individual grains at.
+DETAIL_FADE_START_METERS = 80.0
+DETAIL_FADE_END_METERS = 900.0
+
+# Ceiling on how much macro texture the variant noise mixes into near ground:
+# enough to break the detail repeat, not enough to blur what is underfoot.
+NEAR_MACRO_MIX = 0.45
 
 VARIANT_NOISE_WAVELENGTH_METERS = 340.0
 TINT_NOISE_WAVELENGTH_METERS = 1700.0
@@ -64,9 +77,10 @@ LINE_NOISE_WAVELENGTH_METERS = 420.0
 LINE_NOISE_AMPLITUDE_METERS = 140.0
 
 # Kilometre-scale tint the base color is multiplied by. Two colors rather than
-# one brightness, so distant slopes vary in hue as well as value.
-TINT_COOL = (0.78, 0.86, 0.98)
-TINT_WARM = (1.16, 1.06, 0.88)
+# one brightness, so distant slopes vary in hue as well as value. Kept within
+# a tenth of neutral: a wider swing paints the massif orange.
+TINT_COOL = (0.90, 0.95, 1.04)
+TINT_WARM = (1.07, 1.02, 0.94)
 
 WORLD_ALIGNED_TEXTURE = "/Engine/Functions/Engine_MaterialFunctions01/Texturing/WorldAlignedTexture"
 WORLD_ALIGNED_NORMAL = "/Engine/Functions/Engine_MaterialFunctions01/Texturing/WorldAlignedNormal"
@@ -116,8 +130,11 @@ def make_altitude_meters(material):
 
     # Only the band masks read this, so jittering it here moves the snow and
     # grass lines off their clean horizontal contours in one place.
+    # Four octaves: the coarse one wanders the line over spurs and gullies, the
+    # fine ones fray its edge so it does not read as a drawn curve up close.
     jitter = make_macro_noise(
-        material, LINE_NOISE_WAVELENGTH_METERS, -LINE_NOISE_AMPLITUDE_METERS, LINE_NOISE_AMPLITUDE_METERS, -450
+        material, LINE_NOISE_WAVELENGTH_METERS, -LINE_NOISE_AMPLITUDE_METERS, LINE_NOISE_AMPLITUDE_METERS, -450,
+        levels=4,
     )
     jittered = expr(material, unreal.MaterialExpressionAdd, -1050, -300)
     connect(to_meters, "", jittered, "A")
@@ -212,11 +229,11 @@ def import_one_texture(asset_tools, group, asset_name, suffix):
 
 
 def configure_texture(texture, suffix):
-    """Normal and roughness maps are data, not color: linear, and normals compressed as such."""
+    """Normal and ARM maps are data, not color: linear, and normals compressed as such."""
     if suffix == "N":
         texture.set_editor_property("srgb", False)
         texture.set_editor_property("compression_settings", unreal.TextureCompressionSettings.TC_NORMALMAP)
-    if suffix == "R":
+    if suffix == "ARM":
         texture.set_editor_property("srgb", False)
     unreal.EditorAssetLibrary.save_loaded_asset(texture)
 
@@ -250,6 +267,16 @@ def make_world_aligned_sample(material, function_path, output_name, texture, sam
     connect(texture_object, "", call, "TextureObject")
     connect(texture_size, "", call, "TextureSize")
     return call, output_name
+
+
+def connect_property(pin, material_property):
+    """Same reasoning as connect(): a rejected material property silently drops the whole input."""
+    source, output_name = pin
+    connected = unreal.MaterialEditingLibrary.connect_material_property(
+        source, output_name, material_property
+    )
+    if not connected:
+        raise RuntimeError(f"Could not connect {type(source).__name__}.'{output_name}' to {material_property}")
 
 
 def connect_pin(pin, to_expr, to_input):
@@ -288,27 +315,58 @@ def build_flat_color_graph(material, ground_mask, snow_mask):
     roughness.set_editor_property("const_b", 0.55)
     connect(snow_mask, "", roughness, "Alpha")
 
-    unreal.MaterialEditingLibrary.connect_material_property(
-        final_color, "", unreal.MaterialProperty.MP_BASE_COLOR
-    )
-    unreal.MaterialEditingLibrary.connect_material_property(
-        roughness, "", unreal.MaterialProperty.MP_ROUGHNESS
-    )
+    connect_property((final_color, ""), unreal.MaterialProperty.MP_BASE_COLOR)
+    connect_property((roughness, ""), unreal.MaterialProperty.MP_ROUGHNESS)
 
 
-def make_macro_noise(material, wavelength_meters, output_min, output_max, y):
+def make_macro_noise(material, wavelength_meters, output_min, output_max, y, levels=2):
     noise = expr(material, unreal.MaterialExpressionNoise, -2400, y)
     noise.set_editor_property("scale", 1.0 / (wavelength_meters * 100.0))
     noise.set_editor_property("quality", 2)
-    noise.set_editor_property("levels", 2)
+    noise.set_editor_property("levels", levels)
     noise.set_editor_property("output_min", output_min)
     noise.set_editor_property("output_max", output_max)
     noise.set_editor_property("turbulence", False)
     return noise
 
 
-def make_color_variants(material, textures, layer, variants, variant_mask, y):
-    """One layer's base color: both texture sets world-aligned at their own tiling, blended by the macro mask."""
+def make_distance_fade(material, start_meters, end_meters, y):
+    """0 within the near distance, 1 past the far one."""
+    depth = expr(material, unreal.MaterialExpressionPixelDepth, -2400, y)
+
+    offset = expr(material, unreal.MaterialExpressionSubtract, -2200, y)
+    offset.set_editor_property("const_b", start_meters * 100.0)
+    connect(depth, "", offset, "A")
+
+    scale = expr(material, unreal.MaterialExpressionMultiply, -2050, y)
+    scale.set_editor_property("const_b", 1.0 / ((end_meters - start_meters) * 100.0))
+    connect(offset, "", scale, "A")
+
+    saturate = expr(material, unreal.MaterialExpressionSaturate, -1900, y)
+    connect(scale, "", saturate, "")
+    return saturate
+
+
+def make_macro_weight(material, variant_noise, distance_fade, y):
+    """How much of the macro texture set a pixel gets: noise up close, all of it far out."""
+    weight = expr(material, unreal.MaterialExpressionLinearInterpolate, -1750, y)
+    weight.set_editor_property("const_b", 1.0)
+    connect(variant_noise, "", weight, "A")
+    connect(distance_fade, "", weight, "Alpha")
+    return weight
+
+
+def make_channel(material, pin, channel, x, y):
+    """One channel out of a packed map: ARM carries occlusion in R and roughness in G."""
+    mask = expr(material, unreal.MaterialExpressionComponentMask, x, y)
+    for name in ("r", "g", "b", "a"):
+        mask.set_editor_property(name, name == channel)
+    connect_pin(pin, mask, "")
+    return mask, ""
+
+
+def make_layer_color(material, textures, layer, variants, macro_weight, y):
+    """One layer's base color: detail and macro sets world-aligned at their own tiling."""
     pins = []
     for variant, (_, _, tile_meters) in enumerate(variants):
         pins.append(make_world_aligned_sample(
@@ -319,8 +377,27 @@ def make_color_variants(material, textures, layer, variants, variant_mask, y):
     blend = expr(material, unreal.MaterialExpressionLinearInterpolate, -1250, y)
     connect_pin(pins[0], blend, "A")
     connect_pin(pins[1], blend, "B")
-    connect(variant_mask, "", blend, "Alpha")
+    connect(macro_weight, "", blend, "Alpha")
     return blend, ""
+
+
+def make_layer_normal(material, texture, tile_meters, distance_fade, y):
+    """
+    A layer's normal map, flattened towards the surface normal with distance.
+    Sub-metre normal detail on a slope a kilometre off lands several bumps in
+    one pixel and sparkles as the camera moves; past the fade the geometry
+    carries the shading on its own.
+    """
+    sampled = make_world_aligned_sample(
+        material, WORLD_ALIGNED_NORMAL, "XYZ Texture", texture,
+        unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL, tile_meters, -1600, y,
+    )
+    surface_normal = expr(material, unreal.MaterialExpressionVertexNormalWS, -1400, y + 120)
+    flattened = expr(material, unreal.MaterialExpressionLinearInterpolate, -1250, y)
+    connect_pin(sampled, flattened, "A")
+    connect(surface_normal, "", flattened, "B")
+    connect(distance_fade, "", flattened, "Alpha")
+    return flattened, ""
 
 
 def make_macro_tint(material, tint_noise, y):
@@ -334,32 +411,38 @@ def make_macro_tint(material, tint_noise, y):
     return tint
 
 
-def build_textured_graph(material, textures, ground_mask, snow_mask):
-    variant_mask = make_macro_noise(material, VARIANT_NOISE_WAVELENGTH_METERS, 0.0, 1.0, -1100)
-
-    color_pins = {}
-    normal_pins = {}
-    rough_pins = {}
+def build_layer_pins(material, textures, distance_fade, macro_weight):
+    """Base color, normal, roughness and occlusion for every surface layer."""
+    pins = {"color": {}, "normal": {}, "roughness": {}, "occlusion": {}}
     for index, (layer, variants) in enumerate(LAYERS):
         row = -1400 + index * 900
-        base_tile_meters = variants[0][2]
-        color_pins[layer] = make_color_variants(material, textures, layer, variants, variant_mask, row)
-        # Normal and roughness take the first variant only: a second set of
-        # them costs six more samples for detail the base color already carries.
-        normal_pins[layer] = make_world_aligned_sample(
-            material, WORLD_ALIGNED_NORMAL, "XYZ Texture",
-            textures[(layer, 0, "N")], unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL,
-            base_tile_meters, -1600, row + 420,
+        detail_tile_meters = variants[0][2]
+        pins["color"][layer] = make_layer_color(material, textures, layer, variants, macro_weight, row)
+        pins["normal"][layer] = make_layer_normal(
+            material, textures[(layer, 0, "N")], detail_tile_meters, distance_fade, row + 420
         )
-        rough_pins[layer] = make_world_aligned_sample(
+        # Normal and ARM take the detail set only: a second set of them costs
+        # six more samples for detail the base color already carries.
+        packed = make_world_aligned_sample(
             material, WORLD_ALIGNED_TEXTURE, "XYZ Texture",
-            textures[(layer, 0, "R")], unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_COLOR,
-            base_tile_meters, -1600, row + 620,
+            textures[(layer, 0, "ARM")], unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_COLOR,
+            detail_tile_meters, -1600, row + 640,
         )
+        pins["occlusion"][layer] = make_channel(material, packed, "r", -1250, row + 640)
+        pins["roughness"][layer] = make_channel(material, packed, "g", -1250, row + 720)
+    return pins
 
-    blended_color = make_layer_blend(material, color_pins, ground_mask, snow_mask, -200, -400)
-    roughness = make_layer_blend(material, rough_pins, ground_mask, snow_mask, -200, 200)
-    world_normal = make_layer_blend(material, normal_pins, ground_mask, snow_mask, -200, 500)
+
+def build_textured_graph(material, textures, ground_mask, snow_mask):
+    distance_fade = make_distance_fade(material, DETAIL_FADE_START_METERS, DETAIL_FADE_END_METERS, -1600)
+    variant_noise = make_macro_noise(material, VARIANT_NOISE_WAVELENGTH_METERS, 0.0, NEAR_MACRO_MIX, -1100)
+    macro_weight = make_macro_weight(material, variant_noise, distance_fade, -1100)
+
+    pins = build_layer_pins(material, textures, distance_fade, macro_weight)
+    blended_color = make_layer_blend(material, pins["color"], ground_mask, snow_mask, -200, -400)
+    roughness = make_layer_blend(material, pins["roughness"], ground_mask, snow_mask, -200, 200)
+    world_normal = make_layer_blend(material, pins["normal"], ground_mask, snow_mask, -200, 500)
+    occlusion = make_layer_blend(material, pins["occlusion"], ground_mask, snow_mask, -200, 800)
 
     tint_noise = make_macro_noise(material, TINT_NOISE_WAVELENGTH_METERS, 0.0, 1.0, -1250)
     final_color = expr(material, unreal.MaterialExpressionMultiply, 150, -400)
@@ -367,15 +450,10 @@ def build_textured_graph(material, textures, ground_mask, snow_mask):
     connect(make_macro_tint(material, tint_noise, -250), "", final_color, "B")
 
     material.set_editor_property("tangent_space_normal", False)
-    unreal.MaterialEditingLibrary.connect_material_property(
-        final_color, "", unreal.MaterialProperty.MP_BASE_COLOR
-    )
-    unreal.MaterialEditingLibrary.connect_material_property(
-        roughness, "", unreal.MaterialProperty.MP_ROUGHNESS
-    )
-    unreal.MaterialEditingLibrary.connect_material_property(
-        world_normal, "", unreal.MaterialProperty.MP_NORMAL
-    )
+    connect_property((final_color, ""), unreal.MaterialProperty.MP_BASE_COLOR)
+    connect_property((roughness, ""), unreal.MaterialProperty.MP_ROUGHNESS)
+    connect_property((world_normal, ""), unreal.MaterialProperty.MP_NORMAL)
+    connect_property((occlusion, ""), unreal.MaterialProperty.MP_AMBIENT_OCCLUSION)
 
 
 def create_material():

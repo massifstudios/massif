@@ -1,10 +1,12 @@
 #include "MassifGameMode.h"
 
 #include "Components/DirectionalLightComponent.h"
+#include "Components/ExponentialHeightFogComponent.h"
 #include "Components/SkyAtmosphereComponent.h"
 #include "Components/SkyLightComponent.h"
 #include "Engine/DirectionalLight.h"
 #include "Engine/ExponentialHeightFog.h"
+#include "Engine/PostProcessVolume.h"
 #include "Engine/SkyLight.h"
 #include "GameFramework/PawnMovementComponent.h"
 #include "GameFramework/FloatingPawnMovement.h"
@@ -29,6 +31,31 @@ namespace
 
 	/** Gap between posing the spectator and shooting, so the quadtree can stream the new view in. */
 	constexpr float DebugScreenshotSettleSeconds = 3.0f;
+
+	/** Mid-morning sun: low enough that ridges cast shadows down their own flanks. */
+	const FRotator SunRotation(-30.0f, 25.0f, 0.0f);
+
+	/**
+	 * Haze settings for a massif twenty kilometres across. The engine defaults
+	 * fall off over a few hundred metres of height, which puts the whole
+	 * altitude range inside the densest part of the fog; these spread the same
+	 * amount of haze over the kilometres the valleys actually span, and hold it
+	 * off the ground the camera stands on.
+	 */
+	constexpr float FogDensity = 0.015f;
+	constexpr float FogHeightFalloffPerCentimeter = 0.02f;
+	constexpr float FogStartDistanceCentimeters = 20000.0f;
+	constexpr float FogMaxOpacity = 0.85f;
+
+	/**
+	 * Exposure compensation and the band the histogram may drift inside. A
+	 * snowfield fills the frame with high albedo, so metering to mid grey
+	 * overexposes everything else; the bias pulls it back and the band keeps
+	 * the image from swinging as the camera pans between sky and valley.
+	 */
+	constexpr float ExposureBias = -1.25f;
+	constexpr float ExposureMinBrightness = 0.4f;
+	constexpr float ExposureMaxBrightness = 4.0f;
 
 	/** Where the close debug shot stands, how far above the ground, and which way it faces. */
 	const FVector2d GroundShotCenterMeters(-3000.0, -3000.0);
@@ -166,11 +193,18 @@ void AMassifGameMode::ScheduleDebugScreenshot()
 
 void AMassifGameMode::SpawnEnvironmentActors()
 {
+	SpawnSunAndSky();
+	SpawnAtmosphericHaze();
+	SpawnPostProcess();
+}
+
+void AMassifGameMode::SpawnSunAndSky()
+{
 	UWorld* World = GetWorld();
 
 	ADirectionalLight* Sun = World->SpawnActor<ADirectionalLight>();
 	Sun->SetMobility(EComponentMobility::Movable);
-	Sun->SetActorRotation(FRotator(-40.0f, 25.0f, 0.0f));
+	Sun->SetActorRotation(SunRotation);
 	UDirectionalLightComponent* SunComponent = CastChecked<UDirectionalLightComponent>(Sun->GetLightComponent());
 	SunComponent->SetAtmosphereSunLight(true);
 
@@ -180,8 +214,35 @@ void AMassifGameMode::SpawnEnvironmentActors()
 	SkyLight->GetLightComponent()->SetMobility(EComponentMobility::Movable);
 	SkyLight->GetLightComponent()->bRealTimeCapture = true;
 	SkyLight->GetLightComponent()->MarkRenderStateDirty();
+}
 
-	World->SpawnActor<AExponentialHeightFog>();
+void AMassifGameMode::SpawnAtmosphericHaze()
+{
+	// Sitting the fog on the valley floor rather than the world origin puts the
+	// dense layer where the valleys are instead of below sea level.
+	const double FogAltitudeMeters = TerrainField.IsValid() ? TerrainField->GetMinAltitudeMeters() : 0.0;
+	AExponentialHeightFog* Fog = GetWorld()->SpawnActor<AExponentialHeightFog>(
+		FVector(0.0, 0.0, FogAltitudeMeters * 100.0), FRotator::ZeroRotator);
+
+	UExponentialHeightFogComponent* FogComponent = Fog->GetComponent();
+	FogComponent->SetFogDensity(FogDensity);
+	FogComponent->SetFogHeightFalloff(FogHeightFalloffPerCentimeter);
+	FogComponent->SetStartDistance(FogStartDistanceCentimeters);
+	FogComponent->SetFogMaxOpacity(FogMaxOpacity);
+}
+
+void AMassifGameMode::SpawnPostProcess()
+{
+	APostProcessVolume* Volume = GetWorld()->SpawnActor<APostProcessVolume>();
+	Volume->bUnbound = true;
+
+	FPostProcessSettings& Settings = Volume->Settings;
+	Settings.bOverride_AutoExposureBias = true;
+	Settings.AutoExposureBias = ExposureBias;
+	Settings.bOverride_AutoExposureMinBrightness = true;
+	Settings.AutoExposureMinBrightness = ExposureMinBrightness;
+	Settings.bOverride_AutoExposureMaxBrightness = true;
+	Settings.AutoExposureMaxBrightness = ExposureMaxBrightness;
 }
 
 void AMassifGameMode::ConfigureSpectatorPawn()

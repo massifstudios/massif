@@ -26,6 +26,9 @@ public:
 private:
 	void LoadTerrainAndSpawnManagers();
 	void SpawnEnvironmentActors();
+	void SpawnSunAndSky();
+	void SpawnAtmosphericHaze();
+	void SpawnPostProcess();
 	void ConfigureSpectatorPawn();
 	void ScheduleDebugScreenshot();
 
