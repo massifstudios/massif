@@ -170,7 +170,33 @@ namespace
 		}
 	}
 
-	void MeasureRange(TArrayView<const float> Values, double& OutMinimum, double& OutMaximum)
+	/**
+	 * Where the ramp's ends are put, as fractions of the sorted readings.
+	 * Not the extremes: a single trunk river carries a thousand times the flow of
+	 * the hillsides around it, and ramping to that maximum leaves the whole
+	 * massif inside the first fifth of the ramp, reading as one flat colour. The
+	 * few percent past each end clip rather than compress everything else.
+	 */
+	constexpr double RampLowPercentile = 0.02;
+	constexpr double RampHighPercentile = 0.98;
+
+	/** Readings the range is measured from. Sorting 6 M values to place two ends is waste. */
+	constexpr int32 RangeSampleTarget = 65536;
+
+	TArray<float> SortedSample(TArrayView<const float> Values)
+	{
+		const int32 Stride = FMath::Max(Values.Num() / RangeSampleTarget, 1);
+		TArray<float> Sorted;
+		Sorted.Reserve(Values.Num() / Stride + 1);
+		for (int32 Index = 0; Index < Values.Num(); Index += Stride)
+		{
+			Sorted.Add(Values[Index]);
+		}
+		Sorted.Sort();
+		return Sorted;
+	}
+
+	void MeasureExtent(TArrayView<const float> Values, double& OutMinimum, double& OutMaximum)
 	{
 		OutMinimum = TNumericLimits<double>::Max();
 		OutMaximum = TNumericLimits<double>::Lowest();
@@ -178,6 +204,31 @@ namespace
 		{
 			OutMinimum = FMath::Min(OutMinimum, static_cast<double>(Value));
 			OutMaximum = FMath::Max(OutMaximum, static_cast<double>(Value));
+		}
+	}
+
+	void MeasureRange(TArrayView<const float> Values, double& OutMinimum, double& OutMaximum)
+	{
+		MeasureExtent(Values, OutMinimum, OutMaximum);
+
+		const TArray<float> Sorted = SortedSample(Values);
+		if (Sorted.IsEmpty())
+		{
+			return;
+		}
+
+		const int32 LastIndex = Sorted.Num() - 1;
+		const double Low = Sorted[FMath::RoundToInt32(RampLowPercentile * LastIndex)];
+		const double High = Sorted[FMath::RoundToInt32(RampHighPercentile * LastIndex)];
+
+		// An empty percentile range means the channel is flat almost everywhere and
+		// interesting in a handful of cells — standing water, which is a few tarns
+		// in a world of dry ground. Clipping there would draw nothing at all, so
+		// those channels keep the full extent measured above.
+		if (High - Low > UE_DOUBLE_KINDA_SMALL_NUMBER)
+		{
+			OutMinimum = Low;
+			OutMaximum = High;
 		}
 	}
 
