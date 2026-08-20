@@ -10,12 +10,16 @@ truth, and Tools/create_foliage_content.py turns them into UE assets.
     python3 Tools/fetch_polyhaven_models.py --resolution 2k
     python3 Tools/fetch_polyhaven_models.py --list trees    # what is available
 
-Each asset lands as Content/Models/PolyHaven/<group>/<slug>/<slug>_<res>.fbx
-with its textures/ folder beside it, which is the layout the FBX's relative
-material paths expect.
+Each asset lands as Content/Models/PolyHaven/<group>/<slug>/<slug>_<res>.gltf
+with the .bin geometry and textures/ folder beside it, which is the layout the
+glTF's relative paths expect.
 
-Poly Haven's conifers are scan-grade: fir_tree_01 is a ~250 MB FBX and
-pine_tree_01 a ~650 MB one, with no authored LODs. They are meant to be
+glTF rather than FBX: Poly Haven's FBX bundles for these assets arrive as
+archives around a .blend, which Unreal cannot open, while the glTF variant is a
+plain .gltf plus .bin that Interchange imports directly.
+
+Poly Haven's conifers are scan-grade with no authored LODs: pine_tree_01 is
+about 960 MB of geometry and fir_tree_01 about 490 MB. They are meant to be
 imported with Nanite on. The saplings and ground cover are far smaller.
 """
 
@@ -32,12 +36,16 @@ API_ROOT = "https://api.polyhaven.com"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 OUTPUT_ROOT = REPO_ROOT / "Content" / "Models" / "PolyHaven"
 
-# Poly Haven slugs per group. Conifers for the treeline forests, saplings and
-# ground cover for the layer below them. Extend as more assets are wanted;
-# anything missing from a download is skipped, never fatal.
+# The download variant to ask the API for, and the extension it lands under.
+MODEL_FORMAT = "gltf"
+
+# Poly Haven slugs per group, one per species in MassifFoliageSpecies. Conifers
+# for the treeline forests, saplings and ground cover for the layer below them.
+# Extend as more assets are wanted; anything missing from a download is
+# skipped, never fatal.
 GROUPS = {
     "tree": ["fir_tree_01", "pine_tree_01"],
-    "sapling": ["fir_sapling_medium", "fir_sapling", "pine_sapling_medium", "pine_sapling_small"],
+    "sapling": ["fir_sapling_medium", "pine_sapling_medium"],
     "groundcover": ["grass_medium_01", "grass_medium_02", "shrub_01"],
 }
 
@@ -116,20 +124,20 @@ def report(destination, written, size_bytes):
 
 
 def fetch_asset(slug, group, resolution):
-    """Downloads one asset's FBX plus the textures its materials reference."""
+    """Downloads one asset's glTF plus the geometry and textures it references."""
     try:
         files = fetch_json(f"{API_ROOT}/files/{urllib.parse.quote(slug)}")
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
         print(f"  ! {slug}: {error}", file=sys.stderr)
         return False
 
-    entry = files.get("fbx", {}).get(resolution, {}).get("fbx")
+    entry = files.get(MODEL_FORMAT, {}).get(resolution, {}).get(MODEL_FORMAT)
     if entry is None:
-        print(f"  ! {slug}: no FBX at {resolution}", file=sys.stderr)
+        print(f"  ! {slug}: no {MODEL_FORMAT} at {resolution}", file=sys.stderr)
         return False
 
     asset_directory = OUTPUT_ROOT / group / slug
-    payload = [(f"{slug}_{resolution}.fbx", entry)]
+    payload = [(f"{slug}_{resolution}.{MODEL_FORMAT}", entry)]
     payload += [(relative, included) for relative, included in entry.get("include", {}).items()]
 
     for relative, item in payload:
