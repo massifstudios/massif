@@ -24,7 +24,7 @@ namespace
 			Node.PositionMeters = FVector2d(NodeIndex * SpacingMeters, 0.0);
 			// Falling east, so the reach has a gradient to take a normal from.
 			Node.WaterSurfaceMeters = RibbonTestSurfaceMeters - NodeIndex;
-			Node.BedAltitudeMeters = Node.WaterSurfaceMeters - 0.25;
+			Node.GroundAltitudeMeters = Node.WaterSurfaceMeters - 0.25;
 			Node.WidthMeters = RibbonTestWidthMeters;
 			Node.DepthMeters = 0.5;
 			Node.SpeedMetersPerSecond = 1.0;
@@ -46,7 +46,7 @@ namespace
 			FMassifRiverNode Node;
 			Node.PositionMeters = RadiusMeters * FVector2d(FMath::Cos(Turned), FMath::Sin(Turned));
 			Node.WaterSurfaceMeters = RibbonTestSurfaceMeters - NodeIndex;
-			Node.BedAltitudeMeters = Node.WaterSurfaceMeters - 0.25;
+			Node.GroundAltitudeMeters = Node.WaterSurfaceMeters - 0.25;
 			Node.WidthMeters = WidthMeters;
 			Node.DepthMeters = 0.5;
 			Node.SpeedMetersPerSecond = 1.0;
@@ -99,7 +99,7 @@ bool FRiverRibbonMeshShapeTest::RunTest(const FString& Parameters)
 		NodesOffWidth += FMath::IsNearlyEqual(SpanMeters, RibbonTestWidthMeters, 0.001) ? 0 : 1;
 
 		const double SurfaceMeters = Reach.Nodes[NodeIndex].WaterSurfaceMeters * MetersToCentimeters;
-		const double BedMeters = Reach.Nodes[NodeIndex].BedAltitudeMeters * MetersToCentimeters;
+		const double BedMeters = Reach.Nodes[NodeIndex].GroundAltitudeMeters * MetersToCentimeters;
 		EdgesOffSurface += FMath::IsNearlyEqual(LeftEdge.Z, SurfaceMeters, 0.1) ? 0 : 1;
 		EdgesOffSurface += FMath::IsNearlyEqual(RightEdge.Z, SurfaceMeters, 0.1) ? 0 : 1;
 		FeetOffBed += FMath::IsNearlyEqual(LeftFoot.Z, BedMeters, 0.1) ? 0 : 1;
@@ -131,7 +131,7 @@ bool FRiverRibbonSheetClearanceTest::RunTest(const FString& Parameters)
 	FMassifRiverReach Reach = MakeStraightReach(3, 8.0);
 	for (FMassifRiverNode& Node : Reach.Nodes)
 	{
-		Node.BedAltitudeMeters = Node.WaterSurfaceMeters + 3.0;
+		Node.GroundAltitudeMeters = Node.WaterSurfaceMeters + 3.0;
 	}
 
 	const TSharedPtr<FDynamicMesh3> Mesh = BuildFrom(Reach);
@@ -140,7 +140,7 @@ bool FRiverRibbonSheetClearanceTest::RunTest(const FString& Parameters)
 	for (int32 NodeIndex = 0; NodeIndex < Reach.Nodes.Num(); ++NodeIndex)
 	{
 		const double ExpectedMeters =
-			Reach.Nodes[NodeIndex].BedAltitudeMeters + MassifRiverRibbonMesh::SheetClearanceMeters;
+			Reach.Nodes[NodeIndex].GroundAltitudeMeters + MassifRiverRibbonMesh::SheetClearanceMeters;
 		const double EdgeMeters = VertexAt(*Mesh, NodeIndex, 1).Z / MetersToCentimeters;
 		EdgesUnderBed += FMath::IsNearlyEqual(EdgeMeters, ExpectedMeters, 0.001) ? 0 : 1;
 	}

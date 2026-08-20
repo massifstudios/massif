@@ -64,7 +64,7 @@ namespace
 	double SurfaceAltitudeAt(const FMassifRiverNode& Node)
 	{
 		using namespace MassifRiverRibbonMesh;
-		return FMath::Max(Node.WaterSurfaceMeters, Node.BedAltitudeMeters + SheetClearanceMeters);
+		return FMath::Max(Node.WaterSurfaceMeters, Node.GroundAltitudeMeters + SheetClearanceMeters);
 	}
 
 	/**
@@ -76,7 +76,7 @@ namespace
 	double ColumnScaleAt(const FMassifRiverNode& Node)
 	{
 		using namespace MassifRiverRibbonMesh;
-		const double ClearanceMeters = SurfaceAltitudeAt(Node) - Node.BedAltitudeMeters;
+		const double ClearanceMeters = SurfaceAltitudeAt(Node) - Node.GroundAltitudeMeters;
 		return FMath::Clamp(Node.DepthMeters / ClearanceMeters, 1.0, ColumnScaleReference);
 	}
 
@@ -139,7 +139,7 @@ namespace
 		FVector2d HalfSpanMeters = FVector2d::ZeroVector;
 
 		double SurfaceAltitudeMeters = 0.0;
-		double BedAltitudeMeters = 0.0;
+		double GroundAltitudeMeters = 0.0;
 		double AlongMeters = 0.0;
 		FVector2d FlowDirection = FVector2d::ZeroVector;
 
@@ -217,7 +217,7 @@ namespace
 			Section.CentreMeters = Node.PositionMeters;
 			Section.HalfSpanMeters = Across * HalfWidthMeters(Reach, NodeIndex);
 			Section.SurfaceAltitudeMeters = SurfaceAltitudeAt(Node);
-			Section.BedAltitudeMeters = Node.BedAltitudeMeters;
+			Section.GroundAltitudeMeters = Node.GroundAltitudeMeters;
 			Section.AlongMeters = AlongMeters;
 			Section.FlowDirection = FlowDirection;
 			Section.SurfaceNormal = SurfaceNormalAt(Reach, NodeIndex, FlowDirection);
@@ -230,10 +230,10 @@ namespace
 		void AppendNodeVertices(const FMassifRiverReach& Reach, int32 NodeIndex, double AlongMeters)
 		{
 			const FCrossSection Section = MakeCrossSection(Reach, NodeIndex, AlongMeters);
-			AppendCrossSectionVertex(Section, -1.0, 0.0f, Section.BedAltitudeMeters, -Section.OutwardNormal);
+			AppendCrossSectionVertex(Section, -1.0, 0.0f, Section.GroundAltitudeMeters, -Section.OutwardNormal);
 			AppendCrossSectionVertex(Section, -1.0, 0.0f, Section.SurfaceAltitudeMeters, Section.SurfaceNormal);
 			AppendCrossSectionVertex(Section, 1.0, 1.0f, Section.SurfaceAltitudeMeters, Section.SurfaceNormal);
-			AppendCrossSectionVertex(Section, 1.0, 1.0f, Section.BedAltitudeMeters, Section.OutwardNormal);
+			AppendCrossSectionVertex(Section, 1.0, 1.0f, Section.GroundAltitudeMeters, Section.OutwardNormal);
 		}
 
 		void AppendCrossSectionVertex(

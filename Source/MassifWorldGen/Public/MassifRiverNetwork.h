@@ -43,25 +43,30 @@ struct FMassifRiverParams
 
 	/** Narrowest and shallowest a channel is drawn, so a headwater brook is still visible. */
 	double MinWidthMeters = 0.8;
-	double MinDepthMeters = 0.05;
+	double MinDepthMeters = 0.15;
 
 	/**
-	 * How far the water surface sits above the measured ground.
+	 * Shallowest trench the terrain is cut to under a channel.
 	 *
-	 * Not the channel depth: the elevation model is an airborne laser scan, and
-	 * water returns no usable echo, so a river already reads in the data as a flat
-	 * ribbon at its own surface level. Adding the full depth on top would float
-	 * the main stem above its banks. This is freeboard — enough to clear the
-	 * ground the ribbon is drawn over without z-fighting it.
+	 * The elevation model is an airborne laser scan and water returns no usable
+	 * echo, so a river reads in the data as a flat ribbon at its own surface
+	 * level: the measured altitude along a channel is the top of the water, not
+	 * the bottom. The bed has to be put back, and this is the least of it a
+	 * headwater brook gets, so that even the smallest channel has a column of
+	 * water in it rather than a sheet lying on the ground.
 	 */
-	double SurfaceRiseMeters = 0.25;
+	double MinCarveDepthMeters = 0.30;
 
 	/**
-	 * How far a node may be moved by dropping it from the polyline. One node per
-	 * bake cell over a world's worth of channel is far more geometry than the
-	 * shape needs; straight runs collapse to their endpoints at this tolerance.
+	 * How far a node may be moved by dropping it from the polyline, as a share of
+	 * the channel's own width. One node per bake cell over a world's worth of
+	 * channel is far more geometry than the shape needs, and a fixed tolerance
+	 * either strips a brook of its wiggle or leaves the trunk carrying nodes that
+	 * sit well inside its own banks.
 	 */
-	double SimplificationToleranceMeters = 2.0;
+	double SimplificationWidthFraction = 0.15;
+	double MinSimplificationToleranceMeters = 0.5;
+	double MaxSimplificationToleranceMeters = 4.0;
 
 	/**
 	 * Spacing the simplified polyline is resampled at, through a spline.
@@ -80,7 +85,14 @@ struct FMassifRiverNode
 {
 	FVector2d PositionMeters = FVector2d::ZeroVector;
 
-	/** Measured ground under the node, before any freeboard. */
+	/** The elevation model's own altitude here, which along a channel is the top of the water. */
+	double GroundAltitudeMeters = 0.0;
+
+	/**
+	 * The channel invert: the water surface less the depth the catchment fills it
+	 * to. This is what the terrain is cut down to, and it is always far enough
+	 * below the water surface to leave a column with something in it.
+	 */
 	double BedAltitudeMeters = 0.0;
 
 	/** Where the water's top sits. Never rises going downstream. */

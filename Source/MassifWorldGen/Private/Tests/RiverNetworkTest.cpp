@@ -159,13 +159,16 @@ bool FRiverNetworkWaterSurfaceTest::RunTest(const FString& Parameters)
 	const TSharedRef<const FMassifRiverNetwork> Rivers = ExtractFrom(*MakeConfluence(), Params);
 
 	int32 NodesFlowingUphill = 0;
-	int32 NodesUnderTheirBed = 0;
+	int32 NodesWithoutAColumn = 0;
+	int32 NodesWithABedAboveTheGround = 0;
 	for (const FMassifRiverReach& Reach : Rivers->GetReaches())
 	{
 		for (int32 NodeIndex = 0; NodeIndex < Reach.Nodes.Num(); ++NodeIndex)
 		{
 			const FMassifRiverNode& Node = Reach.Nodes[NodeIndex];
-			NodesUnderTheirBed += Node.WaterSurfaceMeters < Node.BedAltitudeMeters ? 1 : 0;
+			const double ColumnMeters = Node.WaterSurfaceMeters - Node.BedAltitudeMeters;
+			NodesWithoutAColumn += ColumnMeters < Params.MinCarveDepthMeters - 1.0e-9 ? 1 : 0;
+			NodesWithABedAboveTheGround += Node.BedAltitudeMeters > Node.GroundAltitudeMeters ? 1 : 0;
 			if (NodeIndex > 0)
 			{
 				const double PreviousMeters = Reach.Nodes[NodeIndex - 1].WaterSurfaceMeters;
@@ -175,7 +178,50 @@ bool FRiverNetworkWaterSurfaceTest::RunTest(const FString& Parameters)
 	}
 
 	TestEqual(TEXT("The water surface never rises going downstream"), NodesFlowingUphill, 0);
-	TestEqual(TEXT("The water surface never sits below the ground it runs over"), NodesUnderTheirBed, 0);
+	// The two properties the terrain carve stands on: there is always water to
+	// draw, and cutting the ground down to the invert never raises it.
+	TestEqual(TEXT("Every node has at least the minimum column of water"), NodesWithoutAColumn, 0);
+	TestEqual(TEXT("The channel invert never sits above the measured ground"), NodesWithABedAboveTheGround, 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRiverNetworkSmoothingTest,
+	"Massif.WorldGen.Rivers.Smoothing",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FRiverNetworkSmoothingTest::RunTest(const FString& Parameters)
+{
+	const TSharedRef<const FMassifRiverNetwork> Rivers = ExtractFrom(*MakeConfluence(), MakeTestRiverParams());
+
+	// Catchment only grows downstream, so a resampled node between two traced
+	// ones cannot carry less water than the one above it or more than the one
+	// below. An interpolant that overshoots puts a bulge in the channel that no
+	// catchment paid for, and it shows in the mesh as a slab wider than its banks.
+	int32 NodesLosingWater = 0;
+	int32 NodesNarrowingDownstream = 0;
+	for (const FMassifRiverReach& Reach : Rivers->GetReaches())
+	{
+		for (int32 NodeIndex = 1; NodeIndex < Reach.Nodes.Num(); ++NodeIndex)
+		{
+			const FMassifRiverNode& Above = Reach.Nodes[NodeIndex - 1];
+			const FMassifRiverNode& Below = Reach.Nodes[NodeIndex];
+			NodesLosingWater +=
+				Below.DischargeCubicMetersPerSecond < Above.DischargeCubicMetersPerSecond - 1.0e-9 ? 1 : 0;
+			NodesNarrowingDownstream += Below.WidthMeters < Above.WidthMeters - 1.0e-9 ? 1 : 0;
+		}
+	}
+
+	TestEqual(TEXT("Discharge never falls going downstream"), NodesLosingWater, 0);
+	TestEqual(TEXT("The channel never narrows going downstream"), NodesNarrowingDownstream, 0);
+
+	// Resampling is what turns the routing's 45 degree staircase into a line, so
+	// a smoothed reach has to carry more nodes than the corners it was reduced to.
+	int32 LongestReachNodes = 0;
+	for (const FMassifRiverReach& Reach : Rivers->GetReaches())
+	{
+		LongestReachNodes = FMath::Max(LongestReachNodes, Reach.Nodes.Num());
+	}
+	TestTrue(TEXT("The trunk is resampled along its length"), LongestReachNodes > 8);
 	return true;
 }
 
