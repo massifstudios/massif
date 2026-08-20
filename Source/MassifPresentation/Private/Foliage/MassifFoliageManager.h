@@ -68,6 +68,9 @@ private:
 	UPROPERTY()
 	TArray<TObjectPtr<UStaticMesh>> SpeciesMeshes;
 
+	/** Per species, the shift that puts the plant's base on the point it was planted at. */
+	TArray<FVector> SpeciesBaseOffsets;
+
 	TArray<int32> FreeComponentIndices;
 	TMap<uint64, FPlantedTile> PlantedTiles;
 	TArray<FTileRequest> TileRequests;

@@ -22,34 +22,55 @@ AMassifPlayerController::AMassifPlayerController()
 	PrimaryActorTick.bCanEverTick = true;
 }
 
-const UMassifInputConfig* AMassifPlayerController::GetInputConfig(const AController* Controller)
+UMassifInputConfig* AMassifPlayerController::GetInputConfig(AController* Controller)
 {
-	const AMassifPlayerController* PlayerController = Cast<AMassifPlayerController>(Controller);
+	AMassifPlayerController* PlayerController = Cast<AMassifPlayerController>(Controller);
 	if (PlayerController == nullptr)
 	{
 		return nullptr;
 	}
-	return PlayerController->InputConfig;
+	return PlayerController->EnsureInputConfig();
+}
+
+UMassifInputConfig* AMassifPlayerController::EnsureInputConfig()
+{
+	if (InputConfig == nullptr)
+	{
+		InputConfig = NewObject<UMassifInputConfig>(this);
+		InputConfig->Build();
+	}
+	return InputConfig;
 }
 
 void AMassifPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
 
-	InputConfig = NewObject<UMassifInputConfig>(this);
-	InputConfig->Build();
-
-	UEnhancedInputLocalPlayerSubsystem* Subsystem =
-		ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(GetLocalPlayer());
-	if (Subsystem != nullptr)
-	{
-		Subsystem->AddMappingContext(InputConfig->CommonContext, 0);
-		Subsystem->AddMappingContext(InputConfig->FlyContext, 1);
-	}
+	EnsureInputConfig();
+	ApplyMappingContexts();
 
 	FlyPawn = GetPawn();
 	SetInputMode(FInputModeGameOnly());
 	bShowMouseCursor = false;
+}
+
+void AMassifPlayerController::ApplyMappingContexts()
+{
+	UEnhancedInputLocalPlayerSubsystem* Subsystem =
+		ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(GetLocalPlayer());
+	if (Subsystem == nullptr)
+	{
+		return;
+	}
+
+	Subsystem->ClearAllMappings();
+	Subsystem->AddMappingContext(EnsureInputConfig()->CommonContext, 0);
+	if (ViewMode == EMassifViewMode::Walk)
+	{
+		Subsystem->AddMappingContext(InputConfig->WalkContext, 1);
+		return;
+	}
+	Subsystem->AddMappingContext(InputConfig->FlyContext, 1);
 }
 
 void AMassifPlayerController::SetupInputComponent()
@@ -57,11 +78,11 @@ void AMassifPlayerController::SetupInputComponent()
 	Super::SetupInputComponent();
 
 	UEnhancedInputComponent* Input = Cast<UEnhancedInputComponent>(InputComponent);
-	if (Input == nullptr || InputConfig == nullptr)
+	if (Input == nullptr)
 	{
 		return;
 	}
-	Input->BindAction(InputConfig->ToggleViewAction, ETriggerEvent::Started, this,
+	Input->BindAction(EnsureInputConfig()->ToggleViewAction, ETriggerEvent::Started, this,
 		&AMassifPlayerController::ToggleViewMode);
 }
 
@@ -85,8 +106,8 @@ void AMassifPlayerController::EnterWalkMode()
 
 	FlyPawn = GetPawn();
 	Possess(Walker);
-	SwapMappingContext(InputConfig->FlyContext, InputConfig->WalkContext);
 	ViewMode = EMassifViewMode::Walk;
+	ApplyMappingContexts();
 }
 
 void AMassifPlayerController::EnterFlyMode()
@@ -100,8 +121,8 @@ void AMassifPlayerController::EnterFlyMode()
 	// as stepping back rather than as a teleport.
 	FlyPawn->SetActorLocation(PlayerCameraManager->GetCameraLocation());
 	Possess(FlyPawn);
-	SwapMappingContext(InputConfig->WalkContext, InputConfig->FlyContext);
 	ViewMode = EMassifViewMode::Fly;
+	ApplyMappingContexts();
 }
 
 AMassifWalkerPawn* AMassifPlayerController::AcquireWalkerPawn()
@@ -134,17 +155,4 @@ AMassifWalkerPawn* AMassifPlayerController::AcquireWalkerPawn()
 	WalkerPawn->SetActorLocation(
 		FVector(CameraCentimeters.X, CameraCentimeters.Y, StandMeters * MetersToCentimeters));
 	return WalkerPawn;
-}
-
-void AMassifPlayerController::SwapMappingContext(
-	const UInputMappingContext* Leaving, const UInputMappingContext* Entering)
-{
-	UEnhancedInputLocalPlayerSubsystem* Subsystem =
-		ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(GetLocalPlayer());
-	if (Subsystem == nullptr)
-	{
-		return;
-	}
-	Subsystem->RemoveMappingContext(Leaving);
-	Subsystem->AddMappingContext(Entering, 1);
 }

@@ -32,8 +32,13 @@ class AMassifPlayerController : public APlayerController
 public:
 	AMassifPlayerController();
 
-	/** The input config of whichever controller owns this pawn, or null if it has none. */
-	static const UMassifInputConfig* GetInputConfig(const AController* Controller);
+	/**
+	 * The input config of whichever controller owns this pawn, or null if it has
+	 * none. Pawns bind their input when they are possessed, which happens before
+	 * the controller's BeginPlay, so the config builds on first use rather than
+	 * at a point in the startup order that callers would have to know about.
+	 */
+	static UMassifInputConfig* GetInputConfig(AController* Controller);
 
 	virtual void BeginPlay() override;
 	virtual void SetupInputComponent() override;
@@ -56,12 +61,15 @@ private:
 
 	EMassifViewMode ViewMode = EMassifViewMode::Fly;
 
+	UMassifInputConfig* EnsureInputConfig();
+
+	/** Adds the context for the current view, and the always-on one, to the local player. */
+	void ApplyMappingContexts();
+
 	void ToggleViewMode();
 	void EnterWalkMode();
 	void EnterFlyMode();
 
 	/** Spawns the walker on first use, standing on the ground below the camera. */
 	AMassifWalkerPawn* AcquireWalkerPawn();
-
-	void SwapMappingContext(const UInputMappingContext* Leaving, const UInputMappingContext* Entering);
 };

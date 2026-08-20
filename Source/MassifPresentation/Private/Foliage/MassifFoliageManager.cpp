@@ -27,16 +27,29 @@ namespace
 		return FVector2d(CenterX - ViewMeters.X, CenterY - ViewMeters.Y).Length();
 	}
 
-	TArray<FTransform> MakeInstanceTransforms(const TArray<MassifFoliageScatter::FInstance>& Instances)
+	/**
+	 * Where the plant sits inside its own mesh: scanned models are modelled
+	 * wherever they stood in the source scene, so the shape can be metres from
+	 * the mesh origin and above it. Planting a mesh at a point without this
+	 * would leave it beside that point and hovering over the ground.
+	 */
+	FVector ComputeBaseOffsetCentimeters(const UStaticMesh& Mesh)
+	{
+		const FBoxSphereBounds Bounds = Mesh.GetBounds();
+		return FVector(-Bounds.Origin.X, -Bounds.Origin.Y, Bounds.BoxExtent.Z - Bounds.Origin.Z);
+	}
+
+	TArray<FTransform> MakeInstanceTransforms(
+		const TArray<MassifFoliageScatter::FInstance>& Instances, const FVector& BaseOffsetCentimeters)
 	{
 		TArray<FTransform> Transforms;
 		Transforms.Reserve(Instances.Num());
 		for (const MassifFoliageScatter::FInstance& Instance : Instances)
 		{
-			Transforms.Emplace(
-				FRotator(0.0f, Instance.YawDegrees, 0.0f),
-				FVector(Instance.LocationMeters) * MetersToCentimeters,
-				FVector(Instance.Scale));
+			const FRotator Rotation(0.0f, Instance.YawDegrees, 0.0f);
+			const FVector GroundCentimeters = FVector(Instance.LocationMeters) * MetersToCentimeters;
+			const FVector OffsetCentimeters = Rotation.RotateVector(BaseOffsetCentimeters * Instance.Scale);
+			Transforms.Emplace(Rotation, GroundCentimeters + OffsetCentimeters, FVector(Instance.Scale));
 		}
 		return Transforms;
 	}
@@ -65,6 +78,7 @@ void AMassifFoliageManager::ResetField(TSharedPtr<const FMassifTerrainField> InF
 void AMassifFoliageManager::LoadSpeciesMeshes()
 {
 	SpeciesMeshes.Reset();
+	SpeciesBaseOffsets.Reset();
 	for (const FMassifFoliageSpecies& Species : MassifFoliage::Species)
 	{
 		const FSoftObjectPath MeshPath(Species.MeshAssetPath);
@@ -73,8 +87,12 @@ void AMassifFoliageManager::LoadSpeciesMeshes()
 		{
 			UE_LOG(LogTemp, Warning, TEXT("Foliage species %s has no mesh at %s, not planted"),
 				Species.Name, Species.MeshAssetPath);
+			SpeciesMeshes.Add(nullptr);
+			SpeciesBaseOffsets.Add(FVector::ZeroVector);
+			continue;
 		}
 		SpeciesMeshes.Add(Mesh);
+		SpeciesBaseOffsets.Add(ComputeBaseOffsetCentimeters(*Mesh));
 	}
 }
 
@@ -196,7 +214,8 @@ void AMassifFoliageManager::PlantTile(const FTileRequest& Request)
 	if (!Instances.IsEmpty())
 	{
 		Tile.ComponentIndex = AcquireComponent(Request.SpeciesIndex);
-		ComponentPool[Tile.ComponentIndex]->AddInstances(MakeInstanceTransforms(Instances), false, true);
+		ComponentPool[Tile.ComponentIndex]->AddInstances(
+			MakeInstanceTransforms(Instances, SpeciesBaseOffsets[Request.SpeciesIndex]), false, true);
 	}
 	PlantedTiles.Add(PackTileKey(Request.SpeciesIndex, Request.TileX, Request.TileY), Tile);
 }
