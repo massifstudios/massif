@@ -1,5 +1,6 @@
 #include "MassifFoliageScatter.h"
 
+#include "MassifBandWeight.h"
 #include "MassifFoliageSpecies.h"
 #include "MassifHabitat.h"
 #include "MassifSeed.h"
@@ -20,14 +21,6 @@ namespace
 
 	/** Offsets the patch noise off the placement stream, so stands and jitter do not share a lattice. */
 	constexpr uint32 PatchSeedOffset = 0x9E3779B9u;
-
-	/** 0 outside the band, 1 well inside it, ramping over the fade at both ends. */
-	double BandWeight(double Value, double Minimum, double Maximum, double Fade)
-	{
-		const double RisingEdge = (Value - Minimum) / Fade;
-		const double FallingEdge = (Maximum - Value) / Fade;
-		return FMath::Clamp(FMath::Min(RisingEdge, FallingEdge), 0.0, 1.0);
-	}
 
 	/** 1 on ground the species holds comfortably, falling to 0 at its steepest. */
 	double SlopeWeight(double SlopeDegrees, const FMassifFoliageSpecies& Species)
@@ -122,12 +115,12 @@ double MassifFoliageScatter::HabitatWeight(const FMassifFoliageSpecies& Species,
 		return 0.0;
 	}
 
-	const double Temperature = BandWeight(
+	const double Temperature = MassifBandWeight(
 		Habitat.TemperatureCelsius,
 		Species.MinTemperatureCelsius,
 		Species.MaxTemperatureCelsius,
 		Species.TemperatureFadeCelsius);
-	const double Humidity = BandWeight(
+	const double Humidity = MassifBandWeight(
 		Habitat.Humidity, Species.MinHumidity, Species.MaxHumidity, Species.HumidityFade);
 	return Temperature
 		* Humidity

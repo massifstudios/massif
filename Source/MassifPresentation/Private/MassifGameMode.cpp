@@ -23,6 +23,7 @@
 #include "Player/MassifPlayerController.h"
 #include "Terrain/MassifTerrainManager.h"
 #include "UObject/SoftObjectPath.h"
+#include "Water/MassifRiverManager.h"
 
 namespace
 {
@@ -137,6 +138,20 @@ namespace
 		UE_LOG(LogTemp, Warning, TEXT("M_Terrain missing, falling back to WorldGridMaterial"));
 		return LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/EngineMaterials/WorldGridMaterial.WorldGridMaterial"));
 	}
+
+	UMaterialInterface* LoadRiverMaterial()
+	{
+		const FSoftObjectPath MaterialPath(TEXT("/Game/Materials/M_River.M_River"));
+		UMaterialInterface* Material = Cast<UMaterialInterface>(MaterialPath.TryLoad());
+		if (Material == nullptr)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("M_River missing, no water is drawn. Run Tools/create_river_content.py."));
+			return nullptr;
+		}
+
+		ReportMaterialCompileErrors(*Material);
+		return Material;
+	}
 }
 
 AMassifGameMode::AMassifGameMode()
@@ -198,6 +213,9 @@ void AMassifGameMode::LoadTerrainAndSpawnManagers()
 
 	FoliageManager = GetWorld()->SpawnActor<AMassifFoliageManager>();
 	FoliageManager->Initialize(TerrainField, EnvironmentBake, GetMasterSeed());
+
+	RiverManager = GetWorld()->SpawnActor<AMassifRiverManager>();
+	RiverManager->Initialize(EnvironmentBake, LoadRiverMaterial());
 
 	DebugChannelView = GetWorld()->SpawnActor<AMassifDebugChannelView>();
 	DebugChannelView->Initialize(HabitatField, TerrainManager);

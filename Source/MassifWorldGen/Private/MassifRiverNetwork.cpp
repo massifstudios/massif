@@ -164,6 +164,77 @@ namespace
 }
 
 // ---------------------------------------------------------------------------
+// Curving the line back through the corners the staircase left
+// ---------------------------------------------------------------------------
+
+namespace
+{
+	/** Catmull-Rom through four nodes, clamped at the ends so the curve keeps them. */
+	FVector2d SplinePosition(TArrayView<const FMassifRiverNode> Nodes, int32 SpanIndex, double Fraction)
+	{
+		const FVector2d Before = Nodes[FMath::Max(SpanIndex - 1, 0)].PositionMeters;
+		const FVector2d Start = Nodes[SpanIndex].PositionMeters;
+		const FVector2d End = Nodes[SpanIndex + 1].PositionMeters;
+		const FVector2d After = Nodes[FMath::Min(SpanIndex + 2, Nodes.Num() - 1)].PositionMeters;
+
+		const FVector2d StartTangent = 0.5 * (End - Before);
+		const FVector2d EndTangent = 0.5 * (After - Start);
+		return FMath::CubicInterp(Start, StartTangent, End, EndTangent, Fraction);
+	}
+
+	/** Everything but the position is a measured quantity that varies smoothly, so it just interpolates. */
+	FMassifRiverNode BlendNodeAttributes(const FMassifRiverNode& Start, const FMassifRiverNode& End, double Fraction)
+	{
+		FMassifRiverNode Blended;
+		Blended.BedAltitudeMeters = FMath::Lerp(Start.BedAltitudeMeters, End.BedAltitudeMeters, Fraction);
+		Blended.WaterSurfaceMeters = FMath::Lerp(Start.WaterSurfaceMeters, End.WaterSurfaceMeters, Fraction);
+		Blended.DischargeCubicMetersPerSecond = FMath::Lerp(
+			Start.DischargeCubicMetersPerSecond, End.DischargeCubicMetersPerSecond, Fraction);
+		Blended.WidthMeters = FMath::Lerp(Start.WidthMeters, End.WidthMeters, Fraction);
+		Blended.DepthMeters = FMath::Lerp(Start.DepthMeters, End.DepthMeters, Fraction);
+		Blended.SpeedMetersPerSecond = FMath::Lerp(Start.SpeedMetersPerSecond, End.SpeedMetersPerSecond, Fraction);
+		return Blended;
+	}
+
+	int32 StepsAcrossSpan(const FMassifRiverNode& Start, const FMassifRiverNode& End, double SpacingMeters)
+	{
+		const double SpanMeters = (End.PositionMeters - Start.PositionMeters).Length();
+		return FMath::Max(FMath::CeilToInt32(SpanMeters / SpacingMeters), 1);
+	}
+
+	/**
+	 * Resamples the polyline along a spline through its own nodes. End points are
+	 * kept exactly, so reaches still meet where they met before, and the water
+	 * surface stays monotone because interpolating between two ordered values
+	 * cannot produce one outside them.
+	 */
+	void SmoothReach(TArray<FMassifRiverNode>& Nodes, double SpacingMeters)
+	{
+		if (Nodes.Num() < 3 || SpacingMeters <= 0.0)
+		{
+			return;
+		}
+
+		TArray<FMassifRiverNode> Resampled;
+		Resampled.Reserve(Nodes.Num() * 2);
+		for (int32 SpanIndex = 0; SpanIndex + 1 < Nodes.Num(); ++SpanIndex)
+		{
+			const int32 StepCount = StepsAcrossSpan(Nodes[SpanIndex], Nodes[SpanIndex + 1], SpacingMeters);
+			for (int32 Step = 0; Step < StepCount; ++Step)
+			{
+				const double Fraction = static_cast<double>(Step) / StepCount;
+				FMassifRiverNode Node = BlendNodeAttributes(Nodes[SpanIndex], Nodes[SpanIndex + 1], Fraction);
+				Node.PositionMeters = SplinePosition(Nodes, SpanIndex, Fraction);
+				Resampled.Add(Node);
+			}
+		}
+
+		Resampled.Add(Nodes.Last());
+		Nodes = MoveTemp(Resampled);
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Tracing the channels out of the solved drainage
 // ---------------------------------------------------------------------------
 
@@ -451,6 +522,7 @@ namespace
 			}
 
 			SimplifyReach(Reach.Nodes, Params.SimplificationToleranceMeters);
+			SmoothReach(Reach.Nodes, Params.SmoothingSpacingMeters);
 			return Reach;
 		}
 

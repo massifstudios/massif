@@ -6,6 +6,7 @@
 
 class AMassifDebugChannelView;
 class AMassifFoliageManager;
+class AMassifRiverManager;
 class AMassifTerrainManager;
 class FMassifEnvironmentBake;
 class FMassifHeightmap;
@@ -56,6 +57,9 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<AMassifFoliageManager> FoliageManager;
+
+	UPROPERTY()
+	TObjectPtr<AMassifRiverManager> RiverManager;
 
 	UPROPERTY()
 	TObjectPtr<AMassifDebugChannelView> DebugChannelView;

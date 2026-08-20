@@ -3,6 +3,7 @@
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Kismet/GameplayStatics.h"
+#include "MassifUnits.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "MassifFoliageScatter.h"
 #include "MassifFoliageSpecies.h"
@@ -11,10 +12,10 @@
 #include "MassifTerrainField.h"
 #include "UObject/SoftObjectPath.h"
 
+using MassifUnits::MetersToCentimeters;
+
 namespace
 {
-	constexpr double MetersToCentimeters = 100.0;
-
 	uint64 PackTileKey(int32 SpeciesIndex, int32 TileX, int32 TileY)
 	{
 		return (static_cast<uint64>(SpeciesIndex) << 48)

@@ -62,6 +62,17 @@ struct FMassifRiverParams
 	 * shape needs; straight runs collapse to their endpoints at this tolerance.
 	 */
 	double SimplificationToleranceMeters = 2.0;
+
+	/**
+	 * Spacing the simplified polyline is resampled at, through a spline.
+	 *
+	 * Routing picks one of eight neighbours per cell, so a raw channel is a
+	 * staircase that turns in 45 degree steps, and simplifying it only replaces
+	 * the staircase with the long straight chords between its corners. Curving the
+	 * line back through those corners is what makes a river read as a river rather
+	 * than as a run of fenceposts.
+	 */
+	double SmoothingSpacingMeters = 6.0;
 };
 
 /** One point along a channel, with the channel's shape where it stands. */

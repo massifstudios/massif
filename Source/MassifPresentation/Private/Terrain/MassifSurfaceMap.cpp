@@ -2,6 +2,7 @@
 
 #include "Async/ParallelFor.h"
 #include "Engine/Texture2D.h"
+#include "MassifBandWeight.h"
 #include "MassifEnvironmentBake.h"
 #include "MassifHabitat.h"
 #include "MassifSeed.h"
@@ -23,7 +24,7 @@ namespace
 	constexpr double PatchContrast = 0.65;
 
 	/** Offsets the patch noise off the placement stream, so layers and plants do not share a lattice. */
-	constexpr uint32 PatchSeedOffset = 0x85EBCA6Bu;
+	constexpr uint32 SurfacePatchSeedOffset = 0x85EBCA6Bu;
 
 	/**
 	 * Temperature either side of freezing over which snow goes from absent to
@@ -38,14 +39,6 @@ namespace
 	constexpr double SnowHoldSlopeDegrees = 42.0;
 	constexpr double SnowShedSlopeDegrees = 58.0;
 
-	/** 0 outside the band, 1 well inside it, ramping over the fade at both ends. */
-	double BandWeight(double Value, double Minimum, double Maximum, double Fade)
-	{
-		const double RisingEdge = (Value - Minimum) / Fade;
-		const double FallingEdge = (Maximum - Value) / Fade;
-		return FMath::Clamp(FMath::Min(RisingEdge, FallingEdge), 0.0, 1.0);
-	}
-
 	/**
 	 * Shuffles the ranking between layers over tens of metres. Driven by position
 	 * rather than by a stream, so a patch keeps its shape across bake cells
@@ -54,7 +47,7 @@ namespace
 	double PatchWeight(const FMassifSurfaceLayer& Layer, uint32 LayerSeed, FVector2d PositionMeters)
 	{
 		const double Noise = MassifNoise::ValueNoise(
-			LayerSeed + PatchSeedOffset, PositionMeters / Layer.PatchWavelengthMeters);
+			LayerSeed + SurfacePatchSeedOffset, PositionMeters / Layer.PatchWavelengthMeters);
 		return 1.0 - PatchContrast * (1.0 - Noise);
 	}
 
@@ -71,14 +64,14 @@ namespace
 			return 0.0;
 		}
 
-		const double Temperature = BandWeight(
+		const double Temperature = MassifBandWeight(
 			Habitat.TemperatureCelsius,
 			Layer.MinTemperatureCelsius,
 			Layer.MaxTemperatureCelsius,
 			Layer.TemperatureFadeCelsius);
-		const double Humidity = BandWeight(
+		const double Humidity = MassifBandWeight(
 			Habitat.Humidity, Layer.MinHumidity, Layer.MaxHumidity, Layer.HumidityFade);
-		const double Slope = BandWeight(
+		const double Slope = MassifBandWeight(
 			Habitat.SlopeDegrees, Layer.MinSlopeDegrees, Layer.MaxSlopeDegrees, Layer.SlopeFadeDegrees);
 		return Temperature * Humidity * Slope;
 	}
@@ -135,7 +128,7 @@ namespace
 		{
 			return 0.0;
 		}
-		const double Slope = BandWeight(
+		const double Slope = MassifBandWeight(
 			Habitat.SlopeDegrees, Layer.MinSlopeDegrees, Layer.MaxSlopeDegrees, Layer.SlopeFadeDegrees);
 		return Slope * Layer.Abundance;
 	}

@@ -45,6 +45,11 @@ tasks:
     cmds:
       - UnrealEditor-Cmd {{.PROJECT}} -run=pythonscript -script={{.TASKFILE_DIR}}/Tools/create_base_content.py -unattended -nosplash -nullrhi
 
+  river-content:
+    desc: Regenerate M_River, the water surface the river ribbons are drawn with
+    cmds:
+      - UnrealEditor-Cmd {{.PROJECT}} -run=pythonscript -script={{.TASKFILE_DIR}}/Tools/create_river_content.py -unattended -nosplash -nullrhi
+
   placeholders:
     desc: Regenerate the stand-in flora meshes drawn until the real models exist
     cmds:

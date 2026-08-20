@@ -9,15 +9,16 @@
 #include "MassifSurfaceLayers.h"
 #include "MassifSurfaceMap.h"
 #include "MassifTerrainField.h"
+#include "MassifUnits.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "MassifTerrainTileMesh.h"
+
+using MassifUnits::MetersToCentimeters;
 
 using UE::Geometry::FDynamicMesh3;
 
 namespace
 {
-	constexpr double MetersToCentimeters = 100.0;
-
 	uint64 PackNodeKey(int32 Depth, int32 GridX, int32 GridY)
 	{
 		return (static_cast<uint64>(Depth) << 42) | (static_cast<uint64>(GridY) << 21) | static_cast<uint64>(GridX);

@@ -7,11 +7,12 @@
 #include "MassifInputConfig.h"
 #include "MassifPlayerController.h"
 #include "MassifTerrainField.h"
+#include "MassifUnits.h"
+
+using MassifUnits::MetersToCentimeters;
 
 namespace
 {
-	constexpr double MetersToCentimeters = 100.0;
-
 	/** Sampling spacing for the catch: the ground the pawn stands on, not the ridge behind it. */
 	constexpr double GroundSampleSpacingMeters = 1.0;
 }

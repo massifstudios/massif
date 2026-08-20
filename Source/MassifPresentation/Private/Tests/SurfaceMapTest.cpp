@@ -12,7 +12,7 @@ namespace
 	/** Points the world is classified at, per side. */
 	constexpr int32 SamplesPerSide = 220;
 
-	constexpr double GroundSampleSpacingMeters = 8.0;
+	constexpr double SurfaceSampleSpacingMeters = 8.0;
 
 	/** Slope past which MassifHabitat calls the ground rock whatever else is true of it. */
 	constexpr double RockSlopeDegrees = 45.0;
@@ -37,7 +37,7 @@ namespace
 			Point.PositionMeters = FVector2d(
 				(Index % SamplesPerSide + 0.5) * StepMeters - 0.5 * WorldSizeMeters,
 				(Index / SamplesPerSide + 0.5) * StepMeters - 0.5 * WorldSizeMeters);
-			Point.Habitat = Habitat.Sample(Point.PositionMeters, GroundSampleSpacingMeters);
+			Point.Habitat = Habitat.Sample(Point.PositionMeters, SurfaceSampleSpacingMeters);
 			Point.Blend = MassifSurfaceMap::Classify(Point.Habitat, Point.PositionMeters, SurfaceTestSeed);
 			Points.Add(Point);
 		}

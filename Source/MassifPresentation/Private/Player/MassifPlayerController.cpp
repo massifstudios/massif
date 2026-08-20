@@ -6,12 +6,13 @@
 #include "MassifGameMode.h"
 #include "MassifInputConfig.h"
 #include "MassifTerrainField.h"
+#include "MassifUnits.h"
 #include "MassifWalkerPawn.h"
+
+using MassifUnits::MetersToCentimeters;
 
 namespace
 {
-	constexpr double MetersToCentimeters = 100.0;
-
 	/** Clearance above the field when the walker is dropped in, so it lands rather than starts embedded. */
 	constexpr double WalkerDropClearanceMeters = 1.0;
 

@@ -3,14 +3,15 @@
 #include "DynamicMesh/DynamicMesh3.h"
 #include "DynamicMesh/DynamicMeshAttributeSet.h"
 #include "MassifTerrainField.h"
+#include "MassifUnits.h"
+
+using MassifUnits::MetersToCentimeters;
 
 using UE::Geometry::FDynamicMesh3;
 using UE::Geometry::FDynamicMeshNormalOverlay;
 
 namespace
 {
-	constexpr double MetersToCentimeters = 100.0;
-
 	/**
 	 * Tile vertex heights plus a one-sample apron on every side, so normals can
 	 * be central-differenced without sampling the field again per vertex.

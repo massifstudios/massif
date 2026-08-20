@@ -99,6 +99,16 @@ After completing all requested changes, and before committing:
    weaken, or rewrite a test to make it pass unless the test itself is
    wrong — and if so, say so explicitly and explain why.
 
+## Visual Verification
+
+Never judge how the game looks yourself. Do not run the game to take a
+screenshot and do not open one to inspect it — you cannot frame a view or
+tell what is worth looking at.
+
+When a change needs to be seen, say what you changed and ask the user to
+look, naming what to look for. Running the game to read *logged numbers* is
+fine; reading pixels is not.
+
 ## Git
 
 You may use git. Work in this order: change → test → commit → push.

@@ -1,0 +1,101 @@
+// River water surface: the ripples running down a channel, and how the water
+// over it reads at the depth and speed the network solved.
+//
+// The ribbon mesh (MassifRiverRibbonMesh.h) hands this a UV that runs 0 to 1
+// across the channel and in metres along it, a flow direction, and a vertex
+// colour carrying the channel's speed, depth and width as fractions of fixed
+// references. Everything here is derived from those, so a brook and a river are
+// drawn by the same material with no per-reach parameters.
+//
+// Colour is not painted on. Water has almost no albedo of its own: the shading
+// model integrates absorption and scattering through the column between the
+// surface and whatever is behind it, and reflects the sky off the top. What this
+// file produces is the surface normal that reflection is taken along, and how
+// much of the water is broken into foam.
+
+#pragma once
+
+/** What one ripple layer contributes, in the channel's own frame. */
+struct FMassifRipple
+{
+	float2 Slope;
+	float Height;
+};
+
+/**
+ * One scrolling layer of ripples. The coordinate is in metres across and along
+ * the channel, so a layer keeps its real size whatever the channel's width does,
+ * and the pattern travels downstream at the water's own speed.
+ *
+ * A plain scroll along V is the whole of the flow here, with no smearing to
+ * correct for: V already runs along the channel wherever it bends, because the
+ * ribbon was parameterised that way when it was built.
+ */
+FMassifRipple MassifSampleRipple(
+	Texture2D RippleTexture,
+	SamplerState RippleSampler,
+	float2 ChannelMeters,
+	float WavelengthMeters,
+	float DriftMeters,
+	float2 Offset)
+{
+	float2 Uv = ChannelMeters / WavelengthMeters + Offset;
+	Uv.y -= DriftMeters / WavelengthMeters;
+
+	float4 Sampled = RippleTexture.SampleLevel(RippleSampler, Uv, 0);
+
+	FMassifRipple Ripple;
+	// A normal map read as a slope: the tangent-space XY is the gradient of the
+	// surface it stands for, which is what this needs to tilt the water by.
+	Ripple.Slope = Sampled.xy * 2.0f - 1.0f;
+	Ripple.Height = Sampled.z;
+	return Ripple;
+}
+
+/**
+ * Turns a slope in the channel's frame into a world normal. The ribbon is level
+ * across the flow, so its across direction is horizontal and the along direction
+ * carries the channel's gradient; the two of them with the surface normal are
+ * the frame the ripple slope is expressed in.
+ */
+float3 MassifRippleNormal(float2 Slope, float3 SurfaceNormal, float3 AlongFlow, float Steepness)
+{
+	float3 AcrossFlow = normalize(cross(AlongFlow, SurfaceNormal));
+	float3 Tilted = SurfaceNormal + Steepness * (Slope.x * AcrossFlow + Slope.y * AlongFlow);
+	return normalize(Tilted);
+}
+
+/**
+ * Whitewater. Fast water aerates, and the crests of the ripples are what goes
+ * white first, so the ripple height decides where the foam sits inside a reach
+ * that is fast enough to have any.
+ */
+float MassifFoamAmount(float SpeedFraction, float RippleHeight, float Threshold, float Fade)
+{
+	float Aeration = saturate((SpeedFraction - Threshold) / max(Fade, 0.0001f));
+	float Crest = saturate(RippleHeight * 2.0f - 0.6f);
+	return saturate(Aeration * (0.35f + 1.3f * Crest));
+}
+
+/**
+ * Foam gathered along the banks, where the water is shallowest and drags on the
+ * bed. Kept off the middle of the channel so it reads as an edge rather than as
+ * a second scrolling layer.
+ */
+float MassifBankFoam(float AcrossUv, float SpeedFraction)
+{
+	float FromCentre = abs(AcrossUv * 2.0f - 1.0f);
+	return smoothstep(0.72f, 1.0f, FromCentre) * saturate(0.3f + SpeedFraction);
+}
+
+/**
+ * How far into the channel a pixel is, 1 in midstream and 0 at the bank. The
+ * ribbon has no bank geometry — it is cut off square at the channel width — so
+ * the water has to be thinned towards the edge, or every stream in the world is
+ * drawn with a hard line down each side.
+ */
+float MassifBankFade(float AcrossUv, float BankWidthFraction)
+{
+	float FromCentre = abs(AcrossUv * 2.0f - 1.0f);
+	return 1.0f - smoothstep(1.0f - BankWidthFraction, 1.0f, FromCentre);
+}
