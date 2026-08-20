@@ -2,8 +2,9 @@
 
 #include "CoreMinimal.h"
 
-class FMassifTerrainField;
+class FMassifHabitatField;
 struct FMassifFoliageSpecies;
+struct FMassifHabitatSample;
 
 namespace MassifFoliageScatter
 {
@@ -16,7 +17,18 @@ namespace MassifFoliageScatter
 	};
 
 	/**
-	 * Every plant of one species on one tile, as a pure function of the field,
+	 * How well one species suits one patch of ground, 0 (never grows there) to 1
+	 * (as good as it gets). The ground type gates it outright — nothing roots in
+	 * a cliff or a snowfield it cannot tolerate — and temperature, humidity and
+	 * steepness each thin it towards the edge of what the species takes.
+	 *
+	 * Multiplied rather than averaged: a plant that cannot stand the cold is not
+	 * rescued by the ground being damp.
+	 */
+	double HabitatWeight(const FMassifFoliageSpecies& Species, const FMassifHabitatSample& Habitat);
+
+	/**
+	 * Every plant of one species on one tile, as a pure function of the habitat,
 	 * the species, the seed and the tile coordinate. No global state and no
 	 * dependence on neighbouring tiles, so a tile scattered alone is identical
 	 * to the same tile scattered in any order alongside others — the same
@@ -24,11 +36,12 @@ namespace MassifFoliageScatter
 	 * pool and be tested headless.
 	 *
 	 * Candidates sit on a jittered grid rather than uniform random positions,
-	 * so plants spread out instead of clumping, then altitude and slope weights
-	 * thin them.
+	 * so plants spread out instead of clumping, then the habitat weight thins
+	 * them: the same species is dense where the ground suits it and scattered
+	 * where it barely holds on.
 	 */
 	void ScatterTile(
-		const FMassifTerrainField& Field,
+		const FMassifHabitatField& Habitat,
 		const FMassifFoliageSpecies& Species,
 		uint32 SpeciesSeed,
 		int32 TileX,

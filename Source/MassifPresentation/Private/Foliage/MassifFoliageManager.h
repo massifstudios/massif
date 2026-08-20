@@ -4,14 +4,16 @@
 #include "GameFramework/Actor.h"
 #include "MassifFoliageManager.generated.h"
 
+class FMassifHabitatField;
 class FMassifTerrainField;
 class UHierarchicalInstancedStaticMeshComponent;
 struct FMassifFoliageSpecies;
 
 /**
- * Plants the massif from the terrain field: for every species, the scatter
- * tiles within its visible radius of the camera are built and handed to one
- * instanced-mesh component each, and dropped again when the camera leaves.
+ * Plants the massif from the habitat derived over the terrain field: for every
+ * species, the scatter tiles within its visible radius of the camera are built
+ * and handed to one instanced-mesh component each, and dropped again when the
+ * camera leaves.
  *
  * Purely presentation. The scatter is a pure function of the seed and the
  * field (see MassifFoliageScatter), so what grows where is stable for a seed
@@ -56,7 +58,7 @@ private:
 	/** Spread the cost of moving: enough that flying does not leave bald ground for long. */
 	static constexpr int32 MaxTileBuildsPerFrame = 3;
 
-	TSharedPtr<const FMassifTerrainField> Field;
+	TSharedPtr<const FMassifHabitatField> Habitat;
 	uint32 MasterSeed = 0;
 
 	UPROPERTY()

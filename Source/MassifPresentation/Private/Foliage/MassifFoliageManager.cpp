@@ -5,6 +5,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "MassifFoliageScatter.h"
 #include "MassifFoliageSpecies.h"
+#include "MassifHabitat.h"
 #include "MassifTerrainField.h"
 #include "UObject/SoftObjectPath.h"
 
@@ -57,7 +58,7 @@ void AMassifFoliageManager::ResetField(TSharedPtr<const FMassifTerrainField> InF
 {
 	check(InField.IsValid());
 	DropAllTiles();
-	Field = InField;
+	Habitat = MakeShared<const FMassifHabitatField>(InField.ToSharedRef(), InMasterSeed);
 	MasterSeed = InMasterSeed;
 }
 
@@ -90,7 +91,7 @@ void AMassifFoliageManager::DropAllTiles()
 void AMassifFoliageManager::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
-	if (!Field.IsValid())
+	if (!Habitat.IsValid())
 	{
 		return;
 	}
@@ -185,7 +186,7 @@ void AMassifFoliageManager::PlantTile(const FTileRequest& Request)
 	const uint32 SpeciesSeed = MassifFoliageScatter::MakeSpeciesSeed(MasterSeed, Species.Name);
 
 	TArray<MassifFoliageScatter::FInstance> Instances;
-	MassifFoliageScatter::ScatterTile(*Field, Species, SpeciesSeed, Request.TileX, Request.TileY, Instances);
+	MassifFoliageScatter::ScatterTile(*Habitat, Species, SpeciesSeed, Request.TileX, Request.TileY, Instances);
 
 	FPlantedTile Tile;
 	Tile.SpeciesIndex = Request.SpeciesIndex;
