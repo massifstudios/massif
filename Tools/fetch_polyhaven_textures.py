@@ -8,7 +8,7 @@ polite).
 The downloads are not committed: this script plus its manifest is the source of
 truth, and the files are re-fetchable at any time. Run it once after cloning.
 
-    python3 Tools/fetch_polyhaven_textures.py                  # the default set
+    python3 Tools/fetch_polyhaven_textures.py                  # the whole manifest
     python3 Tools/fetch_polyhaven_textures.py --resolution 4k
     python3 Tools/fetch_polyhaven_textures.py --group rock snow
     python3 Tools/fetch_polyhaven_textures.py --list rock      # what is available
@@ -42,17 +42,68 @@ MAP_ALIASES = [
     ("ARM", ["arm", "ARM"]),
 ]
 
-# Categories Poly Haven tags textures with, per surface we need. Assets are
-# picked from these unless explicit slugs are given.
+# The sets the terrain material is built from, named rather than picked by
+# download rank: which surfaces the massif needs is a look decision, and a
+# re-run months later must fetch the same files the material's layer table
+# names. Categories below are only for browsing with --list.
+GROUP_SLUGS = {
+    "rock": [
+        "aerial_grass_rock",
+        "aerial_rocks_02",
+        "gray_rocks",
+        "rock_face_03",
+        "rocks_ground_03",
+        "rocky_terrain",
+        "rocky_terrain_02",
+        "rocky_terrain_03",
+    ],
+    "scree": [
+        "aerial_beach_01",
+        "dry_river_pebbles",
+        "gravelly_sand",
+        "river_small_rocks",
+        "rocky_trail",
+        "rocky_trail_02",
+        "sand_01",
+    ],
+    "ground": [
+        "brown_mud_leaves_01",
+        "coast_sand_rocks_02",
+        "dirt",
+        "mud_forest",
+    ],
+    "forest": [
+        # forrest_ground_01 is spelled that way on Poly Haven.
+        "forrest_ground_01",
+        "forest_ground_04",
+        "forest_ground_05",
+        "forest_ground_06",
+        "forest_leaves_02",
+        "bark_brown_01",
+        "bark_brown_02",
+    ],
+    "grass": [
+        "leafy_grass",
+        "sparse_grass",
+    ],
+    "snow": [
+        "snow_01",
+        "snow_02",
+        "snow_03",
+        "snow_field_aerial",
+    ],
+}
+
+# Categories Poly Haven tags textures with, per surface we need. Only --list
+# reads these; the manifest above is what gets fetched.
 GROUP_CATEGORIES = {
     "rock": ["rock", "sandstone"],
     "snow": ["snow"],
     "forest": ["collection: pine_forest", "bark"],
     "ground": ["terrain"],
+    "grass": ["grass"],
     "scree": ["gravel", "sand"],
 }
-
-DEFAULT_PER_GROUP = 3
 
 
 def fetch_json(url):
@@ -109,6 +160,7 @@ def fetch_asset(slug, group, resolution):
         return 0
 
     written = 0
+    available = 0
     for suffix, aliases in MAP_ALIASES:
         entry = next((files[alias] for alias in aliases if alias in files), None)
         if entry is None:
@@ -117,6 +169,7 @@ def fetch_asset(slug, group, resolution):
         if chosen is None:
             continue
         url, extension = chosen
+        available += 1
         destination = OUTPUT_ROOT / group / f"T_{asset_name(slug)}_{suffix}.{extension}"
         try:
             if download(url, destination):
@@ -127,17 +180,16 @@ def fetch_asset(slug, group, resolution):
         except urllib.error.URLError as error:
             print(f"  ! {destination.name}: {error}", file=sys.stderr)
 
-    if written == 0:
-        print(f"  ! {slug}: nothing downloaded at {resolution}", file=sys.stderr)
+    if available == 0:
+        print(f"  ! {slug}: no maps offered at {resolution}", file=sys.stderr)
     return written
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--resolution", default="2k", help="1k, 2k, 4k or 8k (default 2k)")
-    parser.add_argument("--group", nargs="*", default=sorted(GROUP_CATEGORIES), help="which surface groups to fetch")
+    parser.add_argument("--group", nargs="*", default=sorted(GROUP_SLUGS), help="which surface groups to fetch")
     parser.add_argument("--slugs", nargs="*", help="explicit Poly Haven asset slugs, put in the first named group")
-    parser.add_argument("--count", type=int, default=DEFAULT_PER_GROUP, help="assets per group (default 3)")
     parser.add_argument("--list", metavar="GROUP", help="print available slugs for a group and exit")
     arguments = parser.parse_args()
 
@@ -155,12 +207,11 @@ def main():
         return 0
 
     for group in arguments.group:
-        categories = GROUP_CATEGORIES.get(group)
-        if categories is None:
-            print(f"unknown group '{group}', known: {', '.join(sorted(GROUP_CATEGORIES))}", file=sys.stderr)
+        slugs = GROUP_SLUGS.get(group)
+        if slugs is None:
+            print(f"unknown group '{group}', known: {', '.join(sorted(GROUP_SLUGS))}", file=sys.stderr)
             continue
-        slugs = list_assets(categories)[: arguments.count]
-        print(f"{group}: {len(slugs)} assets at {arguments.resolution} -> {', '.join(slugs) or 'none'}")
+        print(f"{group}: {len(slugs)} assets at {arguments.resolution} -> {', '.join(slugs)}")
         for slug in slugs:
             fetch_asset(slug, group, arguments.resolution)
 
