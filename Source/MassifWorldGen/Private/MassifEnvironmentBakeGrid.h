@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "MassifEnvironmentBake.h"
+#include "MassifRiverNetwork.h"
 
 class FMassifHeightmap;
 
@@ -147,4 +148,21 @@ namespace MassifBakeCpu
 		TArrayView<const float> AccumulationSquareMeters,
 		TArrayView<const float> StandingWaterDepthMeters,
 		TArray<float>& OutWetness);
+
+	/**
+	 * Traces the channels out of the solved drainage: where enough catchment has
+	 * gathered to make a river, and the path each one takes to the world border.
+	 *
+	 * Reads the working surfaces rather than the finished channels because it has
+	 * to. Altitudes are quantised to four centimetres on the way into a channel,
+	 * and the drop the depression fill adds to keep a flat descending is a ten
+	 * thousandth of that, so a river traced against the stored surface would lose
+	 * its way across every lake bed in the world.
+	 */
+	TSharedRef<const FMassifRiverNetwork> ExtractRivers(
+		const FMassifBakeGrid& Grid,
+		const FMassifRiverParams& Params,
+		TArrayView<const double> Measured,
+		TArrayView<const double> Filled,
+		TArrayView<const float> AccumulationSquareMeters);
 }

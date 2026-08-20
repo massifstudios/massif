@@ -122,6 +122,9 @@ TSharedRef<const FMassifEnvironmentBake> FMassifEnvironmentBake::BuildOnCpu(
 		Surfaces.StandingWaterDepthMeters, Surfaces.Wetness);
 
 	TSharedRef<FMassifEnvironmentBake> Bake(new FMassifEnvironmentBake());
+	Bake->Rivers = MassifBakeCpu::ExtractRivers(
+		Grid, Params.Rivers, Surfaces.MeasuredAltitudeMeters, Surfaces.FilledAltitudeMeters,
+		Surfaces.FlowAccumulationSquareMeters);
 	Bake->Width = Grid.Width;
 	Bake->Height = Grid.Height;
 	Bake->CellSizeMeters = Grid.CellSizeMeters;

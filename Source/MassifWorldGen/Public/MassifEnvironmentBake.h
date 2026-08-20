@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "MassifRiverNetwork.h"
 
 class FMassifHeightmap;
 
@@ -105,6 +106,9 @@ struct FMassifEnvironmentBakeParams
 	/** Iterations the GPU relaxations run for; the CPU path solves exactly and ignores these. */
 	int32 GpuDepressionFillIterations = 2048;
 	int32 GpuFlowRoutingIterations = 2048;
+
+	/** Which of the routed water is a river, and how big. */
+	FMassifRiverParams Rivers;
 };
 
 /**
@@ -148,6 +152,16 @@ public:
 
 	/** One cell, unfiltered. For debug textures and whole-grid passes. */
 	double ReadCell(EMassifBakeChannel Channel, int32 Column, int32 Row) const;
+
+	/**
+	 * The channels the routed water cut, as polylines. Traced during the solve
+	 * rather than from the stored channels above, which are too coarsely quantised
+	 * to follow a river across a lake bed.
+	 */
+	const FMassifRiverNetwork& GetRivers() const
+	{
+		return Rivers.Get();
+	}
 
 	/** Lowest and highest value the solve produced, for normalising debug views. */
 	double GetChannelMinimum(EMassifBakeChannel Channel) const;
@@ -199,6 +213,10 @@ private:
 	double DecodeCell(const FChannel& Channel, int32 Column, int32 Row) const;
 
 	FChannel Channels[static_cast<int32>(EMassifBakeChannel::Count)];
+
+	/** Starts empty so the bake is never half-built; the solve replaces it. */
+	TSharedRef<const FMassifRiverNetwork> Rivers = FMassifRiverNetwork::Create({});
+
 	int32 Width = 0;
 	int32 Height = 0;
 	double CellSizeMeters = 0.0;

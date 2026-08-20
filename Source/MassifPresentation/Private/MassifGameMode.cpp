@@ -218,6 +218,13 @@ void AMassifGameMode::BuildEnvironmentBake(const FMassifHeightmap& Heightmap)
 		EnvironmentBake->GetChannelMaximum(EMassifBakeChannel::StandingWaterDepth),
 		EnvironmentBake->GetChannelMaximum(EMassifBakeChannel::FlowAccumulation),
 		EnvironmentBake->GetChannelMaximum(EMassifBakeChannel::SoilDepth));
+
+	const FMassifRiverNetwork& Rivers = EnvironmentBake->GetRivers();
+	UE_LOG(LogTemp, Display,
+		TEXT("Rivers: %d reaches from %d sources, %.1f km of channel, order %d, "
+			"largest %.1f m3/s and %.1f m wide"),
+		Rivers.GetReaches().Num(), Rivers.GetSourceCount(), Rivers.GetTotalLengthMeters() / 1000.0,
+		Rivers.GetMaxStrahlerOrder(), Rivers.GetMaxDischargeCubicMetersPerSecond(), Rivers.GetMaxWidthMeters());
 }
 
 void AMassifGameMode::SchedulePosedScreenshot(
