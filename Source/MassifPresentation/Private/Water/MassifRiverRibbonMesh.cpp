@@ -56,27 +56,24 @@ namespace
 		return FVector3f(Normal.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, FVector3d::UpVector));
 	}
 
-	/**
-	 * Where the sheet is drawn. The solved surface, except where the network's
-	 * running minimum handed it down below the ground measured under it, which
-	 * would bury the river.
-	 */
+	/** Where the sheet is drawn: the solved surface, which the terrain is cut to sit under. */
 	double SurfaceAltitudeAt(const FMassifRiverNode& Node)
 	{
-		using namespace MassifRiverRibbonMesh;
-		return FMath::Max(Node.WaterSurfaceMeters, Node.GroundAltitudeMeters + SheetClearanceMeters);
+		return Node.WaterSurfaceMeters;
 	}
 
 	/**
 	 * How much deeper the solved channel is than the clearance the sheet has over
-	 * the bed. The material multiplies the water's absorption and scattering by
-	 * this, so a sheet a few centimetres above the ground still reads as the depth
-	 * of water the catchment actually puts there.
+	 * the bed. One where the terrain carries the whole trench, which is what the
+	 * carve gives it; the material multiplies the water's absorption and
+	 * scattering by this, so anywhere the geometry did fall short of the column
+	 * the catchment puts there, the shading would still read it.
 	 */
 	double ColumnScaleAt(const FMassifRiverNode& Node)
 	{
 		using namespace MassifRiverRibbonMesh;
-		const double ClearanceMeters = SurfaceAltitudeAt(Node) - Node.GroundAltitudeMeters;
+		const double ClearanceMeters =
+			FMath::Max(SurfaceAltitudeAt(Node) - Node.BedAltitudeMeters, UE_DOUBLE_SMALL_NUMBER);
 		return FMath::Clamp(Node.DepthMeters / ClearanceMeters, 1.0, ColumnScaleReference);
 	}
 
@@ -139,7 +136,7 @@ namespace
 		FVector2d HalfSpanMeters = FVector2d::ZeroVector;
 
 		double SurfaceAltitudeMeters = 0.0;
-		double GroundAltitudeMeters = 0.0;
+		double BedAltitudeMeters = 0.0;
 		double AlongMeters = 0.0;
 		FVector2d FlowDirection = FVector2d::ZeroVector;
 
@@ -217,7 +214,7 @@ namespace
 			Section.CentreMeters = Node.PositionMeters;
 			Section.HalfSpanMeters = Across * HalfWidthMeters(Reach, NodeIndex);
 			Section.SurfaceAltitudeMeters = SurfaceAltitudeAt(Node);
-			Section.GroundAltitudeMeters = Node.GroundAltitudeMeters;
+			Section.BedAltitudeMeters = Node.BedAltitudeMeters;
 			Section.AlongMeters = AlongMeters;
 			Section.FlowDirection = FlowDirection;
 			Section.SurfaceNormal = SurfaceNormalAt(Reach, NodeIndex, FlowDirection);
@@ -230,10 +227,10 @@ namespace
 		void AppendNodeVertices(const FMassifRiverReach& Reach, int32 NodeIndex, double AlongMeters)
 		{
 			const FCrossSection Section = MakeCrossSection(Reach, NodeIndex, AlongMeters);
-			AppendCrossSectionVertex(Section, -1.0, 0.0f, Section.GroundAltitudeMeters, -Section.OutwardNormal);
+			AppendCrossSectionVertex(Section, -1.0, 0.0f, Section.BedAltitudeMeters, -Section.OutwardNormal);
 			AppendCrossSectionVertex(Section, -1.0, 0.0f, Section.SurfaceAltitudeMeters, Section.SurfaceNormal);
 			AppendCrossSectionVertex(Section, 1.0, 1.0f, Section.SurfaceAltitudeMeters, Section.SurfaceNormal);
-			AppendCrossSectionVertex(Section, 1.0, 1.0f, Section.GroundAltitudeMeters, Section.OutwardNormal);
+			AppendCrossSectionVertex(Section, 1.0, 1.0f, Section.BedAltitudeMeters, Section.OutwardNormal);
 		}
 
 		void AppendCrossSectionVertex(

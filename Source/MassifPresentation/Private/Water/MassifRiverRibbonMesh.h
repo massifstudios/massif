@@ -23,16 +23,6 @@ namespace MassifRiverRibbonMesh
 	inline constexpr double ColumnScaleReference = 12.0;
 
 	/**
-	 * How far the drawn sheet is held over the measured bed.
-	 *
-	 * The solved water surface is handed downstream as a running minimum, so that
-	 * it never climbs as it goes; where that minimum locks onto a low cell the
-	 * surface can end up under the ground measured beneath it. Drawing the sheet
-	 * there would bury the river. This is the clearance it is lifted to instead.
-	 */
-	inline constexpr double SheetClearanceMeters = 0.25;
-
-	/**
 	 * Share of a bend's radius the ribbon may reach across it. An offset polyline
 	 * folds over itself wherever its half-width exceeds the radius it is turning
 	 * through, which on a meander is a bow tie across the inside of the bend.
@@ -42,8 +32,8 @@ namespace MassifRiverRibbonMesh
 	/**
 	 * The water surface of a set of reaches, as one sheet per reach: four vertices
 	 * per node, the sheet itself spanning the channel level at the solved water
-	 * level, and a short skirt hanging from each of its edges down to the measured
-	 * bed.
+	 * level, and a skirt hanging from each of its edges down to the channel invert
+	 * the terrain is carved to.
 	 *
 	 * Level across the flow is the whole point — that is what a water surface is,
 	 * and it is what lets the material treat the across direction as horizontal.
@@ -59,11 +49,8 @@ namespace MassifRiverRibbonMesh
 	 *
 	 * Vertex colour carries speed, depth and width as fractions of the references
 	 * above, and in alpha how far the water's own depth exceeds the clearance the
-	 * sheet actually has over the bed. The elevation model is a laser scan, so it
-	 * measures the top of a river and not its bottom: the geometry can only be
-	 * given a freeboard, and the shading model would read that as a few
-	 * centimetres of water. Alpha is what lets the material integrate the column
-	 * the network solved instead of the one the geometry has.
+	 * sheet has over the bed. One, wherever the terrain carries the whole trench
+	 * the network asked for, which is what the carve gives it.
 	 *
 	 * Positions are centimetres local to OriginMeters; Z is absolute altitude, so
 	 * the owning component sits over the origin at Z = 0. Pure geometry, no

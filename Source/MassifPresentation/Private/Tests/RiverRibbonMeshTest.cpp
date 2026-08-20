@@ -24,7 +24,7 @@ namespace
 			Node.PositionMeters = FVector2d(NodeIndex * SpacingMeters, 0.0);
 			// Falling east, so the reach has a gradient to take a normal from.
 			Node.WaterSurfaceMeters = RibbonTestSurfaceMeters - NodeIndex;
-			Node.GroundAltitudeMeters = Node.WaterSurfaceMeters - 0.25;
+			Node.BedAltitudeMeters = Node.WaterSurfaceMeters - 0.5;
 			Node.WidthMeters = RibbonTestWidthMeters;
 			Node.DepthMeters = 0.5;
 			Node.SpeedMetersPerSecond = 1.0;
@@ -46,7 +46,7 @@ namespace
 			FMassifRiverNode Node;
 			Node.PositionMeters = RadiusMeters * FVector2d(FMath::Cos(Turned), FMath::Sin(Turned));
 			Node.WaterSurfaceMeters = RibbonTestSurfaceMeters - NodeIndex;
-			Node.GroundAltitudeMeters = Node.WaterSurfaceMeters - 0.25;
+			Node.BedAltitudeMeters = Node.WaterSurfaceMeters - 0.5;
 			Node.WidthMeters = WidthMeters;
 			Node.DepthMeters = 0.5;
 			Node.SpeedMetersPerSecond = 1.0;
@@ -99,7 +99,7 @@ bool FRiverRibbonMeshShapeTest::RunTest(const FString& Parameters)
 		NodesOffWidth += FMath::IsNearlyEqual(SpanMeters, RibbonTestWidthMeters, 0.001) ? 0 : 1;
 
 		const double SurfaceMeters = Reach.Nodes[NodeIndex].WaterSurfaceMeters * MetersToCentimeters;
-		const double BedMeters = Reach.Nodes[NodeIndex].GroundAltitudeMeters * MetersToCentimeters;
+		const double BedMeters = Reach.Nodes[NodeIndex].BedAltitudeMeters * MetersToCentimeters;
 		EdgesOffSurface += FMath::IsNearlyEqual(LeftEdge.Z, SurfaceMeters, 0.1) ? 0 : 1;
 		EdgesOffSurface += FMath::IsNearlyEqual(RightEdge.Z, SurfaceMeters, 0.1) ? 0 : 1;
 		FeetOffBed += FMath::IsNearlyEqual(LeftFoot.Z, BedMeters, 0.1) ? 0 : 1;
@@ -114,38 +114,8 @@ bool FRiverRibbonMeshShapeTest::RunTest(const FString& Parameters)
 	// the across direction assumes it, and a sheet that is not level across reads
 	// as a ridge running down the valley rather than as water in it.
 	TestEqual(TEXT("Both edges sit at the water surface"), EdgesOffSurface, 0);
-	TestEqual(TEXT("The skirts reach down to the measured bed"), FeetOffBed, 0);
+	TestEqual(TEXT("The skirts reach down to the channel invert"), FeetOffBed, 0);
 	TestEqual(TEXT("The skirts hang straight down from the edges"), FeetOffPlumb, 0);
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRiverRibbonSheetClearanceTest,
-	"Massif.Presentation.RiverRibbonSheetClearance",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
-
-bool FRiverRibbonSheetClearanceTest::RunTest(const FString& Parameters)
-{
-	// The network hands its water level downstream as a running minimum, so where
-	// that minimum locks onto a low cell the solved surface can end up under the
-	// ground measured beneath it. Drawn there the river would be buried.
-	FMassifRiverReach Reach = MakeStraightReach(3, 8.0);
-	for (FMassifRiverNode& Node : Reach.Nodes)
-	{
-		Node.GroundAltitudeMeters = Node.WaterSurfaceMeters + 3.0;
-	}
-
-	const TSharedPtr<FDynamicMesh3> Mesh = BuildFrom(Reach);
-
-	int32 EdgesUnderBed = 0;
-	for (int32 NodeIndex = 0; NodeIndex < Reach.Nodes.Num(); ++NodeIndex)
-	{
-		const double ExpectedMeters =
-			Reach.Nodes[NodeIndex].GroundAltitudeMeters + MassifRiverRibbonMesh::SheetClearanceMeters;
-		const double EdgeMeters = VertexAt(*Mesh, NodeIndex, 1).Z / MetersToCentimeters;
-		EdgesUnderBed += FMath::IsNearlyEqual(EdgeMeters, ExpectedMeters, 0.001) ? 0 : 1;
-	}
-
-	TestEqual(TEXT("A surface solved below its bed is lifted clear of it"), EdgesUnderBed, 0);
 	return true;
 }
 
