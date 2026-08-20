@@ -1,6 +1,8 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "MassifEnvironmentBake.h"
+#include "MassifHabitat.h"
 #include "MassifHeightmap.h"
 #include "MassifTerrainField.h"
 
@@ -33,5 +35,16 @@ namespace MassifTestTerrain
 		}
 		return MakeShared<const FMassifTerrainField>(
 			FMassifHeightmap::FromAltitudes(Altitudes, SampleCountPerSide, SampleCountPerSide, SampleSpacingMeters));
+	}
+
+	/** The same terrain with its water solved, which is what habitat needs to answer at all. */
+	inline TSharedRef<const FMassifHabitatField> MakeHabitat(uint32 MasterSeed)
+	{
+		const TSharedRef<const FMassifTerrainField> Field = MakeField();
+		return MakeShared<const FMassifHabitatField>(
+			Field,
+			FMassifEnvironmentBake::BuildOnCpu(
+				Field->GetHeightmap(), MasterSeed, FMassifEnvironmentBakeParams()),
+			MasterSeed);
 	}
 }

@@ -42,7 +42,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFoliageScatterTest,
 
 bool FFoliageScatterTest::RunTest(const FString& Parameters)
 {
-	const FMassifHabitatField Habitat(MassifTestTerrain::MakeField(), ScatterTestSeed);
+	const TSharedRef<const FMassifHabitatField> Habitat = MassifTestTerrain::MakeHabitat(ScatterTestSeed);
 	const FMassifFoliageSpecies& Species = MassifFoliage::Species[0];
 	const uint32 SpeciesSeed = MassifFoliageScatter::MakeSpeciesSeed(ScatterTestSeed, Species.Name);
 
@@ -55,7 +55,7 @@ bool FFoliageScatterTest::RunTest(const FString& Parameters)
 	{
 		const int32 TileX = TileIndex % ScannedTilesPerSide;
 		const int32 TileY = TileIndex / ScannedTilesPerSide;
-		MassifFoliageScatter::ScatterTile(Habitat, Species, SpeciesSeed, TileX, TileY, Instances);
+		MassifFoliageScatter::ScatterTile(*Habitat, Species, SpeciesSeed, TileX, TileY, Instances);
 		TotalInstanceCount += Instances.Num();
 		if (Instances.Num() > BusiestTileCount)
 		{
@@ -80,7 +80,7 @@ bool FFoliageScatterTest::RunTest(const FString& Parameters)
 				return false;
 			}
 
-			const FMassifHabitatSample Ground = Habitat.Sample(PositionMeters, GroundSampleSpacingMeters);
+			const FMassifHabitatSample Ground = Habitat->Sample(PositionMeters, GroundSampleSpacingMeters);
 			if (MassifFoliageScatter::HabitatWeight(Species, Ground) <= 0.0)
 			{
 				AddError(FString::Printf(
@@ -112,8 +112,8 @@ bool FFoliageScatterTest::RunTest(const FString& Parameters)
 	// bare patch of the test terrain cannot pass this by growing nothing twice.
 	TArray<MassifFoliageScatter::FInstance> First;
 	TArray<MassifFoliageScatter::FInstance> Second;
-	MassifFoliageScatter::ScatterTile(Habitat, Species, SpeciesSeed, BusiestTileX, BusiestTileY, First);
-	MassifFoliageScatter::ScatterTile(Habitat, Species, SpeciesSeed, BusiestTileX, BusiestTileY, Second);
+	MassifFoliageScatter::ScatterTile(*Habitat, Species, SpeciesSeed, BusiestTileX, BusiestTileY, First);
+	MassifFoliageScatter::ScatterTile(*Habitat, Species, SpeciesSeed, BusiestTileX, BusiestTileY, Second);
 	if (First.Num() != Second.Num())
 	{
 		AddError(FString::Printf(TEXT("Rescattering the same tile gave %d then %d instances"),
@@ -135,7 +135,7 @@ bool FFoliageScatterTest::RunTest(const FString& Parameters)
 	// A different seed has to move the forest, or the seed is not reaching it.
 	TArray<MassifFoliageScatter::FInstance> OtherSeed;
 	MassifFoliageScatter::ScatterTile(
-		Habitat,
+		*Habitat,
 		Species,
 		MassifFoliageScatter::MakeSpeciesSeed(ScatterTestSeed + 1, Species.Name),
 		BusiestTileX,
@@ -156,11 +156,11 @@ bool FFoliageSpeciesCoverageTest::RunTest(const FString& Parameters)
 {
 	// A species whose bands miss the massif it is planted on grows nothing at
 	// all, which reads as a missing mesh rather than as a mistuned table.
-	const FMassifHabitatField Habitat(MassifTestTerrain::MakeField(), ScatterTestSeed);
+	const TSharedRef<const FMassifHabitatField> Habitat = MassifTestTerrain::MakeHabitat(ScatterTestSeed);
 
 	for (const FMassifFoliageSpecies& Species : MassifFoliage::Species)
 	{
-		const FSpeciesCoverage Coverage = MeasureCoverage(Habitat, Species);
+		const FSpeciesCoverage Coverage = MeasureCoverage(*Habitat, Species);
 		AddInfo(FString::Printf(TEXT("%s: %d instances over %d of %d tiles"),
 			Species.Name, Coverage.InstanceCount, Coverage.OccupiedTileCount,
 			ScannedTilesPerSide * ScannedTilesPerSide));

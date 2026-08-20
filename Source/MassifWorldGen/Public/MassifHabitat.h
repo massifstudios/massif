@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 
+class FMassifEnvironmentBake;
 class FMassifTerrainField;
 
 /** Ground cover class of a point on the surface, as far as anything growing on it cares. */
@@ -45,6 +46,12 @@ struct FMassifHabitatSample
 	/** Soil moisture, 0 parched to 1 saturated. */
 	double Humidity = 0.0;
 
+	/** Loose material over bedrock. Nothing roots where this runs out. */
+	double SoilDepthMeters = 0.0;
+
+	/** Water standing on the surface: a tarn, a pond, or a boggy hollow. */
+	double StandingWaterDepthMeters = 0.0;
+
 	EMassifGroundType GroundType = EMassifGroundType::Soil;
 };
 
@@ -53,15 +60,19 @@ struct FMassifHabitatSample
  *
  *     Habitat(Position, SampleSpacing)
  *
- * Derived from the terrain field and the master seed alone, with no state of
+ * Reads the terrain field for shape, the environment bake (ARCHITECTURE §5.6)
+ * for water and soil, and the master seed for the weather. It holds no state of
  * its own — the same position under the same seed always answers the same,
  * whoever asks and in whatever order, so this can be sampled from the thread
- * pool and tested headless like the field it reads.
+ * pool and tested headless like the fields it reads.
  *
  * Temperature is altitude by lapse rate, warmed or cooled by how the ground
- * faces the sun; humidity combines orographic lift, the windward side of the
- * massif, water gathering in hollows and draining off steep ground, and
- * evaporation where it is hot. Ground type follows from those and the slope.
+ * faces the sun. Humidity starts from the bake's wetness — the catchment
+ * draining through the point, which no local measurement can see — and climate
+ * moves it: orographic lift, the windward side of the massif, evaporation where
+ * it is hot, and the seed's own wet and dry regions. Ground type is soil depth
+ * and standing water first and slope second, so bare rock is ground the water
+ * stripped rather than ground over an angle.
  *
  * Presentation reads this for what to plant; it is not sim state. When forest
  * and scree become semantic masks (ARCHITECTURE §5.5) those masks are derived
@@ -72,7 +83,10 @@ struct FMassifHabitatSample
 class MASSIFWORLDGEN_API FMassifHabitatField
 {
 public:
-	FMassifHabitatField(TSharedRef<const FMassifTerrainField> InTerrainField, uint32 InMasterSeed);
+	FMassifHabitatField(
+		TSharedRef<const FMassifTerrainField> InTerrainField,
+		TSharedRef<const FMassifEnvironmentBake> InEnvironmentBake,
+		uint32 InMasterSeed);
 
 	FMassifHabitatField(const FMassifHabitatField&) = delete;
 	FMassifHabitatField& operator=(const FMassifHabitatField&) = delete;
@@ -85,6 +99,11 @@ public:
 		return TerrainField.Get();
 	}
 
+	const FMassifEnvironmentBake& GetEnvironmentBake() const
+	{
+		return EnvironmentBake.Get();
+	}
+
 	/** Direction the prevailing wind travels, drawn from the seed. Slopes facing into it collect the rain. */
 	FVector2d GetPrevailingWindDirection() const
 	{
@@ -92,13 +111,11 @@ public:
 	}
 
 private:
-	/** How far below the ring of neighbours the point sits, -1 (ridge) to 1 (hollow). */
-	double SampleConvergence(FVector2d PositionMeters) const;
-
 	/** Large-scale wet and dry regions, -1 to 1, so one massif is not uniformly damp. */
 	double SampleWeatherVariation(FVector2d PositionMeters) const;
 
 	TSharedRef<const FMassifTerrainField> TerrainField;
+	TSharedRef<const FMassifEnvironmentBake> EnvironmentBake;
 	uint32 WeatherSeed = 0;
 	FVector2d PrevailingWindDirection = FVector2d(1.0, 0.0);
 };

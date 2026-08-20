@@ -6,6 +6,8 @@
 
 class AMassifFoliageManager;
 class AMassifTerrainManager;
+class FMassifEnvironmentBake;
+class FMassifHeightmap;
 class FMassifTerrainField;
 
 /**
@@ -31,6 +33,9 @@ public:
 
 private:
 	void LoadTerrainAndSpawnManagers();
+
+	/** Solves water over the whole world, which is what habitat and foliage read (ARCHITECTURE 5.6). */
+	void BuildEnvironmentBake(const FMassifHeightmap& Heightmap);
 	void SpawnEnvironmentActors();
 	void SpawnSunAndSky();
 	void SpawnAtmosphericHaze();
@@ -43,6 +48,7 @@ private:
 	void SchedulePosedScreenshot(float PoseDelaySeconds, FVector LocationCentimeters, FRotator Rotation, FString ShotName);
 
 	TSharedPtr<const FMassifTerrainField> TerrainField;
+	TSharedPtr<const FMassifEnvironmentBake> EnvironmentBake;
 
 	UPROPERTY()
 	TObjectPtr<AMassifTerrainManager> TerrainManager;

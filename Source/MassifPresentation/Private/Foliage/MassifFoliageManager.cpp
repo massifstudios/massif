@@ -5,6 +5,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "MassifFoliageScatter.h"
 #include "MassifFoliageSpecies.h"
+#include "MassifEnvironmentBake.h"
 #include "MassifHabitat.h"
 #include "MassifTerrainField.h"
 #include "UObject/SoftObjectPath.h"
@@ -61,17 +62,24 @@ AMassifFoliageManager::AMassifFoliageManager()
 	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 }
 
-void AMassifFoliageManager::Initialize(TSharedPtr<const FMassifTerrainField> InField, uint32 InMasterSeed)
+void AMassifFoliageManager::Initialize(
+	TSharedPtr<const FMassifTerrainField> InField,
+	TSharedPtr<const FMassifEnvironmentBake> InEnvironmentBake,
+	uint32 InMasterSeed)
 {
 	LoadSpeciesMeshes();
-	ResetField(InField, InMasterSeed);
+	ResetField(InField, InEnvironmentBake, InMasterSeed);
 }
 
-void AMassifFoliageManager::ResetField(TSharedPtr<const FMassifTerrainField> InField, uint32 InMasterSeed)
+void AMassifFoliageManager::ResetField(
+	TSharedPtr<const FMassifTerrainField> InField,
+	TSharedPtr<const FMassifEnvironmentBake> InEnvironmentBake,
+	uint32 InMasterSeed)
 {
-	check(InField.IsValid());
+	check(InField.IsValid() && InEnvironmentBake.IsValid());
 	DropAllTiles();
-	Habitat = MakeShared<const FMassifHabitatField>(InField.ToSharedRef(), InMasterSeed);
+	Habitat = MakeShared<const FMassifHabitatField>(
+		InField.ToSharedRef(), InEnvironmentBake.ToSharedRef(), InMasterSeed);
 	MasterSeed = InMasterSeed;
 }
 

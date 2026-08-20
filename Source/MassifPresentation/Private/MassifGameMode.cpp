@@ -10,6 +10,7 @@
 #include "Engine/SkyLight.h"
 #include "Foliage/MassifFoliageManager.h"
 #include "GameFramework/WorldSettings.h"
+#include "MassifEnvironmentBake.h"
 #include "MassifHeightmap.h"
 #include "MassifTerrainField.h"
 #include "Materials/MaterialInterface.h"
@@ -88,6 +89,15 @@ namespace
 		return FPaths::ProjectDir() / TEXT("Data/Terrain") / DemName + TEXT(".massifdem");
 	}
 
+	const TCHAR* DescribeBakePath(bool bBuiltOnGpu)
+	{
+		if (bBuiltOnGpu)
+		{
+			return TEXT("GPU");
+		}
+		return TEXT("CPU");
+	}
+
 	UMaterialInterface* LoadTerrainMaterial()
 	{
 		const FSoftObjectPath MaterialPath(TEXT("/Game/Materials/M_Terrain.M_Terrain"));
@@ -145,12 +155,30 @@ void AMassifGameMode::LoadTerrainAndSpawnManagers()
 		Heightmap->GetMipCount(), FPlatformTime::Seconds() - StartSeconds);
 
 	SpawnAltitudeMeters = static_cast<float>(TerrainField->GetMaxAltitudeMeters()) + 2200.0f;
+	BuildEnvironmentBake(*Heightmap);
 
 	TerrainManager = GetWorld()->SpawnActor<AMassifTerrainManager>();
 	TerrainManager->Initialize(TerrainField, LoadTerrainMaterial());
 
 	FoliageManager = GetWorld()->SpawnActor<AMassifFoliageManager>();
-	FoliageManager->Initialize(TerrainField, GetMasterSeed());
+	FoliageManager->Initialize(TerrainField, EnvironmentBake, GetMasterSeed());
+}
+
+void AMassifGameMode::BuildEnvironmentBake(const FMassifHeightmap& Heightmap)
+{
+	const double StartSeconds = FPlatformTime::Seconds();
+	EnvironmentBake = FMassifEnvironmentBake::Build(
+		Heightmap, GetMasterSeed(), FMassifEnvironmentBakeParams());
+
+	UE_LOG(LogTemp, Display,
+		TEXT("Environment: %d x %d cells at %.0f m, %s, solved in %.2f s "
+			"(water to %.1f m, flow to %.0f m2, soil to %.2f m)"),
+		EnvironmentBake->GetWidth(), EnvironmentBake->GetHeight(), EnvironmentBake->GetCellSizeMeters(),
+		DescribeBakePath(EnvironmentBake->WasBuiltOnGpu()),
+		FPlatformTime::Seconds() - StartSeconds,
+		EnvironmentBake->GetChannelMaximum(EMassifBakeChannel::StandingWaterDepth),
+		EnvironmentBake->GetChannelMaximum(EMassifBakeChannel::FlowAccumulation),
+		EnvironmentBake->GetChannelMaximum(EMassifBakeChannel::SoilDepth));
 }
 
 void AMassifGameMode::SchedulePosedScreenshot(

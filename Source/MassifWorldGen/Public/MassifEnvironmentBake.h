@@ -61,22 +61,39 @@ struct FMassifEnvironmentBakeParams
 	/** How much of its old direction a droplet keeps against the gradient under it. */
 	double DropletInertia = 0.05;
 
-	/** Sediment a droplet can hold, per unit of speed, water and downhill drop. */
-	double DropletCapacityFactor = 6.0;
-	double DropletMinCapacity = 0.005;
+	/**
+	 * Metres of sediment a droplet holds per unit of slope, speed and water.
+	 * Capacity is keyed to the slope rather than to the drop across one cell, or
+	 * the same terrain would erode differently at a different cell size.
+	 */
+	double DropletCapacityFactor = 0.05;
+	double DropletMinCapacity = 0.001;
 
 	/** Fraction of the shortfall picked up, and of the surplus dropped, per step. */
 	double DropletErosionRate = 0.3;
 	double DropletDepositionRate = 0.3;
 
+	/** Ceiling on what one droplet takes from one cell, so a single pass cannot cut a hole. */
+	double DropletMaxErosionMetersPerStep = 0.02;
+
 	double DropletEvaporationRate = 0.02;
-	double DropletGravity = 10.0;
+	double DropletGravity = 4.0;
+	double DropletMaxSpeed = 4.0;
 	double DropletInitialWaterVolume = 1.0;
 	double DropletInitialSpeed = 1.0;
 
-	/** Regolith on the ground before any droplet moved anything, and the deepest it gets. */
+	/** Regolith on ground nothing has moved, and the deepest soil gets where it piles up. */
 	double BaseSoilDepthMeters = 0.35;
 	double MaxSoilDepthMeters = 3.0;
+
+	/**
+	 * Net erosion that thins the regolith to a third of itself. Bedrock keeps
+	 * weathering into new soil as fast as thin soil exposes it, so ground the
+	 * water works at thins towards bare rock instead of reaching it at some
+	 * exact amount of scouring — which is also what keeps scree slopes from
+	 * collapsing into rock faces the moment they erode at all.
+	 */
+	double SoilRemovalScaleMeters = 0.6;
 
 	/** Wetness index readings that count as parched and as saturated. */
 	double DryWetnessIndex = 4.0;

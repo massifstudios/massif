@@ -433,11 +433,17 @@ namespace
 
 			FVector2d NextGradient;
 			const double NextHeightMeters = SampleSurface(NextPosition, NextGradient);
-			SettleOrPickUp(Droplet, NextHeightMeters - HeightMeters);
 
-			const double DropMeters = HeightMeters - NextHeightMeters;
-			Droplet.Speed = FMath::Sqrt(
-				FMath::Max(Droplet.Speed * Droplet.Speed + DropMeters * Params.DropletGravity, 0.0));
+			// Slope, not the drop across one cell: a step covers one cell, so a
+			// raw height difference would make the same ground erode harder at a
+			// coarser bake resolution.
+			const double DownhillSlope = (HeightMeters - NextHeightMeters) / Grid.CellSizeMeters;
+			SettleOrPickUp(Droplet, DownhillSlope);
+
+			Droplet.Speed = FMath::Min(
+				FMath::Sqrt(FMath::Max(
+					Droplet.Speed * Droplet.Speed + DownhillSlope * Params.DropletGravity, 0.0)),
+				Params.DropletMaxSpeed);
 			Droplet.WaterVolume *= 1.0 - Params.DropletEvaporationRate;
 			Droplet.PositionInCells = NextPosition;
 			return true;
@@ -456,16 +462,16 @@ namespace
 		 * falls out. That is why sediment piles up on valley floors and benches
 		 * rather than on the faces above them.
 		 */
-		void SettleOrPickUp(FDropletState& Droplet, double HeightDeltaMeters) const
+		void SettleOrPickUp(FDropletState& Droplet, double DownhillSlope) const
 		{
 			const double Capacity = FMath::Max(
-				-HeightDeltaMeters * Droplet.Speed * Droplet.WaterVolume * Params.DropletCapacityFactor,
+				DownhillSlope * Droplet.Speed * Droplet.WaterVolume * Params.DropletCapacityFactor,
 				Params.DropletMinCapacity);
 
-			if (HeightDeltaMeters > 0.0)
+			if (DownhillSlope <= 0.0)
 			{
-				// Ran into rising ground: it can shed at most the step it just climbed.
-				Deposit(Droplet, FMath::Min(HeightDeltaMeters, Droplet.SedimentMeters));
+				// Ran into rising ground and stalled: everything it carried settles here.
+				Deposit(Droplet, Droplet.SedimentMeters);
 				return;
 			}
 			if (Droplet.SedimentMeters > Capacity)
@@ -475,7 +481,8 @@ namespace
 			}
 
 			const double PickUpMeters = FMath::Min(
-				(Capacity - Droplet.SedimentMeters) * Params.DropletErosionRate, -HeightDeltaMeters);
+				(Capacity - Droplet.SedimentMeters) * Params.DropletErosionRate,
+				Params.DropletMaxErosionMetersPerStep);
 			Droplet.SedimentMeters += PickUpMeters;
 			ScatterSediment(Droplet.PositionInCells, -PickUpMeters);
 		}
@@ -550,6 +557,26 @@ namespace
 	};
 }
 
+namespace
+{
+	/**
+	 * Net sediment balance to the soil actually lying there. Deposition simply
+	 * adds up to the deepest soil holds, but removal only thins: bedrock keeps
+	 * weathering into fresh regolith, and it weathers fastest where the cover is
+	 * already thin, so scoured ground approaches bare rock rather than arriving
+	 * at it. Without that a slope steep enough to be worked at all would come out
+	 * as bare rock, and every scree slope in the world with it.
+	 */
+	double SoilDepthFromBalance(const FMassifEnvironmentBakeParams& Params, double BalanceMeters)
+	{
+		if (BalanceMeters >= 0.0)
+		{
+			return FMath::Min(Params.BaseSoilDepthMeters + BalanceMeters, Params.MaxSoilDepthMeters);
+		}
+		return Params.BaseSoilDepthMeters * FMath::Exp(BalanceMeters / Params.SoilRemovalScaleMeters);
+	}
+}
+
 void MassifBakeCpu::RunDroplets(
 	const FMassifBakeGrid& Grid,
 	const FMassifEnvironmentBakeParams& Params,
@@ -575,8 +602,8 @@ void MassifBakeCpu::RunDroplets(
 	for (int32 CellIndex = 0; CellIndex < Grid.CellCount(); ++CellIndex)
 	{
 		const double BalanceMeters = SedimentBalanceFixed[CellIndex] / SedimentFixedPointScale;
-		OutSoilDepthMeters[CellIndex] = static_cast<float>(FMath::Clamp(
-			Params.BaseSoilDepthMeters + BalanceMeters, 0.0, Params.MaxSoilDepthMeters));
+		OutSoilDepthMeters[CellIndex] =
+			static_cast<float>(SoilDepthFromBalance(Params, BalanceMeters));
 	}
 }
 
