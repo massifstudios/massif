@@ -45,6 +45,11 @@ tasks:
     cmds:
       - UnrealEditor-Cmd {{.PROJECT}} -run=pythonscript -script={{.TASKFILE_DIR}}/Tools/create_base_content.py -unattended -nosplash -nullrhi
 
+  placeholders:
+    desc: Regenerate the stand-in flora meshes drawn until the real models exist
+    cmds:
+      - UnrealEditor-Cmd {{.PROJECT}} -run=pythonscript -script={{.TASKFILE_DIR}}/Tools/create_placeholder_flora.py -unattended -nosplash -nullrhi
+
   foliage:
     desc: Import downloaded Poly Haven vegetation models as Nanite static meshes
     cmds:

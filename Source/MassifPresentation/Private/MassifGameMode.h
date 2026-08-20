@@ -4,6 +4,7 @@
 #include "GameFramework/GameModeBase.h"
 #include "MassifGameMode.generated.h"
 
+class AMassifDebugChannelView;
 class AMassifFoliageManager;
 class AMassifTerrainManager;
 class FMassifEnvironmentBake;
@@ -55,6 +56,9 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<AMassifFoliageManager> FoliageManager;
+
+	UPROPERTY()
+	TObjectPtr<AMassifDebugChannelView> DebugChannelView;
 
 	float SpawnAltitudeMeters = 0.0f;
 };

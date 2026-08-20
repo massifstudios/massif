@@ -19,11 +19,16 @@ namespace MassifFoliageScatter
 	/**
 	 * How well one species suits one patch of ground, 0 (never grows there) to 1
 	 * (as good as it gets). The ground type gates it outright — nothing roots in
-	 * a cliff or a snowfield it cannot tolerate — and temperature, humidity and
-	 * steepness each thin it towards the edge of what the species takes.
+	 * a cliff or a snowfield it cannot tolerate — and temperature, humidity,
+	 * steepness and which way the slope faces each thin it towards the edge of
+	 * what the species takes.
 	 *
 	 * Multiplied rather than averaged: a plant that cannot stand the cold is not
 	 * rescued by the ground being damp.
+	 *
+	 * Position-dependent thinning — the stands a clonal species grows in — is not
+	 * here, because it is a property of where the point is rather than of what
+	 * the ground is like. ScatterTile applies it on top.
 	 */
 	double HabitatWeight(const FMassifFoliageSpecies& Species, const FMassifHabitatSample& Habitat);
 
@@ -38,7 +43,9 @@ namespace MassifFoliageScatter
 	 * Candidates sit on a jittered grid rather than uniform random positions,
 	 * so plants spread out instead of clumping, then the habitat weight thins
 	 * them: the same species is dense where the ground suits it and scattered
-	 * where it barely holds on.
+	 * where it barely holds on. A species that grows in stands is thinned again
+	 * by a noise field read from the world position, which crosses tile edges
+	 * without seeing them.
 	 */
 	void ScatterTile(
 		const FMassifHabitatField& Habitat,

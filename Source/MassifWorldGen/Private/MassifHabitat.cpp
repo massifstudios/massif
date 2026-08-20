@@ -3,6 +3,7 @@
 #include "MassifEnvironmentBake.h"
 #include "MassifSeed.h"
 #include "MassifTerrainField.h"
+#include "MassifValueNoise.h"
 
 namespace
 {
@@ -57,32 +58,6 @@ namespace
 		constexpr double PermanentSnowTemperatureCelsius = 0.0;
 		constexpr double WetlandHumidity = 0.8;
 		constexpr double WetlandSlopeDegrees = 6.0;
-	}
-
-	double LatticeValue(uint32 Seed, int32 CellX, int32 CellY)
-	{
-		const uint32 Hash = HashCombine(HashCombine(Seed, GetTypeHash(CellX)), GetTypeHash(CellY));
-		return Hash / static_cast<double>(TNumericLimits<uint32>::Max());
-	}
-
-	double SmoothFraction(double Fraction)
-	{
-		return Fraction * Fraction * (3.0 - 2.0 * Fraction);
-	}
-
-	/** Smooth 0..1 value noise on a unit lattice, hashed rather than tabulated so it is seedable. */
-	double ValueNoise(uint32 Seed, FVector2d LatticePosition)
-	{
-		const int32 CellX = FMath::FloorToInt32(LatticePosition.X);
-		const int32 CellY = FMath::FloorToInt32(LatticePosition.Y);
-		const double FractionX = SmoothFraction(LatticePosition.X - CellX);
-		const double FractionY = SmoothFraction(LatticePosition.Y - CellY);
-
-		const double SouthEdge = FMath::Lerp(
-			LatticeValue(Seed, CellX, CellY), LatticeValue(Seed, CellX + 1, CellY), FractionX);
-		const double NorthEdge = FMath::Lerp(
-			LatticeValue(Seed, CellX, CellY + 1), LatticeValue(Seed, CellX + 1, CellY + 1), FractionX);
-		return FMath::Lerp(SouthEdge, NorthEdge, FractionY);
 	}
 
 	double SlopeDegreesFromNormal(FVector3d Normal)
@@ -215,8 +190,10 @@ FMassifHabitatSample FMassifHabitatField::Sample(FVector2d PositionMeters, doubl
 
 double FMassifHabitatField::SampleWeatherVariation(FVector2d PositionMeters) const
 {
-	const double Regional = ValueNoise(WeatherSeed, PositionMeters / Climate::RegionalWeatherCellMeters);
-	const double Local = ValueNoise(WeatherSeed + 1, PositionMeters / Climate::LocalWeatherCellMeters);
+	const double Regional =
+		MassifNoise::ValueNoise(WeatherSeed, PositionMeters / Climate::RegionalWeatherCellMeters);
+	const double Local =
+		MassifNoise::ValueNoise(WeatherSeed + 1, PositionMeters / Climate::LocalWeatherCellMeters);
 	const double Combined = FMath::Lerp(Regional, Local, Climate::LocalWeatherWeight);
 	return 2.0 * Combined - 1.0;
 }

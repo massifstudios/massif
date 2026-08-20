@@ -3,6 +3,7 @@
 #include "MassifFoliageSpecies.h"
 #include "MassifHabitat.h"
 #include "MassifSeed.h"
+#include "MassifValueNoise.h"
 
 namespace
 {
@@ -13,6 +14,12 @@ namespace
 
 	/** A tile costs one habitat sample per candidate, so a misconfigured density cannot stall a frame. */
 	constexpr int32 MaxCellsPerSide = 256;
+
+	/** Slope at which a species' aspect preference counts in full; flat ground has no aspect to prefer. */
+	constexpr double AspectSlopeReferenceDegrees = 5.0;
+
+	/** Offsets the patch noise off the placement stream, so stands and jitter do not share a lattice. */
+	constexpr uint32 PatchSeedOffset = 0x9E3779B9u;
 
 	/** 0 outside the band, 1 well inside it, ramping over the fade at both ends. */
 	double BandWeight(double Value, double Minimum, double Maximum, double Fade)
@@ -27,6 +34,42 @@ namespace
 	{
 		const double Headroom = (Species.MaxSlopeDegrees - SlopeDegrees) / Species.SlopeFadeDegrees;
 		return FMath::Clamp(Headroom, 0.0, 1.0);
+	}
+
+	/**
+	 * 1 on the bearing the species favours, falling to 1 - AspectStrength on the
+	 * opposite one. Flat ground faces nowhere in particular, so the preference is
+	 * faded out with the slope that gives it meaning rather than applied to a
+	 * bearing computed from a normal that barely leans.
+	 */
+	double AspectWeight(double SlopeDegrees, double AspectDegrees, const FMassifFoliageSpecies& Species)
+	{
+		if (Species.AspectStrength <= 0.0)
+		{
+			return 1.0;
+		}
+
+		const double SlopeRelevance = FMath::Clamp(SlopeDegrees / AspectSlopeReferenceDegrees, 0.0, 1.0);
+		const double Alignment = FMath::Cos(
+			FMath::DegreesToRadians(AspectDegrees - Species.PreferredAspectDegrees));
+		return 1.0 - Species.AspectStrength * SlopeRelevance * 0.5 * (1.0 - Alignment);
+	}
+
+	/**
+	 * Thins a species between its stands. Driven by position rather than by the
+	 * placement stream, so a stand keeps its shape across tile boundaries instead
+	 * of being cut off at them.
+	 */
+	double PatchWeight(const FMassifFoliageSpecies& Species, uint32 SpeciesSeed, FVector2d PositionMeters)
+	{
+		if (Species.PatchStrength <= 0.0 || Species.PatchWavelengthMeters <= 0.0)
+		{
+			return 1.0;
+		}
+
+		const double Noise = MassifNoise::ValueNoise(
+			SpeciesSeed + PatchSeedOffset, PositionMeters / Species.PatchWavelengthMeters);
+		return 1.0 - Species.PatchStrength * (1.0 - Noise);
 	}
 
 	int32 CellsPerSide(const FMassifFoliageSpecies& Species)
@@ -44,6 +87,7 @@ namespace
 	bool TryPlaceInCell(
 		const FMassifHabitatField& Habitat,
 		const FMassifFoliageSpecies& Species,
+		uint32 SpeciesSeed,
 		FRandomStream& Stream,
 		FVector2d CellOriginMeters,
 		double CellSizeMeters,
@@ -57,7 +101,9 @@ namespace
 		const float YawDegrees = Stream.FRand() * 360.0f;
 
 		const FMassifHabitatSample Ground = Habitat.Sample(PositionMeters, GroundSampleSpacingMeters);
-		if (Acceptance >= MassifFoliageScatter::HabitatWeight(Species, Ground))
+		const double Weight = MassifFoliageScatter::HabitatWeight(Species, Ground)
+			* PatchWeight(Species, SpeciesSeed, PositionMeters);
+		if (Acceptance >= Weight)
 		{
 			return false;
 		}
@@ -83,7 +129,10 @@ double MassifFoliageScatter::HabitatWeight(const FMassifFoliageSpecies& Species,
 		Species.TemperatureFadeCelsius);
 	const double Humidity = BandWeight(
 		Habitat.Humidity, Species.MinHumidity, Species.MaxHumidity, Species.HumidityFade);
-	return Temperature * Humidity * SlopeWeight(Habitat.SlopeDegrees, Species);
+	return Temperature
+		* Humidity
+		* SlopeWeight(Habitat.SlopeDegrees, Species)
+		* AspectWeight(Habitat.SlopeDegrees, Habitat.AspectDegrees, Species);
 }
 
 uint32 MassifFoliageScatter::MakeSpeciesSeed(uint32 MasterSeed, const TCHAR* SpeciesName)
@@ -115,7 +164,7 @@ void MassifFoliageScatter::ScatterTile(
 			(CellIndex / SideCellCount) * CellSizeMeters);
 
 		FInstance Instance;
-		if (TryPlaceInCell(Habitat, Species, Stream, CellOriginMeters, CellSizeMeters, Instance))
+		if (TryPlaceInCell(Habitat, Species, SpeciesSeed, Stream, CellOriginMeters, CellSizeMeters, Instance))
 		{
 			OutInstances.Add(Instance);
 		}

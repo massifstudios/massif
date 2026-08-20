@@ -3,6 +3,7 @@
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Kismet/GameplayStatics.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "MassifFoliageScatter.h"
 #include "MassifFoliageSpecies.h"
 #include "MassifEnvironmentBake.h"
@@ -87,21 +88,68 @@ void AMassifFoliageManager::LoadSpeciesMeshes()
 {
 	SpeciesMeshes.Reset();
 	SpeciesBaseOffsets.Reset();
+	SpeciesMaterials.Reset();
+	PlaceholderMaterial = Cast<UMaterialInterface>(
+		FSoftObjectPath(MassifFoliagePlaceholder::MaterialAssetPath).TryLoad());
+
+	int32 PlaceholderCount = 0;
 	for (const FMassifFoliageSpecies& Species : MassifFoliage::Species)
 	{
-		const FSoftObjectPath MeshPath(Species.MeshAssetPath);
-		UStaticMesh* Mesh = Cast<UStaticMesh>(MeshPath.TryLoad());
-		if (Mesh == nullptr)
-		{
-			UE_LOG(LogTemp, Warning, TEXT("Foliage species %s has no mesh at %s, not planted"),
-				Species.Name, Species.MeshAssetPath);
-			SpeciesMeshes.Add(nullptr);
-			SpeciesBaseOffsets.Add(FVector::ZeroVector);
-			continue;
-		}
-		SpeciesMeshes.Add(Mesh);
-		SpeciesBaseOffsets.Add(ComputeBaseOffsetCentimeters(*Mesh));
+		PlaceholderCount += LoadOneSpecies(Species) ? 1 : 0;
 	}
+	if (PlaceholderCount > 0)
+	{
+		UE_LOG(LogTemp, Display, TEXT("Foliage: %d of %d species drawn as placeholders"),
+			PlaceholderCount, static_cast<int32>(UE_ARRAY_COUNT(MassifFoliage::Species)));
+	}
+}
+
+/** True when the species fell back to its placeholder. */
+bool AMassifFoliageManager::LoadOneSpecies(const FMassifFoliageSpecies& Species)
+{
+	UStaticMesh* Mesh = Cast<UStaticMesh>(FSoftObjectPath(Species.MeshAssetPath).TryLoad());
+	if (Mesh != nullptr)
+	{
+		AddSpeciesMesh(*Mesh, nullptr);
+		return false;
+	}
+
+	UStaticMesh* Placeholder = Cast<UStaticMesh>(FSoftObjectPath(Species.PlaceholderMeshAssetPath).TryLoad());
+	if (Placeholder == nullptr)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Foliage species %s has neither %s nor a placeholder at %s, not planted"),
+			Species.Name, Species.MeshAssetPath, Species.PlaceholderMeshAssetPath);
+		SpeciesMeshes.Add(nullptr);
+		SpeciesBaseOffsets.Add(FVector::ZeroVector);
+		SpeciesMaterials.Add(nullptr);
+		return false;
+	}
+
+	AddSpeciesMesh(*Placeholder, MakePlaceholderMaterial(Species.PlaceholderTint));
+	return true;
+}
+
+/**
+ * Placeholders share one primitive per growth form, so the tint is what tells
+ * two species drawn from the same shape apart on the hillside.
+ */
+UMaterialInstanceDynamic* AMassifFoliageManager::MakePlaceholderMaterial(const FLinearColor& Tint)
+{
+	if (PlaceholderMaterial == nullptr)
+	{
+		return nullptr;
+	}
+
+	UMaterialInstanceDynamic* Material = UMaterialInstanceDynamic::Create(PlaceholderMaterial, this);
+	Material->SetVectorParameterValue(TEXT("Tint"), Tint);
+	return Material;
+}
+
+void AMassifFoliageManager::AddSpeciesMesh(UStaticMesh& Mesh, UMaterialInstanceDynamic* Material)
+{
+	SpeciesMeshes.Add(&Mesh);
+	SpeciesBaseOffsets.Add(ComputeBaseOffsetCentimeters(Mesh));
+	SpeciesMaterials.Add(Material);
 }
 
 void AMassifFoliageManager::DropAllTiles()
@@ -230,12 +278,10 @@ void AMassifFoliageManager::PlantTile(const FTileRequest& Request)
 
 int32 AMassifFoliageManager::AcquireComponent(int32 SpeciesIndex)
 {
-	const FMassifFoliageSpecies& Species = MassifFoliage::Species[SpeciesIndex];
 	if (FreeComponentIndices.Num() > 0)
 	{
 		const int32 Reused = FreeComponentIndices.Pop();
-		ComponentPool[Reused]->SetStaticMesh(SpeciesMeshes[SpeciesIndex]);
-		ComponentPool[Reused]->SetCullDistances(0, FMath::CeilToInt(Species.VisibleRadiusMeters * MetersToCentimeters));
+		ConfigureComponent(*ComponentPool[Reused], SpeciesIndex);
 		return Reused;
 	}
 
@@ -243,10 +289,19 @@ int32 AMassifFoliageManager::AcquireComponent(int32 SpeciesIndex)
 		NewObject<UHierarchicalInstancedStaticMeshComponent>(this);
 	Component->SetupAttachment(RootComponent);
 	Component->RegisterComponent();
-	Component->SetStaticMesh(SpeciesMeshes[SpeciesIndex]);
 	Component->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	Component->SetCullDistances(0, FMath::CeilToInt(Species.VisibleRadiusMeters * MetersToCentimeters));
+	ConfigureComponent(*Component, SpeciesIndex);
 	return ComponentPool.Add(Component);
+}
+
+/** Components are pooled across species, so everything species-specific is set on acquire. */
+void AMassifFoliageManager::ConfigureComponent(
+	UHierarchicalInstancedStaticMeshComponent& Component, int32 SpeciesIndex)
+{
+	const FMassifFoliageSpecies& Species = MassifFoliage::Species[SpeciesIndex];
+	Component.SetStaticMesh(SpeciesMeshes[SpeciesIndex]);
+	Component.SetCullDistances(0, FMath::CeilToInt(Species.VisibleRadiusMeters * MetersToCentimeters));
+	Component.SetMaterial(0, SpeciesMaterials[SpeciesIndex]);
 }
 
 void AMassifFoliageManager::ReleaseComponent(FPlantedTile& Tile)

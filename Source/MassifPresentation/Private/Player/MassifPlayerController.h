@@ -67,6 +67,9 @@ private:
 	void ApplyMappingContexts();
 
 	void ToggleViewMode();
+
+	/** Number key handler: switches the terrain to that channel's view, or off for 0. */
+	void SelectDebugChannel(int32 ChannelIndex);
 	void EnterWalkMode();
 	void EnterFlyMode();
 

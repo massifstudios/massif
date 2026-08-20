@@ -168,6 +168,9 @@ public:
 		return CellSizeMeters;
 	}
 
+	/** World position of a cell's centre. Column 0 is west, row 0 north, origin at the world centre. */
+	FVector2d GetCellCentreMeters(int32 Column, int32 Row) const;
+
 	/** Whether the GPU compute path produced this bake, rather than the CPU reference. */
 	bool WasBuiltOnGpu() const
 	{

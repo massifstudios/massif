@@ -82,6 +82,10 @@ LINE_NOISE_AMPLITUDE_METERS = 140.0
 TINT_COOL = (0.90, 0.95, 1.04)
 TINT_WARM = (1.07, 1.02, 0.94)
 
+# How much of a debug channel's color is emitted rather than lit. Enough that a
+# shadowed slope still reads, not so much that relief stops reading at all.
+DEBUG_CHANNEL_EMISSIVE = 0.5
+
 WORLD_ALIGNED_TEXTURE = "/Engine/Functions/Engine_MaterialFunctions01/Texturing/WorldAlignedTexture"
 WORLD_ALIGNED_NORMAL = "/Engine/Functions/Engine_MaterialFunctions01/Texturing/WorldAlignedNormal"
 
@@ -285,6 +289,88 @@ def connect_pin(pin, to_expr, to_input):
     connect(source, output_name, to_expr, to_input)
 
 
+def make_mask(material, source, channels, x, y):
+    """Component mask as a node: channels is (r, g, b, a)."""
+    mask = expr(material, unreal.MaterialExpressionComponentMask, x, y)
+    for name, enabled in zip(("r", "g", "b", "a"), channels):
+        mask.set_editor_property(name, enabled)
+    connect(source, "", mask, "")
+    return mask
+
+
+def make_debug_channel_uv(material, x, y):
+    """World XY in metres onto 0-1 across the world, driven by a parameter so the
+    material carries no assumption about how big the world is."""
+    world_position = expr(material, unreal.MaterialExpressionWorldPosition, x, y)
+    xy_centimeters = make_mask(material, world_position, (True, True, False, False), x + 200, y)
+
+    to_meters = expr(material, unreal.MaterialExpressionMultiply, x + 400, y)
+    connect(xy_centimeters, "", to_meters, "A")
+    to_meters.set_editor_property("const_b", 0.01)
+
+    mapping = expr(material, unreal.MaterialExpressionVectorParameter, x + 200, y + 150)
+    mapping.set_editor_property("parameter_name", "DebugChannelWorldToUv")
+    mapping.set_editor_property("default_value", unreal.LinearColor(1.0, -1.0, 0.0, 0.0))
+
+    # A vector parameter has no two-channel output pin, so the scale is masked
+    # out of it. The offset is a constant half rather than a second parameter:
+    # the world origin is the centre of the elevation model by construction.
+    scale = make_mask(material, mapping, (True, True, False, False), x + 400, y + 150)
+
+    scaled = expr(material, unreal.MaterialExpressionMultiply, x + 600, y)
+    connect(to_meters, "", scaled, "A")
+    connect(scale, "", scaled, "B")
+
+    centered = expr(material, unreal.MaterialExpressionAdd, x + 800, y)
+    connect(scaled, "", centered, "A")
+    centered.set_editor_property("const_b", 0.5)
+    return centered
+
+
+def make_debug_channel_overlay(material, color_pin, roughness_pin):
+    """Paints a baked channel over the terrain instead of its material
+    (ARCHITECTURE 5.7). Blend is a parameter left at zero, so the shipped
+    material is the terrain material until something turns a view on.
+
+    Lighting stays: the debug color goes in as base color rather than emissive,
+    so relief still reads and a channel can be judged against the ground it
+    describes. Roughness goes flat so the view is not read through a specular
+    highlight."""
+    uv = make_debug_channel_uv(material, -1000, 1600)
+
+    sample = expr(material, unreal.MaterialExpressionTextureSampleParameter2D, -100, 1600)
+    sample.set_editor_property("parameter_name", "DebugChannel")
+    sample.set_editor_property("texture", unreal.load_asset("/Engine/EngineResources/WhiteSquareTexture"))
+    sample.set_editor_property("sampler_type", unreal.MaterialSamplerType.SAMPLERTYPE_COLOR)
+    connect(uv, "", sample, "UVs")
+
+    blend = expr(material, unreal.MaterialExpressionScalarParameter, -100, 1850)
+    blend.set_editor_property("parameter_name", "DebugChannelBlend")
+    blend.set_editor_property("default_value", 0.0)
+
+    blended_color = expr(material, unreal.MaterialExpressionLinearInterpolate, 350, 1600)
+    connect_pin(color_pin, blended_color, "A")
+    connect(sample, "RGB", blended_color, "B")
+    connect(blend, "", blended_color, "Alpha")
+
+    flat_roughness = expr(material, unreal.MaterialExpressionLinearInterpolate, 350, 1850)
+    connect_pin(roughness_pin, flat_roughness, "A")
+    flat_roughness.set_editor_property("const_b", 1.0)
+    connect(blend, "", flat_roughness, "Alpha")
+
+    # Half the color again as emissive: ground in the shadow of a ridge is
+    # unlit, and a view that goes black on every north face is no use for
+    # reading a channel that is mostly interesting in the valleys.
+    emissive_strength = expr(material, unreal.MaterialExpressionMultiply, 150, 2100)
+    connect(blend, "", emissive_strength, "A")
+    emissive_strength.set_editor_property("const_b", DEBUG_CHANNEL_EMISSIVE)
+
+    emissive = expr(material, unreal.MaterialExpressionMultiply, 350, 2100)
+    connect(sample, "RGB", emissive, "A")
+    connect(emissive_strength, "", emissive, "B")
+    return (blended_color, ""), (flat_roughness, ""), (emissive, "")
+
+
 def make_layer_blend(material, layer_pins, ground_mask, snow_mask, x, y):
     """rock -> ground -> snow, each stage keyed by its mask."""
     ground_blend = expr(material, unreal.MaterialExpressionLinearInterpolate, x, y)
@@ -315,8 +401,12 @@ def build_flat_color_graph(material, ground_mask, snow_mask):
     roughness.set_editor_property("const_b", 0.55)
     connect(snow_mask, "", roughness, "Alpha")
 
-    connect_property((final_color, ""), unreal.MaterialProperty.MP_BASE_COLOR)
-    connect_property((roughness, ""), unreal.MaterialProperty.MP_ROUGHNESS)
+    color_pin, roughness_pin, emissive_pin = make_debug_channel_overlay(
+        material, (final_color, ""), (roughness, "")
+    )
+    connect_property(color_pin, unreal.MaterialProperty.MP_BASE_COLOR)
+    connect_property(roughness_pin, unreal.MaterialProperty.MP_ROUGHNESS)
+    connect_property(emissive_pin, unreal.MaterialProperty.MP_EMISSIVE_COLOR)
 
 
 def make_macro_noise(material, wavelength_meters, output_min, output_max, y, levels=2):
@@ -450,8 +540,12 @@ def build_textured_graph(material, textures, ground_mask, snow_mask):
     connect(make_macro_tint(material, tint_noise, -250), "", final_color, "B")
 
     material.set_editor_property("tangent_space_normal", False)
-    connect_property((final_color, ""), unreal.MaterialProperty.MP_BASE_COLOR)
-    connect_property((roughness, ""), unreal.MaterialProperty.MP_ROUGHNESS)
+    color_pin, roughness_pin, emissive_pin = make_debug_channel_overlay(
+        material, (final_color, ""), (roughness, "")
+    )
+    connect_property(color_pin, unreal.MaterialProperty.MP_BASE_COLOR)
+    connect_property(roughness_pin, unreal.MaterialProperty.MP_ROUGHNESS)
+    connect_property(emissive_pin, unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     connect_property((world_normal, ""), unreal.MaterialProperty.MP_NORMAL)
     connect_property((occlusion, ""), unreal.MaterialProperty.MP_AMBIENT_OCCLUSION)
 

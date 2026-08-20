@@ -5,6 +5,7 @@
 #include "DynamicMesh/DynamicMesh3.h"
 #include "Kismet/GameplayStatics.h"
 #include "MassifTerrainField.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "MassifTerrainTileMesh.h"
 
 using UE::Geometry::FDynamicMesh3;
@@ -27,8 +28,31 @@ AMassifTerrainManager::AMassifTerrainManager()
 
 void AMassifTerrainManager::Initialize(TSharedPtr<const FMassifTerrainField> InField, UMaterialInterface* InTerrainMaterial)
 {
-	TerrainMaterial = InTerrainMaterial;
+	TerrainMaterial = UMaterialInstanceDynamic::Create(InTerrainMaterial, this);
 	ResetField(InField);
+	ApplyDebugChannelMapping();
+}
+
+void AMassifTerrainManager::ApplyDebugChannelMapping()
+{
+	// World metres to texture UV. Row 0 of the debug texture is north, as it is
+	// in the elevation model and the bake, so V runs against +Y. Only the scale
+	// travels: the material centres the world itself, since the origin is the
+	// middle of the elevation model by construction.
+	const double WorldSizeMeters = Field->GetWorldSizeMeters();
+	TerrainMaterial->SetVectorParameterValue(TEXT("DebugChannelWorldToUv"),
+		FLinearColor(1.0f / WorldSizeMeters, -1.0f / WorldSizeMeters, 0.0f, 0.0f));
+}
+
+void AMassifTerrainManager::SetDebugChannel(UTexture2D* ChannelTexture)
+{
+	TerrainMaterial->SetTextureParameterValue(TEXT("DebugChannel"), ChannelTexture);
+	TerrainMaterial->SetScalarParameterValue(TEXT("DebugChannelBlend"), 1.0f);
+}
+
+void AMassifTerrainManager::ClearDebugChannel()
+{
+	TerrainMaterial->SetScalarParameterValue(TEXT("DebugChannelBlend"), 0.0f);
 }
 
 void AMassifTerrainManager::ResetField(TSharedPtr<const FMassifTerrainField> InField)

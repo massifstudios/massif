@@ -12,9 +12,10 @@ class UInputMappingContext;
  * C++ rather than as editor assets so bindings live with the code that reads
  * them and cannot drift into an unmergeable .uasset.
  *
- * Three contexts: one always active for the view switch, one per view mode. The
- * two view contexts are never active at the same time, so the same movement
- * keys mean walking or flying depending on which one the controller has pushed.
+ * Three contexts: one always active for the view switch and the debug channel
+ * keys, one per view mode. The two view contexts are never active at the same
+ * time, so the same movement keys mean walking or flying depending on which one
+ * the controller has pushed.
  */
 UCLASS()
 class UMassifInputConfig : public UObject
@@ -45,6 +46,10 @@ public:
 
 	UPROPERTY()
 	TObjectPtr<UInputAction> ToggleViewAction;
+
+	/** One per number key, indexed by EMassifDebugChannel: 0 turns the views off. */
+	UPROPERTY()
+	TArray<TObjectPtr<UInputAction>> DebugChannelActions;
 
 	UPROPERTY()
 	TObjectPtr<UInputMappingContext> CommonContext;

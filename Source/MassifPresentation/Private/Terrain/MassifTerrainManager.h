@@ -6,7 +6,9 @@
 
 class FMassifTerrainField;
 class UDynamicMeshComponent;
+class UMaterialInstanceDynamic;
 class UMaterialInterface;
+class UTexture2D;
 
 namespace UE::Geometry
 {
@@ -42,6 +44,14 @@ public:
 	 * in flight against the old field are dropped, never applied to the new tree.
 	 */
 	void ResetField(TSharedPtr<const FMassifTerrainField> InField);
+
+	/**
+	 * Paints a baked channel over the ground in place of the terrain material
+	 * (ARCHITECTURE §5.7). One texture covers the world and is sampled by world
+	 * XY, so no mesh, tile or field is touched by turning a view on.
+	 */
+	void SetDebugChannel(UTexture2D* ChannelTexture);
+	void ClearDebugChannel();
 
 	virtual void Tick(float DeltaSeconds) override;
 
@@ -101,8 +111,12 @@ private:
 	TSharedPtr<const FMassifTerrainField> Field;
 	TSharedPtr<FFinishedBuildQueue> FinishedBuilds;
 
+	/**
+	 * Every tile is drawn with one shared instance, so a debug channel is set
+	 * once rather than on each of the hundreds of components the quadtree holds.
+	 */
 	UPROPERTY()
-	TObjectPtr<UMaterialInterface> TerrainMaterial;
+	TObjectPtr<UMaterialInstanceDynamic> TerrainMaterial;
 
 	UPROPERTY()
 	TArray<TObjectPtr<UDynamicMeshComponent>> ComponentPool;
@@ -134,6 +148,9 @@ private:
 	void UpdateTileCollision(const FVector& ViewMeters);
 	bool ApplyNodeCollision(FQuadNode& Node, const FVector& ViewMeters);
 	void SetNodeCollision(FQuadNode& Node, bool bEnabled);
+
+	/** Maps world metres onto the debug texture's 0-1 range, for the material's own sampling. */
+	void ApplyDebugChannelMapping();
 
 	int32 AcquireComponent();
 	void ReleaseComponent(FQuadNode& Node);

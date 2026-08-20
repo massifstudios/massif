@@ -8,11 +8,15 @@
 #include "Engine/ExponentialHeightFog.h"
 #include "Engine/PostProcessVolume.h"
 #include "Engine/SkyLight.h"
+#include "Debug/MassifDebugChannelView.h"
+#include "Debug/MassifDebugHud.h"
 #include "Foliage/MassifFoliageManager.h"
 #include "GameFramework/WorldSettings.h"
 #include "MassifEnvironmentBake.h"
+#include "MassifHabitat.h"
 #include "MassifHeightmap.h"
 #include "MassifTerrainField.h"
+#include "MaterialShared.h"
 #include "Materials/MaterialInterface.h"
 #include "Misc/Paths.h"
 #include "Player/MassifFlyPawn.h"
@@ -89,6 +93,28 @@ namespace
 		return FPaths::ProjectDir() / TEXT("Data/Terrain") / DemName + TEXT(".massifdem");
 	}
 
+	/**
+	 * A material that fails to compile is replaced by the engine default, which
+	 * renders as plausible grey ground rather than as anything obviously wrong.
+	 * The engine says so at Warning level among thousands of other lines; this
+	 * says so at Error level, naming the node that broke it.
+	 */
+	void ReportMaterialCompileErrors(UMaterialInterface& Material)
+	{
+		const FMaterialResource* Resource = Material.GetMaterialResource(GMaxRHIFeatureLevel);
+		if (Resource == nullptr || Resource->GetCompileErrors().IsEmpty())
+		{
+			return;
+		}
+
+		UE_LOG(LogTemp, Error, TEXT("%s failed to compile, so the engine default material is drawn instead:"),
+			*Material.GetName());
+		for (const FString& CompileError : Resource->GetCompileErrors())
+		{
+			UE_LOG(LogTemp, Error, TEXT("  %s"), *CompileError);
+		}
+	}
+
 	const TCHAR* DescribeBakePath(bool bBuiltOnGpu)
 	{
 		if (bBuiltOnGpu)
@@ -104,6 +130,7 @@ namespace
 		UMaterialInterface* Material = Cast<UMaterialInterface>(MaterialPath.TryLoad());
 		if (Material != nullptr)
 		{
+			ReportMaterialCompileErrors(*Material);
 			return Material;
 		}
 
@@ -116,6 +143,7 @@ AMassifGameMode::AMassifGameMode()
 {
 	DefaultPawnClass = AMassifFlyPawn::StaticClass();
 	PlayerControllerClass = AMassifPlayerController::StaticClass();
+	HUDClass = AMassifDebugHud::StaticClass();
 }
 
 void AMassifGameMode::BeginPlay()
@@ -162,6 +190,12 @@ void AMassifGameMode::LoadTerrainAndSpawnManagers()
 
 	FoliageManager = GetWorld()->SpawnActor<AMassifFoliageManager>();
 	FoliageManager->Initialize(TerrainField, EnvironmentBake, GetMasterSeed());
+
+	DebugChannelView = GetWorld()->SpawnActor<AMassifDebugChannelView>();
+	DebugChannelView->Initialize(
+		MakeShared<const FMassifHabitatField>(
+			TerrainField.ToSharedRef(), EnvironmentBake.ToSharedRef(), GetMasterSeed()),
+		TerrainManager);
 }
 
 void AMassifGameMode::BuildEnvironmentBake(const FMassifHeightmap& Heightmap)

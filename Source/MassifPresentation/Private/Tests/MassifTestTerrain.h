@@ -7,15 +7,20 @@
 #include "MassifTerrainField.h"
 
 /**
- * A stand-in terrain field for presentation tests: rolling ground in the
- * altitude band the foliage species occupy, gentle enough that plants and mesh
- * tiles both have somewhere to land. Built in memory, so tests never depend on
- * a fetched elevation model being present.
+ * A stand-in terrain field for presentation tests, built in memory so tests
+ * never depend on a fetched elevation model being present.
+ *
+ * It has to span the whole altitude band the foliage table occupies — valley
+ * floor near 1200 m to summits past 3700 m — because a species whose band falls
+ * off the end of the test terrain looks exactly like a mistuned one. The long
+ * wavelength carries that range; the short one puts faces steep enough to
+ * classify as rock and scree next to ground flat enough to pond, so every
+ * ground type the table asks for exists somewhere.
  */
 namespace MassifTestTerrain
 {
 	constexpr int32 SampleCountPerSide = 1024;
-	constexpr double SampleSpacingMeters = 4.0;
+	constexpr double SampleSpacingMeters = 10.0;
 
 	inline TSharedRef<const FMassifTerrainField> MakeField()
 	{
@@ -27,10 +32,12 @@ namespace MassifTestTerrain
 			{
 				const double East = Column * SampleSpacingMeters;
 				const double North = Row * SampleSpacingMeters;
-				Altitudes.Add(1450.0
-					+ 260.0 * FMath::Sin(East / 900.0)
-					+ 190.0 * FMath::Cos(North / 700.0)
-					+ 40.0 * FMath::Sin((East + North) / 260.0));
+				// The long wavelength is one full cycle across the world, so the whole
+				// altitude range is present rather than one flank of it.
+				Altitudes.Add(2400.0
+					+ 1250.0 * FMath::Sin(East / 1628.0)
+					+ 280.0 * FMath::Cos(North / 1500.0)
+					+ 120.0 * FMath::Sin((East + North) / 260.0));
 			}
 		}
 		return MakeShared<const FMassifTerrainField>(

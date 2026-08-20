@@ -1,5 +1,6 @@
 #include "MassifPlayerController.h"
 
+#include "Debug/MassifDebugChannelView.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "MassifGameMode.h"
@@ -84,6 +85,18 @@ void AMassifPlayerController::SetupInputComponent()
 	}
 	Input->BindAction(EnsureInputConfig()->ToggleViewAction, ETriggerEvent::Started, this,
 		&AMassifPlayerController::ToggleViewMode);
+
+	const TArray<TObjectPtr<UInputAction>>& ChannelActions = InputConfig->DebugChannelActions;
+	for (int32 ChannelIndex = 0; ChannelIndex < ChannelActions.Num(); ++ChannelIndex)
+	{
+		Input->BindAction(ChannelActions[ChannelIndex], ETriggerEvent::Started, this,
+			&AMassifPlayerController::SelectDebugChannel, ChannelIndex);
+	}
+}
+
+void AMassifPlayerController::SelectDebugChannel(int32 ChannelIndex)
+{
+	AMassifDebugChannelView::RequestChannel(static_cast<EMassifDebugChannel>(ChannelIndex));
 }
 
 void AMassifPlayerController::ToggleViewMode()

@@ -8,6 +8,7 @@ class FMassifEnvironmentBake;
 class FMassifHabitatField;
 class FMassifTerrainField;
 class UHierarchicalInstancedStaticMeshComponent;
+class UMaterialInstanceDynamic;
 struct FMassifFoliageSpecies;
 
 /**
@@ -20,8 +21,10 @@ struct FMassifFoliageSpecies;
  * field (see MassifFoliageScatter), so what grows where is stable for a seed
  * however the camera moves, but nothing here is sim state.
  *
- * A species whose mesh asset is missing is skipped with one warning, so the
- * project runs before the model downloads have landed.
+ * A species whose model has not been made yet falls back to a tinted primitive
+ * of the right size for its growth form, so the whole table can be planted and
+ * judged while the models are still being generated. A finished model dropped
+ * at the species' own asset path takes over with no other change.
  */
 UCLASS()
 class AMassifFoliageManager : public AActor
@@ -62,8 +65,12 @@ private:
 		double DistanceMeters = 0.0;
 	};
 
-	/** Spread the cost of moving: enough that flying does not leave bald ground for long. */
-	static constexpr int32 MaxTileBuildsPerFrame = 3;
+	/**
+	 * Spread the cost of moving: enough that flying does not leave bald ground
+	 * for long. Every species wants its own tiles, so this is shared across all
+	 * of them and the whole table has to fill through it.
+	 */
+	static constexpr int32 MaxTileBuildsPerFrame = 16;
 
 	TSharedPtr<const FMassifHabitatField> Habitat;
 	uint32 MasterSeed = 0;
@@ -71,9 +78,17 @@ private:
 	UPROPERTY()
 	TArray<TObjectPtr<UHierarchicalInstancedStaticMeshComponent>> ComponentPool;
 
-	/** Meshes resolved once at Initialize; null for a species whose asset is absent. */
+	/** Meshes resolved once at Initialize; null for a species with neither model nor placeholder. */
 	UPROPERTY()
 	TArray<TObjectPtr<UStaticMesh>> SpeciesMeshes;
+
+	/** Tinted placeholder material per species, null where the species draws its own model. */
+	UPROPERTY()
+	TArray<TObjectPtr<UMaterialInstanceDynamic>> SpeciesMaterials;
+
+	/** Parent of every placeholder material; absent until Tools/create_placeholder_flora.py has run. */
+	UPROPERTY()
+	TObjectPtr<UMaterialInterface> PlaceholderMaterial;
 
 	/** Per species, the shift that puts the plant's base on the point it was planted at. */
 	TArray<FVector> SpeciesBaseOffsets;
@@ -85,6 +100,9 @@ private:
 	FVector GetViewLocationMeters() const;
 
 	void LoadSpeciesMeshes();
+	bool LoadOneSpecies(const FMassifFoliageSpecies& Species);
+	void AddSpeciesMesh(UStaticMesh& Mesh, UMaterialInstanceDynamic* Material);
+	UMaterialInstanceDynamic* MakePlaceholderMaterial(const FLinearColor& Tint);
 	void DropAllTiles();
 
 	/** Collects the tiles that should exist for one species and drops the ones that should not. */
@@ -94,5 +112,6 @@ private:
 	void PlantTile(const FTileRequest& Request);
 
 	int32 AcquireComponent(int32 SpeciesIndex);
+	void ConfigureComponent(UHierarchicalInstancedStaticMeshComponent& Component, int32 SpeciesIndex);
 	void ReleaseComponent(FPlantedTile& Tile);
 };

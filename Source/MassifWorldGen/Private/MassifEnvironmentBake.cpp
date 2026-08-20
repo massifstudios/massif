@@ -214,6 +214,13 @@ double FMassifEnvironmentBake::Sample(EMassifBakeChannel ChannelId, FVector2d Po
 	return FMath::Lerp(NorthEdge, SouthEdge, RowCoordinate - Row);
 }
 
+FVector2d FMassifEnvironmentBake::GetCellCentreMeters(int32 Column, int32 Row) const
+{
+	return FVector2d(
+		-0.5 * WorldSizeXMeters + (Column + 0.5) * CellSizeMeters,
+		0.5 * WorldSizeYMeters - (Row + 0.5) * CellSizeMeters);
+}
+
 double FMassifEnvironmentBake::GetChannelMinimum(EMassifBakeChannel Channel) const
 {
 	return GetChannel(Channel).MinValue;
