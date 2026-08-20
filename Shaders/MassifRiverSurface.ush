@@ -1,7 +1,7 @@
 // River water surface: the ripples running down a channel, and how the water
 // over it reads at the depth and speed the network solved.
 //
-// The ribbon mesh (MassifRiverRibbonMesh.h) hands this a UV that runs 0 to 1
+// The water tile (MassifWaterTileMesh.h) hands this a UV that runs 0 to 1
 // across the channel and in metres along it, a flow direction, and a vertex
 // colour carrying the channel's speed, depth and width as fractions of fixed
 // references. Everything here is derived from those, so a brook and a river are
@@ -28,8 +28,8 @@ struct FMassifRipple
  * and the pattern travels downstream at the water's own speed.
  *
  * A plain scroll along V is the whole of the flow here, with no smearing to
- * correct for: V already runs along the channel wherever it bends, because the
- * ribbon was parameterised that way when it was built.
+ * correct for: V is the distance already run down the channel wherever it bends,
+ * because that is what the mesh was given at every vertex.
  */
 FMassifRipple MassifSampleRipple(
 	Texture2D RippleTexture,
@@ -68,10 +68,9 @@ float2x2 MassifRippleOrientation(float AngleRadians)
 }
 
 /**
- * Turns a slope in the channel's frame into a world normal. The ribbon is level
- * across the flow, so its across direction is horizontal and the along direction
- * carries the channel's gradient; the two of them with the surface normal are
- * the frame the ripple slope is expressed in.
+ * Turns a slope in the channel's frame into a world normal. The surface is level,
+ * so the across and along directions are both horizontal; the two of them with the
+ * surface normal are the frame the ripple slope is expressed in.
  */
 float3 MassifRippleNormal(float2 Slope, float3 SurfaceNormal, float3 AlongFlow, float Steepness)
 {
@@ -104,10 +103,11 @@ float MassifBankFoam(float AcrossUv, float SpeedFraction)
 }
 
 /**
- * How far into the channel a pixel is, 1 in midstream and 0 at the bank. The
- * ribbon has no bank geometry — it is cut off square at the channel width — so
- * the water has to be thinned towards the edge, or every stream in the world is
- * drawn with a hard line down each side.
+ * How far into the channel a pixel is, 1 in midstream and 0 at the bank.
+ *
+ * Redundant now: the terrain is carved with a shore, so the column thins into the
+ * bank on its own and the scene depth behind the surface says so. This and the
+ * bank foam above it go with the shader rework that reads that depth.
  */
 float MassifBankFade(float AcrossUv, float BankWidthFraction)
 {

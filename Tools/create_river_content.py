@@ -1,6 +1,6 @@
-"""Creates M_River, the water surface the river ribbons are drawn with.
+"""Creates M_River, the water surface the river tiles are drawn with.
 
-The ribbon meshes (MassifRiverRibbonMesh.h) carry everything the material needs:
+The water tiles (MassifWaterTileMesh.h) carry everything the material needs:
 UV0 runs across and along the channel, UV1 is the flow direction, and the vertex
 colour holds speed, depth and width as fractions of fixed references. So there
 is one material for every river in the world and no per-reach parameters.
@@ -30,8 +30,8 @@ RIVER_INCLUDE = "/Project/MassifRiverSurface.ush"
 # layers of it at different sizes and drift rates are the ripples.
 RIPPLE_TEXTURE = "/Engine/EngineMaterials/RandomNormal2"
 
-# What the ribbon mesh's vertex colours are fractions of. These have to match
-# MassifRiverRibbonMesh.h, which is what wrote them.
+# What the water tile's vertex colours are fractions of. These have to match
+# MassifWaterTileMesh.h, which is what wrote them.
 SPEED_REFERENCE_METERS_PER_SECOND = 4.0
 WIDTH_REFERENCE_METERS = 30.0
 COLUMN_SCALE_REFERENCE = 12.0
@@ -40,9 +40,9 @@ COLUMN_SCALE_REFERENCE = 12.0
 # water through its reflections, so a large number here looks like crumpled foil.
 RIPPLE_STEEPNESS = 0.35
 
-# Share of the half-width the channel fades out over. The ribbon ends square at
-# the channel width and has no bank geometry, so without this every stream is
-# drawn with a hard line down each side.
+# Share of the half-width the channel fades out over. Redundant now that the
+# terrain is carved with a shore and the water thins into it on its own; it goes
+# with the shader rework, along with the bank foam beside it.
 BANK_FADE_FRACTION = 0.35
 
 # Speed, as a fraction of the reference, at which water starts to aerate, and the
@@ -94,7 +94,7 @@ float WidthMeters = max(ChannelState.b * WidthReference, 0.2f);
 ColumnScale = ColumnFraction * ColumnScaleReference;
 
 // The channel's own frame, in metres: across the flow from bank to bank, and
-// along it in the distance the ribbon has already run.
+// along it in the distance the channel has already run.
 float2 ChannelMeters = float2((ChannelUv.x - 0.5f) * WidthMeters, ChannelUv.y);
 float DriftMeters = TimeSeconds * SpeedFraction * SpeedReference;
 
@@ -274,10 +274,10 @@ def make_water_column(material, scale_pin, x, y):
     from: absorption takes the reds out over distance and scattering puts the rock
     flour's own pale turquoise back in.
 
-    Both are per metre, and the metres available are only the freeboard the wedge
-    was built with, because a laser scan measures the top of a river rather than
-    its bed. So the coefficients are scaled by how much deeper the channel really
-    is, which the ribbon put in vertex alpha.
+    Both are per metre, and the metres available are the trench the terrain is
+    carved to, which is the column the network solved. The scale in vertex alpha
+    is what stands in for any of that column the geometry does not have, and is
+    one while the carve gives it all of it.
     """
     node = expr(material, unreal.MaterialExpressionSingleLayerWaterMaterialOutput, x, y)
     connect(
@@ -306,12 +306,12 @@ def create_material():
     # translucent material has, and all of which are what water actually is.
     material.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_SINGLE_LAYER_WATER)
     material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_OPAQUE)
-    # The ribbon is a single sheet, and the camera goes under it as soon as the
+    # The surface is a single sheet, and the camera goes under it as soon as the
     # player stands in a stream.
     material.set_editor_property("two_sided", True)
     # The custom node returns a world-space normal: it builds one out of the
-    # channel's own frame, and the ribbon carries no tangent basis to express it
-    # against.
+    # channel's own frame, and the water tile carries no tangent basis to express
+    # it against.
     material.set_editor_property("tangent_space_normal", False)
 
     river = build_river_graph(material)
