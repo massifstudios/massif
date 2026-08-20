@@ -34,6 +34,7 @@ RIPPLE_TEXTURE = "/Engine/EngineMaterials/RandomNormal2"
 # MassifRiverRibbonMesh.h, which is what wrote them.
 SPEED_REFERENCE_METERS_PER_SECOND = 4.0
 WIDTH_REFERENCE_METERS = 30.0
+COLUMN_SCALE_REFERENCE = 12.0
 
 # How far the ripple layers tilt the surface. Water is close to flat and reads as
 # water through its reflections, so a large number here looks like crumpled foil.
@@ -69,6 +70,7 @@ RIVER_INPUT_NAMES = (
     "ChannelUv",
     "FlowDirection",
     "ChannelState",
+    "ColumnFraction",
     "SurfaceNormal",
     "RippleMap",
     "TimeSeconds",
@@ -78,27 +80,39 @@ RIVER_INPUT_NAMES = (
     "FoamFade",
     "SpeedReference",
     "WidthReference",
+    "ColumnScaleReference",
 )
 
 RIVER_CODE = """
 float SpeedFraction = ChannelState.r;
-float DepthFraction = ChannelState.g;
 float WidthMeters = max(ChannelState.b * WidthReference, 0.2f);
+
+// The elevation model measures the top of a river, not its bottom, so the wedge
+// the geometry could be given is a freeboard rather than the channel's depth.
+// Scaling the coefficients up by the ratio between the two integrates the column
+// the network solved rather than the couple of centimetres actually modelled.
+ColumnScale = ColumnFraction * ColumnScaleReference;
 
 // The channel's own frame, in metres: across the flow from bank to bank, and
 // along it in the distance the ribbon has already run.
 float2 ChannelMeters = float2((ChannelUv.x - 0.5f) * WidthMeters, ChannelUv.y);
 float DriftMeters = TimeSeconds * SpeedFraction * SpeedReference;
 
-// Two layers at unrelated sizes and rates, so the pattern does not repeat with
-// either of them on its own.
+// Three layers at unrelated sizes, rates and orientations. Two alone still tile
+// together often enough to read as a regular corrugation running down the
+// channel, and turning each off the others' lattice is what breaks that up.
 FMassifRipple Coarse = MassifSampleRipple(
-    RippleMap, RippleMapSampler, ChannelMeters, 2.6f, DriftMeters, float2(0.0f, 0.0f));
+    RippleMap, RippleMapSampler, ChannelMeters, 1.7f, DriftMeters,
+    float2(0.0f, 0.0f), MassifRippleOrientation(0.0f));
+FMassifRipple Medium = MassifSampleRipple(
+    RippleMap, RippleMapSampler, ChannelMeters, 0.62f, DriftMeters * 0.62f,
+    float2(0.31f, 0.17f), MassifRippleOrientation(0.7f));
 FMassifRipple Fine = MassifSampleRipple(
-    RippleMap, RippleMapSampler, ChannelMeters, 0.75f, DriftMeters * 0.55f, float2(0.31f, 0.17f));
+    RippleMap, RippleMapSampler, ChannelMeters, 0.21f, DriftMeters * 0.31f,
+    float2(0.73f, 0.44f), MassifRippleOrientation(-1.3f));
 
-float2 Slope = Coarse.Slope + 0.6f * Fine.Slope;
-float RippleHeight = 0.6f * Coarse.Height + 0.4f * Fine.Height;
+float2 Slope = Coarse.Slope + 0.55f * Medium.Slope + 0.3f * Fine.Slope;
+float RippleHeight = 0.5f * Coarse.Height + 0.3f * Medium.Height + 0.2f * Fine.Height;
 
 float3 AlongFlow = float3(FlowDirection, 0.0f);
 AlongFlow = normalize(AlongFlow - SurfaceNormal * dot(AlongFlow, SurfaceNormal));
@@ -186,6 +200,7 @@ def make_river_node(material, x, y):
     for name, output_type in (
         ("Normal", unreal.CustomMaterialOutputType.CMOT_FLOAT3),
         ("Roughness", unreal.CustomMaterialOutputType.CMOT_FLOAT1),
+        ("ColumnScale", unreal.CustomMaterialOutputType.CMOT_FLOAT1),
     ):
         custom_output = unreal.CustomOutput()
         custom_output.set_editor_property("output_name", name)
@@ -212,8 +227,10 @@ def build_river_graph(material):
     connect(texture_coordinate(material, 0, -700, -400), "", node, "ChannelUv")
     connect(texture_coordinate(material, 1, -700, -280), "", node, "FlowDirection")
 
+    # The default pin is RGB only, so alpha has to come across as its own input.
     vertex_color = expr(material, unreal.MaterialExpressionVertexColor, -700, -160)
     connect(vertex_color, "", node, "ChannelState")
+    connect(vertex_color, "A", node, "ColumnFraction")
 
     vertex_normal = expr(material, unreal.MaterialExpressionVertexNormalWS, -700, -40)
     connect(vertex_normal, "", node, "SurfaceNormal")
@@ -228,6 +245,7 @@ def build_river_graph(material):
         ("FoamFade", FOAM_SPEED_FADE),
         ("SpeedReference", SPEED_REFERENCE_METERS_PER_SECOND),
         ("WidthReference", WIDTH_REFERENCE_METERS),
+        ("ColumnScaleReference", COLUMN_SCALE_REFERENCE),
     )):
         connect(scalar_parameter(material, name, default, -700, 340 + index * 110), "", node, name)
     return node
@@ -241,24 +259,35 @@ def vector_parameter(material, name, value, x, y):
     return parameter
 
 
-def make_water_column(material, x, y):
+def scale_coefficients(material, name, value, scale_pin, x, y):
+    """One set of per-metre coefficients, stretched to the column the network solved."""
+    scaled = expr(material, unreal.MaterialExpressionMultiply, x + 250, y)
+    connect(vector_parameter(material, name, value, x, y), "", scaled, "A")
+    connect_pin(scale_pin, scaled, "B")
+    return scaled
+
+
+def make_water_column(material, scale_pin, x, y):
     """
     What the shading model integrates through the water between the surface and
     whatever the scene depth says is behind it. This is where the colour comes
-    from: absorption takes the reds out over distance, scattering puts the rock
-    flour's own pale turquoise back in, and both are per metre of column, so a
-    stream over gravel and a pool in the same river read differently with no
-    depth having to be passed to the material.
+    from: absorption takes the reds out over distance and scattering puts the rock
+    flour's own pale turquoise back in.
+
+    Both are per metre, and the metres available are only the freeboard the wedge
+    was built with, because a laser scan measures the top of a river rather than
+    its bed. So the coefficients are scaled by how much deeper the channel really
+    is, which the ribbon put in vertex alpha.
     """
     node = expr(material, unreal.MaterialExpressionSingleLayerWaterMaterialOutput, x, y)
     connect(
-        vector_parameter(material, "WaterAbsorption", WATER_ABSORPTION_PER_METER, x - 400, y),
+        scale_coefficients(material, "WaterAbsorption", WATER_ABSORPTION_PER_METER, scale_pin, x - 700, y),
         "", node, "AbsorptionCoefficients")
     connect(
-        vector_parameter(material, "WaterScattering", WATER_SCATTERING_PER_METER, x - 400, y + 150),
+        scale_coefficients(material, "WaterScattering", WATER_SCATTERING_PER_METER, scale_pin, x - 700, y + 200),
         "", node, "ScatteringCoefficients")
     connect(
-        scalar_parameter(material, "WaterPhaseG", WATER_PHASE_G, x - 400, y + 300), "", node, "PhaseG")
+        scalar_parameter(material, "WaterPhaseG", WATER_PHASE_G, x - 700, y + 400), "", node, "PhaseG")
     return node
 
 
@@ -293,7 +322,7 @@ def create_material():
     connect_property(
         (scalar_parameter(material, "WaterSpecular", WATER_SPECULAR, 400, 700), ""),
         unreal.MaterialProperty.MP_SPECULAR)
-    make_water_column(material, 400, 1000)
+    make_water_column(material, (river, "ColumnScale"), 400, 1000)
 
     unreal.MaterialEditingLibrary.recompile_material(material)
     unreal.EditorAssetLibrary.save_asset(MATERIAL_PATH)

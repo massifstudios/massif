@@ -80,8 +80,8 @@ void AMassifRiverManager::BuildBlock(uint64 BlockKey, TArrayView<const FMassifRi
 	Component->SetupAttachment(RootComponent);
 	Component->RegisterComponent();
 	Component->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	// The surface is a single sheet with nothing under it, and it is drawn
-	// translucent, so it neither casts nor receives anything worth the cost.
+	// The surface is a single sheet lying a few centimetres over the ground it
+	// covers, so it has nothing to cast a shadow onto that would be seen.
 	Component->SetCastShadow(false);
 	Component->SetMaterial(0, RiverMaterial);
 	Component->SetWorldLocation(FVector(OriginMeters.X, OriginMeters.Y, 0.0) * MetersToCentimeters);

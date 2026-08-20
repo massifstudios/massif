@@ -56,6 +56,70 @@ namespace
 		return FVector3f(Normal.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, FVector3d::UpVector));
 	}
 
+	/**
+	 * Where the sheet is drawn. The solved surface, except where the network's
+	 * running minimum handed it down below the ground measured under it, which
+	 * would bury the river.
+	 */
+	double SurfaceAltitudeAt(const FMassifRiverNode& Node)
+	{
+		using namespace MassifRiverRibbonMesh;
+		return FMath::Max(Node.WaterSurfaceMeters, Node.BedAltitudeMeters + SheetClearanceMeters);
+	}
+
+	/**
+	 * How much deeper the solved channel is than the clearance the sheet has over
+	 * the bed. The material multiplies the water's absorption and scattering by
+	 * this, so a sheet a few centimetres above the ground still reads as the depth
+	 * of water the catchment actually puts there.
+	 */
+	double ColumnScaleAt(const FMassifRiverNode& Node)
+	{
+		using namespace MassifRiverRibbonMesh;
+		const double ClearanceMeters = SurfaceAltitudeAt(Node) - Node.BedAltitudeMeters;
+		return FMath::Clamp(Node.DepthMeters / ClearanceMeters, 1.0, ColumnScaleReference);
+	}
+
+	/**
+	 * The radius the channel turns through at a node, from the angle between the
+	 * segments meeting there over the distance they cover. Infinite down a straight
+	 * run, where there is no bend to fold across.
+	 *
+	 * The two ends of a reach have no angle of their own, so they take the bend
+	 * their one neighbour is in. Left unlimited they would overshoot the corner
+	 * they stand on, which at a confluence is most of them.
+	 */
+	double TurningRadiusMeters(const FMassifRiverReach& Reach, int32 NodeIndex)
+	{
+		if (Reach.Nodes.Num() < 3)
+		{
+			return TNumericLimits<double>::Max();
+		}
+
+		const int32 TurnIndex = FMath::Clamp(NodeIndex, 1, Reach.Nodes.Num() - 2);
+		const FVector2d Incoming =
+			Reach.Nodes[TurnIndex].PositionMeters - Reach.Nodes[TurnIndex - 1].PositionMeters;
+		const FVector2d Outgoing =
+			Reach.Nodes[TurnIndex + 1].PositionMeters - Reach.Nodes[TurnIndex].PositionMeters;
+
+		const double SpanMeters = 0.5 * (Incoming.Length() + Outgoing.Length());
+		const double Cosine = FMath::Clamp(Incoming.GetSafeNormal().Dot(Outgoing.GetSafeNormal()), -1.0, 1.0);
+		const double TurnRadians = FMath::Acos(Cosine);
+		if (SpanMeters <= UE_DOUBLE_SMALL_NUMBER || TurnRadians <= UE_DOUBLE_SMALL_NUMBER)
+		{
+			return TNumericLimits<double>::Max();
+		}
+		return SpanMeters / TurnRadians;
+	}
+
+	/** Half the channel's width, narrowed through a bend tight enough to fold it. */
+	double HalfWidthMeters(const FMassifRiverReach& Reach, int32 NodeIndex)
+	{
+		using namespace MassifRiverRibbonMesh;
+		const double BendLimitMeters = BendHalfWidthFraction * TurningRadiusMeters(Reach, NodeIndex);
+		return FMath::Min(0.5 * Reach.Nodes[NodeIndex].WidthMeters, BendLimitMeters);
+	}
+
 	FVector4f ChannelColorAt(const FMassifRiverNode& Node)
 	{
 		using namespace MassifRiverRibbonMesh;
@@ -63,17 +127,41 @@ namespace
 			static_cast<float>(FMath::Clamp(Node.SpeedMetersPerSecond / SpeedReferenceMetersPerSecond, 0.0, 1.0)),
 			static_cast<float>(FMath::Clamp(Node.DepthMeters / DepthReferenceMeters, 0.0, 1.0)),
 			static_cast<float>(FMath::Clamp(Node.WidthMeters / WidthReferenceMeters, 0.0, 1.0)),
-			1.0f);
+			static_cast<float>(ColumnScaleAt(Node) / ColumnScaleReference));
 	}
 
+	/** Everything the four vertices of one cross-section are placed from. */
+	struct FCrossSection
+	{
+		FVector2d CentreMeters = FVector2d::ZeroVector;
+
+		/** From the centre to the right bank; the left one is its negative. */
+		FVector2d HalfSpanMeters = FVector2d::ZeroVector;
+
+		double SurfaceAltitudeMeters = 0.0;
+		double BedAltitudeMeters = 0.0;
+		double AlongMeters = 0.0;
+		FVector2d FlowDirection = FVector2d::ZeroVector;
+
+		/** Level across the flow, carrying the channel's gradient along it. */
+		FVector3f SurfaceNormal = FVector3f::UpVector;
+
+		/** Horizontal, out of the channel towards the right bank. What a skirt faces. */
+		FVector3f OutwardNormal = FVector3f::ZeroVector;
+
+		FVector4f Color = FVector4f::Zero();
+	};
+
 	/**
-	 * Lays reaches down as triangle strips, one pair of vertices per node. Every
-	 * overlay element is appended alongside its vertex, so the vertex index and
-	 * the element index stay the same number and the triangles can be written
-	 * against either.
+	 * Lays reaches down as triangle strips, four vertices per node. Every overlay
+	 * element is appended alongside its vertex, so the vertex index and the element
+	 * index stay the same number and the triangles can be written against either.
 	 */
 	struct FRibbonBuilder
 	{
+		/** A skirt foot, the sheet's edge, its other edge, the other skirt foot. */
+		static constexpr int32 VerticesPerNode = 4;
+
 		FDynamicMesh3& Mesh;
 		FVector2d OriginMeters;
 		FDynamicMeshUVOverlay* UVs = nullptr;
@@ -118,42 +206,75 @@ namespace
 			return (Reach.Nodes[NodeIndex].PositionMeters - Reach.Nodes[NodeIndex - 1].PositionMeters).Length();
 		}
 
-		void AppendNodeVertices(const FMassifRiverReach& Reach, int32 NodeIndex, double AlongMeters)
+		static FCrossSection MakeCrossSection(
+			const FMassifRiverReach& Reach, int32 NodeIndex, double AlongMeters)
 		{
 			const FMassifRiverNode& Node = Reach.Nodes[NodeIndex];
 			const FVector2d FlowDirection = FlowDirectionAt(Reach, NodeIndex);
-			const FVector2d HalfSpan = AcrossFlow(FlowDirection) * 0.5 * Node.WidthMeters;
+			const FVector2d Across = AcrossFlow(FlowDirection);
 
-			const FVector3f Normal = SurfaceNormalAt(Reach, NodeIndex, FlowDirection);
-			const FVector4f Color = ChannelColorAt(Node);
-			AppendBankVertex(Node, -HalfSpan, 0.0f, AlongMeters, FlowDirection, Normal, Color);
-			AppendBankVertex(Node, HalfSpan, 1.0f, AlongMeters, FlowDirection, Normal, Color);
+			FCrossSection Section;
+			Section.CentreMeters = Node.PositionMeters;
+			Section.HalfSpanMeters = Across * HalfWidthMeters(Reach, NodeIndex);
+			Section.SurfaceAltitudeMeters = SurfaceAltitudeAt(Node);
+			Section.BedAltitudeMeters = Node.BedAltitudeMeters;
+			Section.AlongMeters = AlongMeters;
+			Section.FlowDirection = FlowDirection;
+			Section.SurfaceNormal = SurfaceNormalAt(Reach, NodeIndex, FlowDirection);
+			Section.OutwardNormal = FVector3f(static_cast<float>(Across.X), static_cast<float>(Across.Y), 0.0f);
+			Section.Color = ChannelColorAt(Node);
+			return Section;
 		}
 
-		void AppendBankVertex(
-			const FMassifRiverNode& Node, FVector2d Offset, float AcrossUv, double AlongMeters,
-			FVector2d FlowDirection, FVector3f Normal, FVector4f Color)
+		/** Left skirt foot, left edge, right edge, right skirt foot, in that order. */
+		void AppendNodeVertices(const FMassifRiverReach& Reach, int32 NodeIndex, double AlongMeters)
 		{
-			const FVector2d PositionMeters = Node.PositionMeters + Offset - OriginMeters;
+			const FCrossSection Section = MakeCrossSection(Reach, NodeIndex, AlongMeters);
+			AppendCrossSectionVertex(Section, -1.0, 0.0f, Section.BedAltitudeMeters, -Section.OutwardNormal);
+			AppendCrossSectionVertex(Section, -1.0, 0.0f, Section.SurfaceAltitudeMeters, Section.SurfaceNormal);
+			AppendCrossSectionVertex(Section, 1.0, 1.0f, Section.SurfaceAltitudeMeters, Section.SurfaceNormal);
+			AppendCrossSectionVertex(Section, 1.0, 1.0f, Section.BedAltitudeMeters, Section.OutwardNormal);
+		}
+
+		void AppendCrossSectionVertex(
+			const FCrossSection& Section, double SideSign, float AcrossUv, double AltitudeMeters, FVector3f Normal)
+		{
+			const FVector2d PositionMeters =
+				Section.CentreMeters + SideSign * Section.HalfSpanMeters - OriginMeters;
 			Mesh.AppendVertex(FVector3d(
 				PositionMeters.X * MetersToCentimeters,
 				PositionMeters.Y * MetersToCentimeters,
-				Node.WaterSurfaceMeters * MetersToCentimeters));
+				AltitudeMeters * MetersToCentimeters));
 
-			UVs->AppendElement(FVector2f(AcrossUv, static_cast<float>(AlongMeters)));
-			FlowUVs->AppendElement(FVector2f(FlowDirection));
+			UVs->AppendElement(FVector2f(AcrossUv, static_cast<float>(Section.AlongMeters)));
+			FlowUVs->AppendElement(FVector2f(Section.FlowDirection));
 			Normals->AppendElement(Normal);
-			Colors->AppendElement(Color);
+			Colors->AppendElement(Section.Color);
 		}
 
+		/** Three strips per span: the left skirt, the sheet between the edges, the right skirt. */
 		void AppendReachTriangles(int32 FirstVertex, int32 NodeCount)
 		{
 			for (int32 NodeIndex = 0; NodeIndex + 1 < NodeCount; ++NodeIndex)
 			{
-				const int32 LeftBank = FirstVertex + 2 * NodeIndex;
-				AppendRibbonTriangle(LeftBank, LeftBank + 1, LeftBank + 3);
-				AppendRibbonTriangle(LeftBank, LeftBank + 3, LeftBank + 2);
+				const int32 Section = FirstVertex + VerticesPerNode * NodeIndex;
+				for (int32 Strip = 0; Strip + 1 < VerticesPerNode; ++Strip)
+				{
+					AppendRibbonQuad(Section + Strip, Section + Strip + 1);
+				}
 			}
+		}
+
+		/**
+		 * The quad between one pair of neighbouring vertices in a cross-section and
+		 * the same pair in the next, wound so its face points out of the water.
+		 */
+		void AppendRibbonQuad(int32 Left, int32 Right)
+		{
+			const int32 NextLeft = Left + VerticesPerNode;
+			const int32 NextRight = Right + VerticesPerNode;
+			AppendRibbonTriangle(Left, Right, NextRight);
+			AppendRibbonTriangle(Left, NextRight, NextLeft);
 		}
 
 		void AppendRibbonTriangle(int32 VertexA, int32 VertexB, int32 VertexC)

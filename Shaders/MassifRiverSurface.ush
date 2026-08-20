@@ -37,19 +37,34 @@ FMassifRipple MassifSampleRipple(
 	float2 ChannelMeters,
 	float WavelengthMeters,
 	float DriftMeters,
-	float2 Offset)
+	float2 Offset,
+	float2x2 Orientation)
 {
-	float2 Uv = ChannelMeters / WavelengthMeters + Offset;
+	float2 Uv = mul(Orientation, ChannelMeters) / WavelengthMeters + Offset;
 	Uv.y -= DriftMeters / WavelengthMeters;
 
-	float4 Sampled = RippleTexture.SampleLevel(RippleSampler, Uv, 0);
+	// Sampled with mips rather than at level zero. A channel a couple of metres
+	// wide covers a handful of pixels at any distance, and reading the finest
+	// level into those pixels turns the ripples into a moire that reads as
+	// corrugation running across the flow.
+	float4 Sampled = RippleTexture.Sample(RippleSampler, Uv);
 
 	FMassifRipple Ripple;
 	// A normal map read as a slope: the tangent-space XY is the gradient of the
 	// surface it stands for, which is what this needs to tilt the water by.
-	Ripple.Slope = Sampled.xy * 2.0f - 1.0f;
+	// Rotated back out of the layer's own frame, so the slopes of layers at
+	// different orientations can be added.
+	Ripple.Slope = mul(transpose(Orientation), Sampled.xy * 2.0f - 1.0f);
 	Ripple.Height = Sampled.z;
 	return Ripple;
+}
+
+/** Turns each layer off its neighbours' lattice, so no two of them tile together. */
+float2x2 MassifRippleOrientation(float AngleRadians)
+{
+	float SinAngle = sin(AngleRadians);
+	float CosAngle = cos(AngleRadians);
+	return float2x2(CosAngle, -SinAngle, SinAngle, CosAngle);
 }
 
 /**
