@@ -22,7 +22,9 @@ public class MassifPresentation : ModuleRules
 		{
 			"GeometryCore",
 			"GeometryFramework",
-			"GeometryScriptingCore"
+			"GeometryScriptingCore",
+			// GMaxRHIShaderPlatform, for reading the terrain material's compile errors.
+			"RHI"
 		});
 	}
 }

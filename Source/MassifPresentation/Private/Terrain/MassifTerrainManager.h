@@ -4,6 +4,7 @@
 #include "GameFramework/Actor.h"
 #include "MassifTerrainManager.generated.h"
 
+class FMassifEnvironmentBake;
 class FMassifHabitatField;
 class FMassifTerrainField;
 class UDynamicMeshComponent;
@@ -168,7 +169,7 @@ private:
 	void SetNodeCollision(FQuadNode& Node, bool bEnabled);
 
 	/** Maps world metres onto the 0-1 range of the world-wide textures, for the material's own sampling. */
-	void ApplyWorldToUvMapping();
+	void ApplyWorldToUvMapping(const FMassifEnvironmentBake& Bake);
 
 	int32 AcquireComponent();
 	void ReleaseComponent(FQuadNode& Node);

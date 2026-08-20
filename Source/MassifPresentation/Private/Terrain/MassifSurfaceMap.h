@@ -9,12 +9,18 @@ struct FMassifHabitatSample;
 /** The ground cover at one point: two surface layers and how they meet. */
 struct FMassifSurfaceBlend
 {
-	/** Indices into MassifSurface::Layers. */
-	int32 PrimaryLayer = 0;
-	int32 SecondaryLayer = 0;
+	/**
+	 * Indices into MassifSurface::Layers, the lower one first. The material reads
+	 * the two symmetrically — it gathers the cells around a pixel and ranks the
+	 * layers they name by what each claims — so the order carries no meaning
+	 * beyond being the one order two points that chose the same pair will agree
+	 * on.
+	 */
+	int32 LowerLayer = 0;
+	int32 UpperLayer = 0;
 
-	/** How much of the secondary layer shows, 0 to 0.5. The primary always leads. */
-	double SecondaryWeight = 0.0;
+	/** How much of UpperLayer shows, 0 to 1, the rest being LowerLayer. */
+	double UpperWeight = 0.0;
 
 	/** Permanent snow over both, 0 bare to 1 covered. */
 	double SnowCover = 0.0;
@@ -40,13 +46,16 @@ namespace MassifSurfaceMap
 
 	/**
 	 * Renders the classification over the whole world at the bake's own
-	 * resolution, into two textures because they cannot share a filter: layer
-	 * indices must be point-sampled, since a pixel interpolated between layer 3
-	 * and layer 7 would be drawn as the unrelated layer 5, while the blend and
-	 * the snow have to be filtered or the 8 m bake grid shows through as squares.
+	 * resolution, into two textures because they cannot share a filter. Snow is a
+	 * quantity and is filtered, or the 8 m bake grid shows through as squares.
+	 * Layer indices and the weight between them cannot be: a texel interpolated
+	 * between layer 3 and layer 7 would be drawn as the unrelated layer 5, and a
+	 * weight interpolated between two cells naming different layers is a weight
+	 * between nothing in particular. The material fetches those and interpolates
+	 * the coverage it works out from them instead.
 	 *
-	 * IndexTexture holds the primary layer in red and the secondary in green.
-	 * BlendTexture holds the weight between them in red and snow cover in green.
+	 * IndexTexture holds the lower layer in red and the upper in green.
+	 * BlendTexture holds the upper layer's weight in red and snow cover in green.
 	 *
 	 * Textures are reused when they already have the right size. Sampling runs
 	 * across the thread pool: habitat is a pure function of position, so a row

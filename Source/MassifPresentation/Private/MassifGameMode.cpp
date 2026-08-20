@@ -101,7 +101,7 @@ namespace
 	 */
 	void ReportMaterialCompileErrors(UMaterialInterface& Material)
 	{
-		const FMaterialResource* Resource = Material.GetMaterialResource(GMaxRHIFeatureLevel);
+		const FMaterialResource* Resource = Material.GetMaterialResource(GMaxRHIShaderPlatform);
 		if (Resource == nullptr || Resource->GetCompileErrors().IsEmpty())
 		{
 			return;

@@ -446,42 +446,6 @@ namespace MassifSurface
 			.PatchWavelengthMeters = 60.0,
 		},
 		{
-			.Name = TEXT("ForestFloorMossy"),
-			.TextureGroup = TEXT("forest"),
-			.TextureSet = TEXT("ForestGround05"),
-			.TileMeters = 3.0,
-			.ReliefMeters = 0.05,
-			.MinTemperatureCelsius = 6.0,
-			.MaxTemperatureCelsius = 11.6,
-			.TemperatureFadeCelsius = 1.3,
-			.MinHumidity = 0.45,
-			.HumidityFade = 0.12,
-			.MaxSlopeDegrees = 32.0,
-			.SlopeFadeDegrees = 8.0,
-			.GroundTypeMask = MassifGround::Soil,
-			.Abundance = 1.0,
-			.PatchWavelengthMeters = 55.0,
-		},
-		{
-			.Name = TEXT("ForestFloorSubalpine"),
-			.TextureGroup = TEXT("forest"),
-			.TextureSet = TEXT("ForestGround06"),
-			.TileMeters = 3.5,
-			.ReliefMeters = 0.05,
-			// The thin litter of the open larch-cembra woodland at the treeline.
-			.MinTemperatureCelsius = 3.0,
-			.MaxTemperatureCelsius = 9.0,
-			.TemperatureFadeCelsius = 1.3,
-			.MinHumidity = 0.28,
-			.MaxHumidity = 0.92,
-			.HumidityFade = 0.13,
-			.MaxSlopeDegrees = 40.0,
-			.SlopeFadeDegrees = 10.0,
-			.GroundTypeMask = MassifGround::Soil | MassifGround::Scree,
-			.Abundance = 1.2,
-			.PatchWavelengthMeters = 70.0,
-		},
-		{
 			.Name = TEXT("ForestLeaves"),
 			.TextureGroup = TEXT("forest"),
 			.TextureSet = TEXT("ForestLeaves02"),
@@ -552,6 +516,10 @@ namespace MassifSurface
 	inline constexpr const TCHAR* SnowTextureGroup = TEXT("snow");
 	inline constexpr const TCHAR* SnowTextureSet = TEXT("Snow02");
 	inline constexpr double SnowTileMeters = 6.0;
+	inline constexpr double SnowReliefMeters = 0.06;
+
+	/** Snow is the array slice after the last layer, drawn by the same code. */
+	inline constexpr int32 SnowSlice = LayerCount;
 
 	static_assert(LayerCount <= 255, "The surface map stores a layer index in one byte");
 }

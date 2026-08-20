@@ -44,13 +44,23 @@ namespace
 		return Points;
 	}
 
+	/** The one of the pair that covers most of the point, which is what the eye reads there. */
+	int32 DominantLayer(const FMassifSurfaceBlend& Blend)
+	{
+		if (Blend.UpperWeight >= 0.5)
+		{
+			return Blend.UpperLayer;
+		}
+		return Blend.LowerLayer;
+	}
+
 	/** Names of the layers no point in the world chose, which is what a mistuned niche looks like. */
 	FString UnusedLayerNames(const TArray<FSurfacePoint>& Points)
 	{
 		TBitArray<> Used(false, MassifSurface::LayerCount);
 		for (const FSurfacePoint& Point : Points)
 		{
-			Used[Point.Blend.PrimaryLayer] = true;
+			Used[DominantLayer(Point.Blend)] = true;
 		}
 
 		TArray<FString> Names;
@@ -79,25 +89,31 @@ bool FSurfaceMapTest::RunTest(const FString& Parameters)
 	{
 		const FMassifSurfaceBlend& Blend = Point.Blend;
 		if (!TestTrue(TEXT("Layer indices are inside the table"),
-			Blend.PrimaryLayer >= 0 && Blend.PrimaryLayer < MassifSurface::LayerCount
-				&& Blend.SecondaryLayer >= 0 && Blend.SecondaryLayer < MassifSurface::LayerCount))
+			Blend.LowerLayer >= 0 && Blend.LowerLayer < MassifSurface::LayerCount
+				&& Blend.UpperLayer >= 0 && Blend.UpperLayer < MassifSurface::LayerCount))
 		{
 			return false;
 		}
 
-		// The primary layer leads by construction, so the secondary can never take
-		// more than half: a blend past that would mean the two were swapped.
-		if (!TestTrue(TEXT("The secondary layer takes at most half the blend"),
-			Blend.SecondaryWeight >= 0.0 && Blend.SecondaryWeight <= 0.5 + UE_DOUBLE_KINDA_SMALL_NUMBER))
+		// The shader reads the pair as stored and looks the second one up in the
+		// green channel, so a pair the wrong way round draws two different layers
+		// either side of a boundary that should have had one running through it.
+		if (!TestTrue(TEXT("The pair is stored in index order"), Blend.LowerLayer <= Blend.UpperLayer))
+		{
+			return false;
+		}
+
+		if (!TestTrue(TEXT("The blend between the pair is a fraction"),
+			Blend.UpperWeight >= 0.0 && Blend.UpperWeight <= 1.0))
 		{
 			return false;
 		}
 
 		// Ground too steep to hold anything wears a layer written for bare rock.
 		const bool bRockFace = Point.Habitat.SlopeDegrees >= RockSlopeDegrees;
-		const uint32 PrimaryMask = MassifSurface::Layers[Blend.PrimaryLayer].GroundTypeMask;
+		const uint32 DominantMask = MassifSurface::Layers[DominantLayer(Blend)].GroundTypeMask;
 		if (bRockFace && !TestTrue(TEXT("A rock face wears a layer that covers rock"),
-			(PrimaryMask & MassifGround::Rock) != 0))
+			(DominantMask & MassifGround::Rock) != 0))
 		{
 			return false;
 		}
@@ -120,9 +136,9 @@ bool FSurfaceMapTest::RunTest(const FString& Parameters)
 	const FMassifSurfaceBlend Repeat =
 		MassifSurfaceMap::Classify(Probe.Habitat, Probe.PositionMeters, SurfaceTestSeed);
 	TestEqual(TEXT("The same point classifies the same twice"),
-		Repeat.PrimaryLayer, Probe.Blend.PrimaryLayer);
+		Repeat.LowerLayer, Probe.Blend.LowerLayer);
 	TestEqual(TEXT("The same point blends the same twice"),
-		Repeat.SecondaryWeight, Probe.Blend.SecondaryWeight);
+		Repeat.UpperWeight, Probe.Blend.UpperWeight);
 
 	return true;
 }

@@ -4,6 +4,8 @@
 #include "Components/DynamicMeshComponent.h"
 #include "DynamicMesh/DynamicMesh3.h"
 #include "Kismet/GameplayStatics.h"
+#include "MassifEnvironmentBake.h"
+#include "MassifHabitat.h"
 #include "MassifSurfaceLayers.h"
 #include "MassifSurfaceMap.h"
 #include "MassifTerrainField.h"
@@ -32,24 +34,28 @@ void AMassifTerrainManager::Initialize(TSharedPtr<const FMassifTerrainField> InF
 {
 	TerrainMaterial = UMaterialInstanceDynamic::Create(InTerrainMaterial, this);
 	ResetField(InField);
-	ApplyWorldToUvMapping();
 }
 
-void AMassifTerrainManager::ApplyWorldToUvMapping()
+void AMassifTerrainManager::ApplyWorldToUvMapping(const FMassifEnvironmentBake& Bake)
 {
-	// World metres to texture UV, shared by every world-wide texture the material
-	// samples. Row 0 is north, as it is in the elevation model and the bake, so V
-	// runs against +Y. Only the scale travels: the material centres the world
-	// itself, since the origin is the middle of the elevation model by
-	// construction.
-	const double WorldSizeMeters = Field->GetWorldSizeMeters();
-	TerrainMaterial->SetVectorParameterValue(TEXT("WorldToUv"),
-		FLinearColor(1.0f / WorldSizeMeters, -1.0f / WorldSizeMeters, 0.0f, 0.0f));
+	// World metres onto the 0-1 range of every world-wide texture the material
+	// samples, as a scale and an offset rather than a scale alone. The maps cover
+	// exactly the bake's extent, so that extent is what the transform is built
+	// from; anything else silently maps part of a map over the whole massif.
+	//
+	// Row 0 is north, as it is in the elevation model and the bake, so V runs
+	// against +Y and the offset that centres it is added rather than subtracted.
+	const double WorldSizeXMeters = Bake.GetWidth() * Bake.GetCellSizeMeters();
+	const double WorldSizeYMeters = Bake.GetHeight() * Bake.GetCellSizeMeters();
+	TerrainMaterial->SetVectorParameterValue(TEXT("WorldToUvScale"), FLinearColor(
+		1.0f / WorldSizeXMeters, -1.0f / WorldSizeYMeters, 0.0f, 0.0f));
+	TerrainMaterial->SetVectorParameterValue(TEXT("WorldToUvOffset"), FLinearColor(0.5f, 0.5f, 0.0f, 0.0f));
 }
 
 void AMassifTerrainManager::ApplySurfaceMap(const FMassifHabitatField& Habitat, uint32 MasterSeed)
 {
 	const double StartSeconds = FPlatformTime::Seconds();
+	ApplyWorldToUvMapping(Habitat.GetEnvironmentBake());
 	MassifSurfaceMap::Render(Habitat, MasterSeed, SurfaceIndexMap, SurfaceBlendMap);
 	MassifSurfaceMap::RenderLayerParameters(SurfaceLayerParameters);
 

@@ -223,8 +223,8 @@ namespace
 
 			const int32 Index = Row * Bake.GetWidth() + Column;
 			IndexPixels[Index] = FColor(
-				static_cast<uint8>(Blend.PrimaryLayer), static_cast<uint8>(Blend.SecondaryLayer), 0, 255);
-			BlendPixels[Index] = FColor(ToByte(Blend.SecondaryWeight), ToByte(Blend.SnowCover), 0, 255);
+				static_cast<uint8>(Blend.LowerLayer), static_cast<uint8>(Blend.UpperLayer), 0, 255);
+			BlendPixels[Index] = FColor(ToByte(Blend.UpperWeight), ToByte(Blend.SnowCover), 0, 255);
 		}
 	}
 }
@@ -236,13 +236,24 @@ FMassifSurfaceBlend MassifSurfaceMap::Classify(
 	const double TotalWeight = Ranking.BestWeight + Ranking.SecondWeight;
 
 	FMassifSurfaceBlend Blend;
-	Blend.PrimaryLayer = Ranking.BestIndex;
-	Blend.SecondaryLayer = Ranking.SecondIndex;
 	Blend.SnowCover = SnowCover(Habitat);
-	if (TotalWeight > 0.0)
+	Blend.LowerLayer = FMath::Min(Ranking.BestIndex, Ranking.SecondIndex);
+	Blend.UpperLayer = FMath::Max(Ranking.BestIndex, Ranking.SecondIndex);
+	if (TotalWeight <= 0.0)
 	{
-		Blend.SecondaryWeight = Ranking.SecondWeight / TotalWeight;
+		return Blend;
 	}
+
+	// The share belongs to whichever of the two the ranking put first, and the
+	// pair is stored in index order, so which end of the range that share lands
+	// on depends on which way round the ranking came out.
+	const double BestShare = Ranking.BestWeight / TotalWeight;
+	if (Ranking.BestIndex >= Ranking.SecondIndex)
+	{
+		Blend.UpperWeight = BestShare;
+		return Blend;
+	}
+	Blend.UpperWeight = 1.0 - BestShare;
 	return Blend;
 }
 
@@ -274,9 +285,12 @@ void MassifSurfaceMap::Render(
 
 void MassifSurfaceMap::RenderLayerParameters(TObjectPtr<UTexture2D>& Texture)
 {
+	// One row longer than the table: snow is the slice after the last layer, and
+	// the shader reads its tiling from the same place as everything else.
+	const int32 EntryCount = MassifSurface::LayerCount + 1;
 	if (Texture == nullptr)
 	{
-		Texture = UTexture2D::CreateTransient(MassifSurface::LayerCount, 1, PF_A32B32G32R32F);
+		Texture = UTexture2D::CreateTransient(EntryCount, 1, PF_A32B32G32R32F);
 		Texture->AddressX = TA_Clamp;
 		Texture->AddressY = TA_Clamp;
 		Texture->SRGB = false;
@@ -292,6 +306,9 @@ void MassifSurfaceMap::RenderLayerParameters(TObjectPtr<UTexture2D>& Texture)
 		Pixels[Index] = FLinearColor(
 			static_cast<float>(Layer.TileMeters), static_cast<float>(Layer.ReliefMeters), 0.0f, 1.0f);
 	}
+	Pixels[MassifSurface::LayerCount] = FLinearColor(
+		static_cast<float>(MassifSurface::SnowTileMeters),
+		static_cast<float>(MassifSurface::SnowReliefMeters), 0.0f, 1.0f);
 	Mip.BulkData.Unlock();
 	Texture->UpdateResource();
 }
