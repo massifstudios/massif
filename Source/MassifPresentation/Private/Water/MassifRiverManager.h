@@ -1,24 +1,35 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Containers/Queue.h"
 #include "GameFramework/Actor.h"
 #include "MassifRiverManager.generated.h"
 
-class FMassifEnvironmentBake;
+class FMassifRiverField;
 class UDynamicMeshComponent;
 class UMaterialInterface;
 
+namespace UE::Geometry
+{
+	class FDynamicMesh3;
+}
+
 /**
- * Draws the river network as water surfaces: one ribbon per reach, batched into
- * square blocks of world so the engine can cull them, each block its own
- * component.
+ * Draws the world's rivers as water surfaces, a tile of the world at a time,
+ * around wherever the camera is.
  *
- * The reaches never move and the world's water does not change, so the meshes
- * are built once at start-up rather than streamed. Three hundred kilometres of
- * channel is only tens of thousands of triangles once the polylines have been
- * simplified — far less than a single terrain tile.
+ * Tiles are resident rather than built once: three hundred kilometres of channel
+ * cut finely enough to hold a brook's shape is more geometry than the world needs
+ * on screen at any moment, and almost all of it is somewhere else. Distant water
+ * is not drawn at all — the valley it runs in is still carved into the terrain,
+ * which is what reads at that range.
  *
- * Purely presentation: owns no gameplay state, and reads the bake without
+ * There is no level of detail. The river field answers the same surface altitude
+ * at a point however finely it is asked, so a tile is one mesh rather than a
+ * choice between several, and a tile leaving and returning brings back exactly
+ * what it had.
+ *
+ * Purely presentation: owns no gameplay state, and reads the field without
  * writing to it.
  */
 UCLASS()
@@ -29,30 +40,76 @@ class AMassifRiverManager : public AActor
 public:
 	AMassifRiverManager();
 
-	void Initialize(TSharedPtr<const FMassifEnvironmentBake> InBake, UMaterialInterface* InRiverMaterial);
+	void Initialize(TSharedPtr<const FMassifRiverField> InRiverField, UMaterialInterface* InRiverMaterial);
+
+	virtual void Tick(float DeltaSeconds) override;
 
 private:
 	/**
-	 * Side of the block each component covers. Small enough that culling a block
-	 * is worth something, large enough that a 20 km world does not need hundreds
-	 * of components to hold a few hundred triangles each.
+	 * How far from the camera water is drawn. Past it a channel is a few pixels
+	 * across and the carved valley carries the reading on its own.
 	 */
-	static constexpr double BlockSizeMeters = 2000.0;
+	static constexpr double VisibleRadiusMeters = 1200.0;
 
-	/** Blocks are keyed by their grid coordinate, packed so the map key is one integer. */
-	static uint64 MakeBlockKey(FVector2d PositionMeters);
-	static FVector2d BlockOriginMeters(uint64 BlockKey);
+	/** Tiles are dropped past a tenth beyond the radius, so a camera on the boundary does not rebuild one every frame. */
+	static constexpr double DropRadiusFactor = 1.1;
 
-	/** A reach belongs to the block its head is in, wherever the rest of it runs. */
-	TMap<uint64, TArray<const struct FMassifRiverReach*>> GroupReachesIntoBlocks() const;
+	static constexpr int32 MaxInFlightBuilds = 6;
+	static constexpr int32 MaxMeshApplicationsPerFrame = 4;
 
-	void BuildBlock(uint64 BlockKey, TArrayView<const struct FMassifRiverReach* const> Reaches);
+	struct FWaterTile
+	{
+		int32 TileX = 0;
+		int32 TileY = 0;
+		bool bBuildInFlight = false;
+		/** Water covers a fraction of the world, so most tiles resolve to no mesh at all. */
+		int32 ComponentIndex = INDEX_NONE;
+	};
 
-	TSharedPtr<const FMassifEnvironmentBake> Bake;
+	struct FFinishedBuild
+	{
+		uint64 TileKey = 0;
+		TSharedPtr<UE::Geometry::FDynamicMesh3> Mesh;
+	};
+
+	using FFinishedBuildQueue = TQueue<FFinishedBuild, EQueueMode::Mpsc>;
+
+	struct FBuildRequest
+	{
+		int32 TileX = 0;
+		int32 TileY = 0;
+		double DistanceMeters = 0.0;
+	};
+
+	static uint64 MakeTileKey(int32 TileX, int32 TileY);
+	static double DistanceToTileMeters(int32 TileX, int32 TileY, const FVector& ViewMeters);
+
+	FVector GetViewLocationMeters() const;
+
+	void GatherTiles(const FVector& ViewMeters);
+	void DropDistantTiles(const FVector& ViewMeters);
+	void LaunchBuilds();
+	void ApplyFinishedBuilds();
+	void ApplyMesh(FWaterTile& Tile, TSharedPtr<UE::Geometry::FDynamicMesh3> Mesh);
+
+	int32 AcquireComponent(int32 TileX, int32 TileY);
+	void ReleaseComponent(FWaterTile& Tile);
+
+	/** Once the water around the camera has settled, so what it costs is visible at all. */
+	void LogWaterSummaryOnce();
+
+	TSharedPtr<const FMassifRiverField> RiverField;
+	TSharedPtr<FFinishedBuildQueue> FinishedBuilds;
 
 	UPROPERTY()
 	TObjectPtr<UMaterialInterface> RiverMaterial;
 
 	UPROPERTY()
-	TArray<TObjectPtr<UDynamicMeshComponent>> BlockComponents;
+	TArray<TObjectPtr<UDynamicMeshComponent>> ComponentPool;
+
+	TArray<int32> FreeComponentIndices;
+	TMap<uint64, FWaterTile> ResidentTiles;
+	TArray<FBuildRequest> BuildRequests;
+	int32 InFlightBuildCount = 0;
+	bool bLoggedWaterSummary = false;
 };

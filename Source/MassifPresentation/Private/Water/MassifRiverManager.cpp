@@ -1,91 +1,240 @@
 #include "MassifRiverManager.h"
 
+#include "Async/Async.h"
 #include "Components/DynamicMeshComponent.h"
 #include "DynamicMesh/DynamicMesh3.h"
-#include "MassifEnvironmentBake.h"
-#include "MassifRiverNetwork.h"
-#include "MassifRiverRibbonMesh.h"
+#include "Kismet/GameplayStatics.h"
+#include "MassifRiverField.h"
 #include "MassifUnits.h"
+#include "MassifWaterTileMesh.h"
 
 using MassifUnits::MetersToCentimeters;
+using MassifWaterTileMesh::TileSizeMeters;
 
 namespace
 {
-	/** Half the key space each axis gets, so a signed block coordinate packs unsigned. */
-	constexpr int64 BlockCoordinateBias = 1 << 20;
+	/** Half the key space each axis gets, so a signed tile coordinate packs unsigned. */
+	constexpr int64 TileCoordinateBias = 1 << 20;
 }
 
 AMassifRiverManager::AMassifRiverManager()
 {
-	PrimaryActorTick.bCanEverTick = false;
+	PrimaryActorTick.bCanEverTick = true;
 	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 }
 
-uint64 AMassifRiverManager::MakeBlockKey(FVector2d PositionMeters)
+uint64 AMassifRiverManager::MakeTileKey(int32 TileX, int32 TileY)
 {
-	const int64 BlockX = FMath::FloorToInt64(PositionMeters.X / BlockSizeMeters) + BlockCoordinateBias;
-	const int64 BlockY = FMath::FloorToInt64(PositionMeters.Y / BlockSizeMeters) + BlockCoordinateBias;
-	return (static_cast<uint64>(BlockX) << 32) | (static_cast<uint64>(BlockY) & 0xFFFFFFFF);
+	const uint64 KeyX = static_cast<uint64>(TileX + TileCoordinateBias);
+	const uint64 KeyY = static_cast<uint64>(TileY + TileCoordinateBias);
+	return (KeyX << 32) | (KeyY & 0xFFFFFFFF);
 }
 
-FVector2d AMassifRiverManager::BlockOriginMeters(uint64 BlockKey)
+double AMassifRiverManager::DistanceToTileMeters(int32 TileX, int32 TileY, const FVector& ViewMeters)
 {
-	const int64 BlockX = static_cast<int64>(BlockKey >> 32) - BlockCoordinateBias;
-	const int64 BlockY = static_cast<int64>(BlockKey & 0xFFFFFFFF) - BlockCoordinateBias;
-	return FVector2d(BlockX * BlockSizeMeters, BlockY * BlockSizeMeters);
+	const FVector2d CentreMeters =
+		MassifWaterTileMesh::TileOriginMeters(TileX, TileY) + 0.5 * FVector2d(TileSizeMeters, TileSizeMeters);
+	return FVector2d(CentreMeters.X - ViewMeters.X, CentreMeters.Y - ViewMeters.Y).Length();
 }
 
 void AMassifRiverManager::Initialize(
-	TSharedPtr<const FMassifEnvironmentBake> InBake, UMaterialInterface* InRiverMaterial)
+	TSharedPtr<const FMassifRiverField> InRiverField, UMaterialInterface* InRiverMaterial)
 {
-	Bake = InBake;
+	RiverField = InRiverField;
 	RiverMaterial = InRiverMaterial;
-	if (!Bake.IsValid())
+	FinishedBuilds = MakeShared<FFinishedBuildQueue>();
+}
+
+void AMassifRiverManager::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+	if (!RiverField.IsValid())
 	{
 		return;
 	}
 
-	const double StartSeconds = FPlatformTime::Seconds();
-	for (const TPair<uint64, TArray<const FMassifRiverReach*>>& Block : GroupReachesIntoBlocks())
-	{
-		BuildBlock(Block.Key, Block.Value);
-	}
+	const FVector ViewMeters = GetViewLocationMeters();
+	ApplyFinishedBuilds();
+	DropDistantTiles(ViewMeters);
 
-	UE_LOG(LogTemp, Display, TEXT("Rivers: %d water surfaces built in %.2f s"),
-		BlockComponents.Num(), FPlatformTime::Seconds() - StartSeconds);
+	BuildRequests.Reset();
+	GatherTiles(ViewMeters);
+	LaunchBuilds();
+	LogWaterSummaryOnce();
 }
 
-TMap<uint64, TArray<const FMassifRiverReach*>> AMassifRiverManager::GroupReachesIntoBlocks() const
+void AMassifRiverManager::LogWaterSummaryOnce()
 {
-	TMap<uint64, TArray<const FMassifRiverReach*>> Blocks;
-	for (const FMassifRiverReach& Reach : Bake->GetRivers().GetReaches())
-	{
-		const uint64 BlockKey = MakeBlockKey(Reach.Nodes[0].PositionMeters);
-		Blocks.FindOrAdd(BlockKey).Add(&Reach);
-	}
-	return Blocks;
-}
-
-void AMassifRiverManager::BuildBlock(uint64 BlockKey, TArrayView<const FMassifRiverReach* const> Reaches)
-{
-	const FVector2d OriginMeters = BlockOriginMeters(BlockKey);
-	TSharedPtr<UE::Geometry::FDynamicMesh3> Mesh =
-		MassifRiverRibbonMesh::BuildRibbonMesh(Reaches, OriginMeters);
-	if (Mesh->TriangleCount() == 0)
+	const bool bSettled = InFlightBuildCount == 0 && BuildRequests.IsEmpty();
+	if (bLoggedWaterSummary || !bSettled || ComponentPool.IsEmpty())
 	{
 		return;
+	}
+
+	int32 TriangleCount = 0;
+	for (const TObjectPtr<UDynamicMeshComponent>& Component : ComponentPool)
+	{
+		TriangleCount += Component->GetMesh()->TriangleCount();
+	}
+
+	UE_LOG(LogTemp, Display, TEXT("Rivers: %d water tiles around the camera, %d of them wet, %d triangles"),
+		ResidentTiles.Num(), ComponentPool.Num() - FreeComponentIndices.Num(), TriangleCount);
+	bLoggedWaterSummary = true;
+}
+
+FVector AMassifRiverManager::GetViewLocationMeters() const
+{
+	const APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0);
+	if (PlayerController == nullptr || PlayerController->PlayerCameraManager == nullptr)
+	{
+		return FVector::ZeroVector;
+	}
+	return PlayerController->PlayerCameraManager->GetCameraLocation() / MetersToCentimeters;
+}
+
+void AMassifRiverManager::GatherTiles(const FVector& ViewMeters)
+{
+	const int32 TileReach = FMath::CeilToInt32(VisibleRadiusMeters / TileSizeMeters);
+	const int32 CentreTileX = FMath::FloorToInt32(ViewMeters.X / TileSizeMeters);
+	const int32 CentreTileY = FMath::FloorToInt32(ViewMeters.Y / TileSizeMeters);
+
+	const int32 SideTileCount = 2 * TileReach + 1;
+	for (int32 TileIndex = 0; TileIndex < SideTileCount * SideTileCount; ++TileIndex)
+	{
+		const int32 TileX = CentreTileX - TileReach + TileIndex % SideTileCount;
+		const int32 TileY = CentreTileY - TileReach + TileIndex / SideTileCount;
+		const double DistanceMeters = DistanceToTileMeters(TileX, TileY, ViewMeters);
+		const bool bWanted =
+			DistanceMeters <= VisibleRadiusMeters && !ResidentTiles.Contains(MakeTileKey(TileX, TileY));
+		if (bWanted)
+		{
+			BuildRequests.Add({ TileX, TileY, DistanceMeters });
+		}
+	}
+}
+
+void AMassifRiverManager::DropDistantTiles(const FVector& ViewMeters)
+{
+	TArray<uint64> Departed;
+	for (TPair<uint64, FWaterTile>& Entry : ResidentTiles)
+	{
+		const double DistanceMeters = DistanceToTileMeters(Entry.Value.TileX, Entry.Value.TileY, ViewMeters);
+		// A tile whose build is still running is kept until the mesh comes back,
+		// or the result would be applied to a tile that no longer exists.
+		if (DistanceMeters > VisibleRadiusMeters * DropRadiusFactor && !Entry.Value.bBuildInFlight)
+		{
+			ReleaseComponent(Entry.Value);
+			Departed.Add(Entry.Key);
+		}
+	}
+	for (const uint64 Key : Departed)
+	{
+		ResidentTiles.Remove(Key);
+	}
+}
+
+void AMassifRiverManager::LaunchBuilds()
+{
+	BuildRequests.Sort([](const FBuildRequest& Left, const FBuildRequest& Right)
+	{
+		return Left.DistanceMeters < Right.DistanceMeters;
+	});
+
+	for (const FBuildRequest& Request : BuildRequests)
+	{
+		if (InFlightBuildCount >= MaxInFlightBuilds)
+		{
+			return;
+		}
+
+		FWaterTile Tile;
+		Tile.TileX = Request.TileX;
+		Tile.TileY = Request.TileY;
+		Tile.bBuildInFlight = true;
+		const uint64 TileKey = MakeTileKey(Request.TileX, Request.TileY);
+		ResidentTiles.Add(TileKey, Tile);
+		++InFlightBuildCount;
+
+		TSharedPtr<const FMassifRiverField> FieldRef = RiverField;
+		TSharedPtr<FFinishedBuildQueue> QueueRef = FinishedBuilds;
+		const int32 TileX = Request.TileX;
+		const int32 TileY = Request.TileY;
+		Async(EAsyncExecution::ThreadPool, [FieldRef, QueueRef, TileKey, TileX, TileY]()
+		{
+			FFinishedBuild Finished;
+			Finished.TileKey = TileKey;
+			Finished.Mesh = MassifWaterTileMesh::BuildWaterTileMesh(*FieldRef, TileX, TileY);
+			QueueRef->Enqueue(MoveTemp(Finished));
+		});
+	}
+}
+
+void AMassifRiverManager::ApplyFinishedBuilds()
+{
+	for (int32 Applied = 0; Applied < MaxMeshApplicationsPerFrame; ++Applied)
+	{
+		FFinishedBuild Finished;
+		if (!FinishedBuilds->Dequeue(Finished))
+		{
+			return;
+		}
+
+		--InFlightBuildCount;
+		FWaterTile* Tile = ResidentTiles.Find(Finished.TileKey);
+		if (Tile == nullptr)
+		{
+			continue;
+		}
+
+		Tile->bBuildInFlight = false;
+		ApplyMesh(*Tile, MoveTemp(Finished.Mesh));
+	}
+}
+
+/** Dry ground is recorded as a resident tile with no component, or it would be rebuilt every frame. */
+void AMassifRiverManager::ApplyMesh(FWaterTile& Tile, TSharedPtr<UE::Geometry::FDynamicMesh3> Mesh)
+{
+	if (!Mesh.IsValid() || Mesh->TriangleCount() == 0)
+	{
+		return;
+	}
+
+	Tile.ComponentIndex = AcquireComponent(Tile.TileX, Tile.TileY);
+	ComponentPool[Tile.ComponentIndex]->SetMesh(MoveTemp(*Mesh));
+}
+
+int32 AMassifRiverManager::AcquireComponent(int32 TileX, int32 TileY)
+{
+	const FVector2d OriginMeters = MassifWaterTileMesh::TileOriginMeters(TileX, TileY);
+	const FVector LocationCentimeters = FVector(OriginMeters.X, OriginMeters.Y, 0.0) * MetersToCentimeters;
+	if (FreeComponentIndices.Num() > 0)
+	{
+		const int32 Reused = FreeComponentIndices.Pop();
+		ComponentPool[Reused]->SetWorldLocation(LocationCentimeters);
+		ComponentPool[Reused]->SetVisibility(true);
+		return Reused;
 	}
 
 	UDynamicMeshComponent* Component = NewObject<UDynamicMeshComponent>(this);
 	Component->SetupAttachment(RootComponent);
 	Component->RegisterComponent();
 	Component->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	// The surface is a single sheet lying a few centimetres over the ground it
-	// covers, so it has nothing to cast a shadow onto that would be seen.
+	// The surface lies in the trench cut for it, so it has nothing to cast a
+	// shadow onto that would be seen.
 	Component->SetCastShadow(false);
 	Component->SetMaterial(0, RiverMaterial);
-	Component->SetWorldLocation(FVector(OriginMeters.X, OriginMeters.Y, 0.0) * MetersToCentimeters);
-	Component->SetMesh(MoveTemp(*Mesh));
+	Component->SetWorldLocation(LocationCentimeters);
+	return ComponentPool.Add(Component);
+}
 
-	BlockComponents.Add(Component);
+void AMassifRiverManager::ReleaseComponent(FWaterTile& Tile)
+{
+	if (Tile.ComponentIndex == INDEX_NONE)
+	{
+		return;
+	}
+
+	ComponentPool[Tile.ComponentIndex]->SetVisibility(false);
+	FreeComponentIndices.Add(Tile.ComponentIndex);
+	Tile.ComponentIndex = INDEX_NONE;
 }

@@ -218,7 +218,7 @@ void AMassifGameMode::LoadTerrainAndSpawnManagers()
 	FoliageManager->Initialize(TerrainField, EnvironmentBake, GetMasterSeed());
 
 	RiverManager = GetWorld()->SpawnActor<AMassifRiverManager>();
-	RiverManager->Initialize(EnvironmentBake, LoadRiverMaterial());
+	RiverManager->Initialize(RiverField, LoadRiverMaterial());
 
 	DebugChannelView = GetWorld()->SpawnActor<AMassifDebugChannelView>();
 	DebugChannelView->Initialize(HabitatField, TerrainManager);
@@ -227,9 +227,9 @@ void AMassifGameMode::LoadTerrainAndSpawnManagers()
 void AMassifGameMode::BuildTerrainField(TSharedRef<const FMassifHeightmap> Heightmap)
 {
 	const FMassifRiverCarveParams CarveParams;
-	const TSharedRef<const FMassifRiverField> RiverField =
-		FMassifRiverField::Build(EnvironmentBake->GetRivers(), CarveParams.MaxBankMeters);
-	TerrainField = MakeShared<const FMassifTerrainField>(MoveTemp(Heightmap), RiverField, CarveParams);
+	RiverField = FMassifRiverField::Build(EnvironmentBake->GetRivers(), CarveParams.MaxBankMeters);
+	TerrainField =
+		MakeShared<const FMassifTerrainField>(MoveTemp(Heightmap), RiverField.ToSharedRef(), CarveParams);
 
 	UE_LOG(LogTemp, Display, TEXT("Terrain field: %.0f m across, %d channel segments cut into it"),
 		TerrainField->GetWorldSizeMeters(), RiverField->GetSegmentCount());

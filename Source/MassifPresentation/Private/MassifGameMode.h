@@ -10,6 +10,7 @@ class AMassifRiverManager;
 class AMassifTerrainManager;
 class FMassifEnvironmentBake;
 class FMassifHeightmap;
+class FMassifRiverField;
 class FMassifTerrainField;
 
 /**
@@ -54,6 +55,9 @@ private:
 
 	TSharedPtr<const FMassifTerrainField> TerrainField;
 	TSharedPtr<const FMassifEnvironmentBake> EnvironmentBake;
+
+	/** The bake's rivers as a field: cut into the terrain, and drawn as water over it. */
+	TSharedPtr<const FMassifRiverField> RiverField;
 
 	UPROPERTY()
 	TObjectPtr<AMassifTerrainManager> TerrainManager;
