@@ -180,7 +180,50 @@ See ARCHITECTURE §5.
   heightmap, so a bare checkout stays green. Manual — 20 km of the Ötztal at
   Sölden, 1168–3757 m, loads in 0.3 s and renders. **Done.**
 
-### M5f — Geological Refinement (next)
+### M5g — Environment Bake: Water (next)
+Habitat currently guesses water from local slope and a noise field, so valley
+floors are no wetter than the shoulders above them and ground type is a slope
+threshold. Replace the guesses with a world-wide solve at world gen — where
+water goes, where it stands, and where the sediment it carried settled. See
+ARCHITECTURE §5.6.
+
+- `FMassifEnvironmentBake`: 8 m cells over the world, built from the heightmap
+  and the master seed. Depression fill (Planchon–Darboux relaxation) →
+  `StandingWaterDepth`; multiple-flow-direction routing over the filled surface
+  → `FlowAccumulation`; seeded droplets eroding and depositing against a
+  sediment capacity → `SoilDepthMeters`; topographic wetness index → `Wetness`.
+- CPU reference implementation and a GPU compute path behind one interface.
+  Fixed iteration counts, integer atomics on fixed-point for droplet scatter,
+  so both paths are reproducible run to run and machine to machine.
+- `FMassifHabitatField` rewired: humidity from `Wetness` instead of the
+  four-neighbour convergence probe and weather noise; ground type from
+  `SoilDepthMeters` and standing water instead of slope thresholds alone.
+- Debug channel views (ARCHITECTURE §5.7): number keys paint a bake channel
+  onto the terrain, legend top-right, 0 returns to the normal material.
+- **Verify:** tests — bake determinism hash across runs, every cell drains to
+  the border or to a filled depression, filled surface never below the measured
+  one, flow accumulation sums to the cell count, CPU and GPU paths agree within
+  tolerance (GPU test auto-skips headless), habitat contract tests updated to
+  the bake. Manual — number keys show dendritic drainage in the real Ötztal
+  valleys, standing water only in hollows, forest following wetness and soil
+  rather than a contour.
+
+### M5h — Environment Bake: Sunlight
+Insolation over the same grid: how much sun each cell takes across a day, and
+how much sky it can see at all. Ridges shade their own north flanks and the
+valley floors below them, which is what puts a treeline where one belongs.
+
+- Horizon sweep per azimuth over the heightmap → `SkyViewFactor`; the sun's
+  path across a representative growing-season day, ray-marched against the
+  horizon angles → `DirectInsolation`.
+- Habitat temperature reads insolation instead of the normal's southness.
+- Debug channels extended with both.
+- **Verify:** tests — a flat world takes full insolation and unit sky view, a
+  cell inside a pit takes neither, horizon angles monotone with obstruction
+  height, determinism hash. Manual — the shading in the debug view matches
+  where the sun actually falls in the rendered scene.
+
+### M5f — Geological Refinement
 Erosion over the imported surface: smooth scanner artefacts, cut detail below
 the 2 m source resolution, age the ground. Runs once at import over a finite
 grid and emits another `.massifdem` — a preprocessing step on measured data,
@@ -190,9 +233,9 @@ Diffusion-generated terrain (Infinite Diffusion) enters the same pipeline at
 the same point, through the same format.
 
 ### M6 — Masks, Textured Terrain & PCG Forests
-- Derived masks from eroded terrain: flow accumulation, deposition,
-  slope → semantic masks (river, scree, forest, rock face, buildable);
-  debug visualization mode per mask.
+- Semantic masks (river, scree, forest, rock face, buildable) from the
+  environment bake channels (M5g, M5h) plus slope and altitude; debug
+  visualization per mask, through the channel views M5g builds.
 - Terrain material with real PBR texture sets (Polyhaven, CC0: rock,
   snow, grass, scree) — triplanar, slope/altitude/mask blended.
 - PCG forests from the forest mask with realistic conifer models

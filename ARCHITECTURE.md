@@ -78,6 +78,14 @@ and `MassifCore` tests must pass headless.
   float-reproducibility exposure a computed surface carries. No
   gameplay-relevant value comes from a GPU pass. Compute shaders may mirror
   the field for rendering, but their results are never read back into sim.
+- **The environment bake (§5.6) runs on the GPU and is not sim state.** Its
+  channels — drainage, standing water, wetness, soil depth, insolation — feed
+  worldgen and presentation: what to plant, what the ground is made of, how the
+  terrain is shaded. Nothing in `MassifSim` reads them. The bake carries a CPU
+  reference implementation that is the algorithm's definition and the contract
+  the tests hold; the GPU path exists to make it fast. When a mask that sim
+  does read (buildable, forest) later needs a bake channel, it comes from the
+  CPU path, so the rule above stands unweakened.
 - **Sim samples the terrain field only at fixed, named spacings.** The
   field is LOD-dependent by design, so sampling it at view LOD would make
   sim state depend on where the camera is. Sim therefore uses named
@@ -182,12 +190,23 @@ its output is another `.massifdem`. It is a preprocessing step on measured
 data, not part of the terrain definition, so it reintroduces no world-wide
 solve into a query path that must stay per-point.
 
-### 5.2 Hydrology (open)
+### 5.2 Hydrology
 
-There is currently no global drainage: rivers, watersheds and flow
-accumulation are unresolved. When hydrology returns (masks and rivers,
-M6+), it derives from the sampled surface per resident tile with aprons —
-it must not reintroduce a world-wide solve into the terrain definition.
+Drainage, standing water and wetness come from the environment bake (§5.6):
+one world-wide solve over the finite imported grid, run once at world gen.
+
+This is a world-wide solve, and the earlier ones (M3, M4b) were deleted for
+being exactly that — the distinction is which side of the query API they sit
+on. Those computed the *terrain surface*, so every point of `Height` depended
+on a global grid, and the field could no longer answer a point at any
+resolution without evaluating the world. The bake computes quantities *derived
+from* a surface that is already fixed and measured. `Height(Position,
+Spacing)` is untouched by it and stays a pure per-point function of the
+elevation model; the bake is a second field beside it, not a layer under it.
+
+A world-wide solve is affordable here for the same reason it was not before:
+the world is finite, imported, and 20 km across, so the whole drainage problem
+is 2500² cells.
 
 ### 5.3 Terrain representation
 
@@ -236,10 +255,10 @@ tiles would not agree at their shared edge, which is exactly the stitching
 problem the field is there to remove.
 
 **Flow accumulation** is the one genuinely global derived quantity — water
-arrives from far outside the tile. With no global solve it is currently
-unresolved (§5.2); when masks need it, it will be derived over sampled
-grids coarser than the tile, never by putting a solve back into the
-terrain definition.
+arrives from far outside the tile, so no apron is wide enough. It is therefore
+not a per-tile derived grid at all: it comes from the environment bake (§5.6),
+world-wide and coarser than a tile, and resident tiles read it rather than
+computing it.
 
 Only tiles the player has modified are saved (§9). Everything else is
 regenerated from the seed on demand.
@@ -263,6 +282,63 @@ Distant terrain that has no resident tiles gets vegetation and rock driven
 directly by the field (altitude, slope, aspect). It becomes mask-driven as
 soon as tiles become resident, so the two must agree closely enough that
 the transition is not visible.
+
+### 5.6 Environment bake
+
+Where a plant grows is decided by water, light and what the ground is made of,
+and none of the three can be answered from a single point of the surface: water
+arrives from the whole catchment above, shade is cast by ridges kilometres
+away, and soil is where sediment came to rest. `FMassifHabitatField` first
+approximated all three from local slope and altitude, and it reads as
+approximation — trees stop at a contour line rather than at a treeline, and
+valley floors are no wetter than the shoulders above them.
+
+The **environment bake** replaces the approximations with simulation over the
+whole world, run once at world gen against the imported grid. Channels:
+
+| channel | from | drives |
+|---|---|---|
+| `StandingWaterDepth` | depression fill: filled surface minus measured | tarns, ponds, wetland |
+| `FlowAccumulation` | multiple-flow-direction routing over the filled surface | streams, rivers, catchment size |
+| `Wetness` | topographic wetness index, blended with standing water and climate | humidity, species density |
+| `SoilDepthMeters` | droplet erosion/deposition against a sediment capacity | rock vs scree vs earth |
+| `SkyViewFactor`, `DirectInsolation` | horizon sweep and a day's sun path (later milestone) | temperature, treeline, snow retention |
+
+Resolution is 8 m — 2500² cells over the 20 km world, about 50 MB resident as
+quantised uint16. Finer would resolve stream channels better, but habitat is
+read at species scale and the DEM's own detail is already available through the
+terrain field for anything that needs it.
+
+**Determinism.** Iteration counts are fixed, never driven by a convergence test
+against a readback — a solve that stops when it has converged stops at a
+different iteration on a different machine. Droplets start on a jittered
+lattice from a seeded stream, and scatter their sediment through **integer
+atomics on a fixed-point encoding**: float atomic adds commit in whatever order
+the hardware schedules, so a float accumulator would make the same bake differ
+run to run on one machine, never mind across two.
+
+**Two implementations, one interface.** The CPU path is the definition of each
+algorithm and what the automation suite runs; the GPU compute path is the same
+algorithm arranged for the hardware, and is what actually runs at world gen.
+Headless (`-nullrhi`) falls back to the CPU path rather than skipping, so the
+bake is covered by tests on every machine. The two are held to agreeing within
+a tolerance, which is what catches a GPU port that has drifted from its
+reference.
+
+The bake is not saved. It is a pure function of the elevation model and the
+master seed, so it is rebuilt at load like the mip chain (§9).
+
+### 5.7 Debug channel views
+
+Any bake channel can be painted onto the terrain in place of its material,
+selected by the number keys, with a legend naming the channel and its range in
+the top-right corner. The channel is uploaded as one world-sized texture and
+sampled by world XY in the terrain material, so nothing about the mesh, the
+quadtree or the field changes when a view is switched on.
+
+This is presentation-only debug, not a game mode: it reads the bake and draws
+it. It exists because every one of these channels is a simulation whose output
+is otherwise only visible as a second-order effect on where trees ended up.
 
 ## 6. Snow System
 
@@ -391,6 +467,8 @@ when cells change) with the deformation RT for close-range detail.
   placement validation, 4 m for wide-area scans. Never view-derived.
 - **Resident tiles:** 512 m square, 4 m cells (128² per tile) for masks and
   snow. Generated on demand, evicted when far, saved only if modified.
+- **Environment bake:** 8 m cells, 2500² over the world, solved once at world
+  gen and never saved (§5.6).
 - **Presentation detail:** clipmap rings from ~10 cm at the camera,
   doubling outward to the world edge, ~20 rings and ~1.5 M vertices.
   Below the finest ring, detail is material displacement and scattered
