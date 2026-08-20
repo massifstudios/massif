@@ -77,7 +77,7 @@ your changes accordingly.
 
 ## Tests
 
-After completing your changes, and before committing:
+After completing all requested changes, and before committing:
 
 1. Decide whether any change needs a new test. Behavior changes and bug
    fixes need one; pure refactors and comment/style edits do not. If you
