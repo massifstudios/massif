@@ -4,6 +4,7 @@
 #include "GameFramework/Actor.h"
 #include "MassifTerrainManager.generated.h"
 
+class FMassifHabitatField;
 class FMassifTerrainField;
 class UDynamicMeshComponent;
 class UMaterialInstanceDynamic;
@@ -44,6 +45,13 @@ public:
 	 * in flight against the old field are dropped, never applied to the new tree.
 	 */
 	void ResetField(TSharedPtr<const FMassifTerrainField> InField);
+
+	/**
+	 * Classifies the ground into surface layers and hands the result to the
+	 * material (MassifSurfaceMap.h). Runs once: the classification is a function
+	 * of the world, not of the view.
+	 */
+	void ApplySurfaceMap(const FMassifHabitatField& Habitat, uint32 MasterSeed);
 
 	/**
 	 * Paints a baked channel over the ground in place of the terrain material
@@ -118,6 +126,16 @@ private:
 	UPROPERTY()
 	TObjectPtr<UMaterialInstanceDynamic> TerrainMaterial;
 
+	/** The classified ground: layer indices, the blend between them, and the layer table. */
+	UPROPERTY()
+	TObjectPtr<UTexture2D> SurfaceIndexMap;
+
+	UPROPERTY()
+	TObjectPtr<UTexture2D> SurfaceBlendMap;
+
+	UPROPERTY()
+	TObjectPtr<UTexture2D> SurfaceLayerParameters;
+
 	UPROPERTY()
 	TArray<TObjectPtr<UDynamicMeshComponent>> ComponentPool;
 
@@ -149,8 +167,8 @@ private:
 	bool ApplyNodeCollision(FQuadNode& Node, const FVector& ViewMeters);
 	void SetNodeCollision(FQuadNode& Node, bool bEnabled);
 
-	/** Maps world metres onto the debug texture's 0-1 range, for the material's own sampling. */
-	void ApplyDebugChannelMapping();
+	/** Maps world metres onto the 0-1 range of the world-wide textures, for the material's own sampling. */
+	void ApplyWorldToUvMapping();
 
 	int32 AcquireComponent();
 	void ReleaseComponent(FQuadNode& Node);

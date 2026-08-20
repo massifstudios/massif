@@ -4,6 +4,8 @@
 #include "Components/DynamicMeshComponent.h"
 #include "DynamicMesh/DynamicMesh3.h"
 #include "Kismet/GameplayStatics.h"
+#include "MassifSurfaceLayers.h"
+#include "MassifSurfaceMap.h"
 #include "MassifTerrainField.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "MassifTerrainTileMesh.h"
@@ -30,18 +32,35 @@ void AMassifTerrainManager::Initialize(TSharedPtr<const FMassifTerrainField> InF
 {
 	TerrainMaterial = UMaterialInstanceDynamic::Create(InTerrainMaterial, this);
 	ResetField(InField);
-	ApplyDebugChannelMapping();
+	ApplyWorldToUvMapping();
 }
 
-void AMassifTerrainManager::ApplyDebugChannelMapping()
+void AMassifTerrainManager::ApplyWorldToUvMapping()
 {
-	// World metres to texture UV. Row 0 of the debug texture is north, as it is
-	// in the elevation model and the bake, so V runs against +Y. Only the scale
-	// travels: the material centres the world itself, since the origin is the
-	// middle of the elevation model by construction.
+	// World metres to texture UV, shared by every world-wide texture the material
+	// samples. Row 0 is north, as it is in the elevation model and the bake, so V
+	// runs against +Y. Only the scale travels: the material centres the world
+	// itself, since the origin is the middle of the elevation model by
+	// construction.
 	const double WorldSizeMeters = Field->GetWorldSizeMeters();
-	TerrainMaterial->SetVectorParameterValue(TEXT("DebugChannelWorldToUv"),
+	TerrainMaterial->SetVectorParameterValue(TEXT("WorldToUv"),
 		FLinearColor(1.0f / WorldSizeMeters, -1.0f / WorldSizeMeters, 0.0f, 0.0f));
+}
+
+void AMassifTerrainManager::ApplySurfaceMap(const FMassifHabitatField& Habitat, uint32 MasterSeed)
+{
+	const double StartSeconds = FPlatformTime::Seconds();
+	MassifSurfaceMap::Render(Habitat, MasterSeed, SurfaceIndexMap, SurfaceBlendMap);
+	MassifSurfaceMap::RenderLayerParameters(SurfaceLayerParameters);
+
+	TerrainMaterial->SetTextureParameterValue(TEXT("SurfaceIndexMap"), SurfaceIndexMap);
+	TerrainMaterial->SetTextureParameterValue(TEXT("SurfaceBlendMap"), SurfaceBlendMap);
+	TerrainMaterial->SetTextureParameterValue(TEXT("SurfaceLayerParameters"), SurfaceLayerParameters);
+	TerrainMaterial->SetScalarParameterValue(TEXT("SurfaceLayerCount"), MassifSurface::LayerCount);
+
+	UE_LOG(LogTemp, Display, TEXT("Surface: %d x %d cells over %d layers, classified in %.2f s"),
+		SurfaceIndexMap->GetSizeX(), SurfaceIndexMap->GetSizeY(), MassifSurface::LayerCount,
+		FPlatformTime::Seconds() - StartSeconds);
 }
 
 void AMassifTerrainManager::SetDebugChannel(UTexture2D* ChannelTexture)

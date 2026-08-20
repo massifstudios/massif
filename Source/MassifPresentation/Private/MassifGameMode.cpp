@@ -185,17 +185,22 @@ void AMassifGameMode::LoadTerrainAndSpawnManagers()
 	SpawnAltitudeMeters = static_cast<float>(TerrainField->GetMaxAltitudeMeters()) + 2200.0f;
 	BuildEnvironmentBake(*Heightmap);
 
+	// One habitat field for everything that reads the world: the terrain's
+	// textures, the plants standing on them and the debug views all have to
+	// answer the same about a given point, and they do so by construction when
+	// they read the same field.
+	const TSharedRef<const FMassifHabitatField> HabitatField = MakeShared<const FMassifHabitatField>(
+		TerrainField.ToSharedRef(), EnvironmentBake.ToSharedRef(), GetMasterSeed());
+
 	TerrainManager = GetWorld()->SpawnActor<AMassifTerrainManager>();
 	TerrainManager->Initialize(TerrainField, LoadTerrainMaterial());
+	TerrainManager->ApplySurfaceMap(HabitatField.Get(), GetMasterSeed());
 
 	FoliageManager = GetWorld()->SpawnActor<AMassifFoliageManager>();
 	FoliageManager->Initialize(TerrainField, EnvironmentBake, GetMasterSeed());
 
 	DebugChannelView = GetWorld()->SpawnActor<AMassifDebugChannelView>();
-	DebugChannelView->Initialize(
-		MakeShared<const FMassifHabitatField>(
-			TerrainField.ToSharedRef(), EnvironmentBake.ToSharedRef(), GetMasterSeed()),
-		TerrainManager);
+	DebugChannelView->Initialize(HabitatField, TerrainManager);
 }
 
 void AMassifGameMode::BuildEnvironmentBake(const FMassifHeightmap& Heightmap)
