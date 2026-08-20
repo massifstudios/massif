@@ -1,9 +1,39 @@
 #include "MassifTerrainField.h"
 
 #include "MassifHeightmap.h"
+#include "MassifRiverField.h"
+
+namespace
+{
+	/** 1 in the water, falling to 0 at the far edge of the bank, flat where it meets both. */
+	double BankWeight(double SignedDistanceMeters, double BankMeters)
+	{
+		if (SignedDistanceMeters <= 0.0)
+		{
+			return 1.0;
+		}
+		if (SignedDistanceMeters >= BankMeters)
+		{
+			return 0.0;
+		}
+
+		const double Fraction = SignedDistanceMeters / BankMeters;
+		return 1.0 - Fraction * Fraction * (3.0 - 2.0 * Fraction);
+	}
+}
 
 FMassifTerrainField::FMassifTerrainField(TSharedRef<const FMassifHeightmap> InHeightmap)
 	: Heightmap(MoveTemp(InHeightmap))
+{
+}
+
+FMassifTerrainField::FMassifTerrainField(
+	TSharedRef<const FMassifHeightmap> InHeightmap,
+	TSharedRef<const FMassifRiverField> InRiverField,
+	const FMassifRiverCarveParams& InCarveParams)
+	: Heightmap(MoveTemp(InHeightmap))
+	, RiverField(MoveTemp(InRiverField))
+	, CarveParams(InCarveParams)
 {
 }
 
@@ -24,7 +54,31 @@ double FMassifTerrainField::GetMaxAltitudeMeters() const
 
 double FMassifTerrainField::SampleHeightMeters(FVector2d PositionMeters, double SampleSpacingMeters) const
 {
-	return Heightmap->SampleHeightMeters(PositionMeters, SampleSpacingMeters);
+	const double MeasuredMeters = Heightmap->SampleHeightMeters(PositionMeters, SampleSpacingMeters);
+	if (!RiverField.IsValid())
+	{
+		return MeasuredMeters;
+	}
+	return CarveChannel(MeasuredMeters, PositionMeters, SampleSpacingMeters);
+}
+
+double FMassifTerrainField::CarveChannel(
+	double MeasuredMeters, FVector2d PositionMeters, double SampleSpacingMeters) const
+{
+	const FMassifRiverSample River = RiverField->Sample(PositionMeters);
+	const double BankMeters = FMath::Clamp(
+		FMath::Max(River.WidthMeters * CarveParams.BankWidthFraction, SampleSpacingMeters),
+		CarveParams.MinBankMeters,
+		CarveParams.MaxBankMeters);
+
+	const double Weight = BankWeight(River.SignedDistanceMeters, BankMeters);
+	if (Weight <= 0.0)
+	{
+		return MeasuredMeters;
+	}
+
+	const double CarvedMeters = FMath::Lerp(MeasuredMeters, River.BedAltitudeMeters, Weight);
+	return FMath::Min(MeasuredMeters, CarvedMeters);
 }
 
 FVector3d FMassifTerrainField::SampleNormal(FVector2d PositionMeters, double SampleSpacingMeters) const

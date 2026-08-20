@@ -15,6 +15,7 @@
 #include "MassifEnvironmentBake.h"
 #include "MassifHabitat.h"
 #include "MassifHeightmap.h"
+#include "MassifRiverField.h"
 #include "MassifTerrainField.h"
 #include "MaterialShared.h"
 #include "Materials/MaterialInterface.h"
@@ -191,14 +192,16 @@ void AMassifGameMode::LoadTerrainAndSpawnManagers()
 		return;
 	}
 
-	TerrainField = MakeShared<const FMassifTerrainField>(Heightmap.ToSharedRef());
-	UE_LOG(LogTemp, Display, TEXT("Terrain: %s, %.0f m across, altitude %.0f-%.0f m, %d mips, loaded in %.2f s"),
-		*Heightmap->GetSourceInfo().Label, TerrainField->GetWorldSizeMeters(),
-		TerrainField->GetMinAltitudeMeters(), TerrainField->GetMaxAltitudeMeters(),
+	UE_LOG(LogTemp, Display, TEXT("Terrain: %s, altitude %.0f-%.0f m, %d mips, loaded in %.2f s"),
+		*Heightmap->GetSourceInfo().Label, Heightmap->GetMinAltitudeMeters(), Heightmap->GetMaxAltitudeMeters(),
 		Heightmap->GetMipCount(), FPlatformTime::Seconds() - StartSeconds);
 
-	SpawnAltitudeMeters = static_cast<float>(TerrainField->GetMaxAltitudeMeters()) + 2200.0f;
+	// The bake reads the elevation model, and the terrain field reads the rivers
+	// the bake traced. That order is what keeps the carve out of the solve that
+	// produced it.
 	BuildEnvironmentBake(*Heightmap);
+	BuildTerrainField(Heightmap.ToSharedRef());
+	SpawnAltitudeMeters = static_cast<float>(TerrainField->GetMaxAltitudeMeters()) + 2200.0f;
 
 	// One habitat field for everything that reads the world: the terrain's
 	// textures, the plants standing on them and the debug views all have to
@@ -219,6 +222,17 @@ void AMassifGameMode::LoadTerrainAndSpawnManagers()
 
 	DebugChannelView = GetWorld()->SpawnActor<AMassifDebugChannelView>();
 	DebugChannelView->Initialize(HabitatField, TerrainManager);
+}
+
+void AMassifGameMode::BuildTerrainField(TSharedRef<const FMassifHeightmap> Heightmap)
+{
+	const FMassifRiverCarveParams CarveParams;
+	const TSharedRef<const FMassifRiverField> RiverField =
+		FMassifRiverField::Build(EnvironmentBake->GetRivers(), CarveParams.MaxBankMeters);
+	TerrainField = MakeShared<const FMassifTerrainField>(MoveTemp(Heightmap), RiverField, CarveParams);
+
+	UE_LOG(LogTemp, Display, TEXT("Terrain field: %.0f m across, %d channel segments cut into it"),
+		TerrainField->GetWorldSizeMeters(), RiverField->GetSegmentCount());
 }
 
 void AMassifGameMode::BuildEnvironmentBake(const FMassifHeightmap& Heightmap)

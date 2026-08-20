@@ -32,8 +32,8 @@ namespace
 
 	TSharedRef<const FMassifRiverField> MakeField(TArray<FMassifRiverReach>&& Reaches)
 	{
-		return FMassifRiverField::Build(
-			FMassifRiverNetwork::Create(MoveTemp(Reaches)), FieldTestBankReachMeters);
+		const TSharedRef<const FMassifRiverNetwork> Network = FMassifRiverNetwork::Create(MoveTemp(Reaches));
+		return FMassifRiverField::Build(Network.Get(), FieldTestBankReachMeters);
 	}
 }
 

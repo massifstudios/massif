@@ -77,7 +77,7 @@ public:
 	 * riparian species may stand on.
 	 */
 	static TSharedRef<const FMassifRiverField> Build(
-		TSharedRef<const FMassifRiverNetwork> InNetwork, double InBankReachMeters);
+		const FMassifRiverNetwork& InNetwork, double InBankReachMeters);
 
 	FMassifRiverField(const FMassifRiverField&) = delete;
 	FMassifRiverField& operator=(const FMassifRiverField&) = delete;

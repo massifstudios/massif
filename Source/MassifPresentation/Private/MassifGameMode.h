@@ -38,6 +38,9 @@ private:
 
 	/** Solves water over the whole world, which is what habitat and foliage read (ARCHITECTURE 5.6). */
 	void BuildEnvironmentBake(const FMassifHeightmap& Heightmap);
+
+	/** The elevation model with the bake's rivers cut into it. Needs the bake to have run. */
+	void BuildTerrainField(TSharedRef<const FMassifHeightmap> Heightmap);
 	void SpawnEnvironmentActors();
 	void SpawnSunAndSky();
 	void SpawnAtmosphericHaze();

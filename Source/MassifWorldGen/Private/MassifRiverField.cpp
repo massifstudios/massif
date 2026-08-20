@@ -28,11 +28,13 @@ namespace
 // ---------------------------------------------------------------------------
 
 TSharedRef<const FMassifRiverField> FMassifRiverField::Build(
-	TSharedRef<const FMassifRiverNetwork> InNetwork, double InBankReachMeters)
+	const FMassifRiverNetwork& InNetwork, double InBankReachMeters)
 {
+	// Every segment is copied out of the network, so the field outlives it and a
+	// caller never has to keep the two alive together.
 	TSharedRef<FMassifRiverField> Field(new FMassifRiverField());
 	Field->BankReachMeters = FMath::Max(InBankReachMeters, 0.0);
-	Field->CollectSegments(InNetwork.Get());
+	Field->CollectSegments(InNetwork);
 	Field->MeasureGrid();
 	Field->IndexSegments();
 	return Field;
