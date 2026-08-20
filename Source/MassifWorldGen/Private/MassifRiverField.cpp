@@ -385,6 +385,16 @@ FMassifRiverSample FMassifRiverField::Sample(FVector2d PositionMeters) const
 	return MakeSample(Nearest, PositionMeters);
 }
 
+double FMassifRiverField::SampleSignedDistanceMeters(FVector2d PositionMeters) const
+{
+	const FNearestSegment Nearest = FindNearestSegment(PositionMeters);
+	if (Nearest.SegmentIndex == INDEX_NONE || Nearest.SignedDistanceMeters > BankReachMeters)
+	{
+		return FMassifRiverSample().SignedDistanceMeters;
+	}
+	return Nearest.SignedDistanceMeters;
+}
+
 bool FMassifRiverField::IntersectsBox(FVector2d MinMeters, FVector2d MaxMeters) const
 {
 	if (Segments.IsEmpty())

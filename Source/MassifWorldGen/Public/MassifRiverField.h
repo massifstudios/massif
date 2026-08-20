@@ -85,6 +85,13 @@ public:
 	FMassifRiverSample Sample(FVector2d PositionMeters) const;
 
 	/**
+	 * Only how far the point is from the nearest wetted edge, without working out
+	 * the rest of the channel there. A mask or a mesh boundary sweeps a lattice
+	 * asking nothing else, and most of what it asks about is dry ground.
+	 */
+	double SampleSignedDistanceMeters(FVector2d PositionMeters) const;
+
+	/**
 	 * Whether any channel could reach into the box. Conservative — it may say yes
 	 * where a query would find nothing — so it is a rejection test, which is what
 	 * keeps a tile with no river in it from being meshed or rasterised at all.
