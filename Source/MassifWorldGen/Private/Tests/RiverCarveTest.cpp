@@ -163,6 +163,51 @@ bool FRiverCarveBankTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRiverCarveCrossSectionTest,
+	"Massif.WorldGen.RiverCarve.CrossSection",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FRiverCarveCrossSectionTest::RunTest(const FString& Parameters)
+{
+	constexpr double WidthMeters = 10.0;
+	constexpr double DepthMeters = 1.2;
+	const FCarveTestWorld World = MakeCarveTestWorld(WidthMeters, DepthMeters);
+
+	// Water has to shallow towards its own edge. Cut as a flat-bottomed trench it
+	// would stand the whole column against a wall at the waterline, and every
+	// river in the world would be drawn with a hard line down each side.
+	int32 SamplesDeeperThanTheOneInside = 0;
+	double PreviousColumnMeters = TNumericLimits<double>::Max();
+	for (int32 Step = 0; Step <= 10; ++Step)
+	{
+		const FVector2d PositionMeters(0.0, Step * 0.5 * WidthMeters / 10.0);
+		const FMassifRiverSample River = World.RiverField->Sample(PositionMeters);
+		const double ColumnMeters =
+			River.WaterSurfaceMeters - World.Carved->SampleHeightMeters(PositionMeters, 0.25);
+		SamplesDeeperThanTheOneInside += ColumnMeters > PreviousColumnMeters + 1.0e-9 ? 1 : 0;
+		PreviousColumnMeters = ColumnMeters;
+	}
+
+	TestEqual(TEXT("The water only gets shallower towards the bank"), SamplesDeeperThanTheOneInside, 0);
+
+	const FVector2d MidstreamMeters(0.0, 0.0);
+	const FVector2d WaterlineMeters(0.0, 0.5 * WidthMeters);
+	const FMassifRiverSample Midstream = World.RiverField->Sample(MidstreamMeters);
+	const double MidstreamColumnMeters =
+		Midstream.WaterSurfaceMeters - World.Carved->SampleHeightMeters(MidstreamMeters, 0.25);
+	const double WaterlineColumnMeters =
+		World.RiverField->Sample(WaterlineMeters).WaterSurfaceMeters
+		- World.Carved->SampleHeightMeters(WaterlineMeters, 0.25);
+
+	TestTrue(TEXT("Midstream carries the whole column"), MidstreamColumnMeters >= DepthMeters - 1.0e-6);
+	// Not zero at the edge: the water mesh ends there, and a surface drawn exactly
+	// on the ground it meets would fight it along that whole line.
+	TestTrue(TEXT("The waterline still has water in it"), WaterlineColumnMeters > 0.01);
+	TestTrue(TEXT("The waterline is a shore rather than a wall"),
+		WaterlineColumnMeters < 0.25 * MidstreamColumnMeters);
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRiverCarveLodTest,
 	"Massif.WorldGen.RiverCarve.Lod",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)

@@ -100,6 +100,8 @@ private:
 	 * cut instead of a different surface — the contract the whole field holds to.
 	 */
 	double CarveChannel(double MeasuredMeters, FVector2d PositionMeters, double SampleSpacingMeters) const;
+	double BankAltitudeMeters(
+		double MeasuredMeters, const struct FMassifRiverSample& River, double SampleSpacingMeters) const;
 
 	TSharedRef<const FMassifHeightmap> Heightmap;
 	TSharedPtr<const FMassifRiverField> RiverField;
