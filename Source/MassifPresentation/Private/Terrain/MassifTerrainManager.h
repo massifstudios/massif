@@ -59,6 +59,8 @@ private:
 		/** Whether this tile is currently the one drawn for its area. */
 		bool bRendered = false;
 		bool bChildrenActive = false;
+		/** Whether this tile's mesh is currently cooked as collision for the player to stand on. */
+		bool bCollisionEnabled = false;
 		int32 ComponentIndex = INDEX_NONE;
 		TUniquePtr<FQuadNode> Children[4];
 	};
@@ -84,6 +86,17 @@ private:
 	static constexpr double MergeDistanceFactor = 2.2;
 	static constexpr int32 MaxInFlightBuilds = 8;
 	static constexpr int32 MaxMeshApplicationsPerFrame = 4;
+
+	/**
+	 * Tiles this close to the view are cooked as collision so the walker has
+	 * ground under it. Only the fine tiles are worth cooking: a coarse one
+	 * covers kilometres, and by the time the player reaches it the quadtree has
+	 * split it into tiles that are.
+	 */
+	static constexpr double CollisionRadiusMeters = 150.0;
+	static constexpr double MaxCollisionTileSizeMeters = 80.0;
+	/** Cooking is not free, so tiles enter and leave collision a couple at a time. */
+	static constexpr int32 MaxCollisionUpdatesPerFrame = 2;
 
 	TSharedPtr<const FMassifTerrainField> Field;
 	TSharedPtr<FFinishedBuildQueue> FinishedBuilds;
@@ -116,6 +129,11 @@ private:
 	void RequestBuild(FQuadNode& Node, double DistanceMeters);
 	void LaunchBuilds();
 	void ApplyFinishedBuilds();
+
+	/** Cooks collision for the tiles around the view and drops it from the ones left behind. */
+	void UpdateTileCollision(const FVector& ViewMeters);
+	bool ApplyNodeCollision(FQuadNode& Node, const FVector& ViewMeters);
+	void SetNodeCollision(FQuadNode& Node, bool bEnabled);
 
 	int32 AcquireComponent();
 	void ReleaseComponent(FQuadNode& Node);

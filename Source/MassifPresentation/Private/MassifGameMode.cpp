@@ -8,14 +8,14 @@
 #include "Engine/ExponentialHeightFog.h"
 #include "Engine/PostProcessVolume.h"
 #include "Engine/SkyLight.h"
-#include "GameFramework/PawnMovementComponent.h"
-#include "GameFramework/FloatingPawnMovement.h"
-#include "GameFramework/SpectatorPawn.h"
 #include "Foliage/MassifFoliageManager.h"
+#include "GameFramework/WorldSettings.h"
 #include "MassifHeightmap.h"
 #include "MassifTerrainField.h"
 #include "Materials/MaterialInterface.h"
 #include "Misc/Paths.h"
+#include "Player/MassifFlyPawn.h"
+#include "Player/MassifPlayerController.h"
 #include "Terrain/MassifTerrainManager.h"
 #include "UObject/SoftObjectPath.h"
 
@@ -29,8 +29,11 @@ namespace
 		TEXT("massif.Dem"), TEXT("oetztal"),
 		TEXT("Elevation model under Data/Terrain, without the .massifdem suffix."));
 
-	/** Gap between posing the spectator and shooting, so the quadtree can stream the new view in. */
+	/** Gap between posing the camera and shooting, so the quadtree can stream the new view in. */
 	constexpr float DebugScreenshotSettleSeconds = 3.0f;
+
+	/** Earth's surface gravity, 9.81 m/s down. */
+	constexpr float EarthGravityCentimetersPerSecondSquared = -981.0f;
 
 	/** Mid-morning sun: low enough that ridges cast shadows down their own flanks. */
 	const FRotator SunRotation(-30.0f, 25.0f, 0.0f);
@@ -101,16 +104,25 @@ namespace
 
 AMassifGameMode::AMassifGameMode()
 {
-	DefaultPawnClass = ASpectatorPawn::StaticClass();
+	DefaultPawnClass = AMassifFlyPawn::StaticClass();
+	PlayerControllerClass = AMassifPlayerController::StaticClass();
 }
 
 void AMassifGameMode::BeginPlay()
 {
 	Super::BeginPlay();
+	ApplyEarthGravity();
 	LoadTerrainAndSpawnManagers();
 	SpawnEnvironmentActors();
-	ConfigureSpectatorPawn();
+	ConfigureFlyPawn();
 	ScheduleDebugScreenshot();
+}
+
+void AMassifGameMode::ApplyEarthGravity()
+{
+	AWorldSettings* WorldSettings = GetWorldSettings();
+	WorldSettings->bGlobalGravitySet = true;
+	WorldSettings->GlobalGravityZ = EarthGravityCentimetersPerSecondSquared;
 }
 
 void AMassifGameMode::LoadTerrainAndSpawnManagers()
@@ -245,7 +257,7 @@ void AMassifGameMode::SpawnPostProcess()
 	Settings.AutoExposureMaxBrightness = ExposureMaxBrightness;
 }
 
-void AMassifGameMode::ConfigureSpectatorPawn()
+void AMassifGameMode::ConfigureFlyPawn()
 {
 	APlayerController* PlayerController = GetWorld()->GetFirstPlayerController();
 	if (PlayerController == nullptr || PlayerController->GetPawn() == nullptr)
@@ -253,16 +265,6 @@ void AMassifGameMode::ConfigureSpectatorPawn()
 		return;
 	}
 
-	APawn* Pawn = PlayerController->GetPawn();
-	Pawn->SetActorLocation(FVector(0.0, -300000.0, SpawnAltitudeMeters * 100.0));
+	PlayerController->GetPawn()->SetActorLocation(FVector(0.0, -300000.0, SpawnAltitudeMeters * 100.0));
 	PlayerController->SetControlRotation(FRotator(-22.0f, 90.0f, 0.0f));
-
-	UFloatingPawnMovement* Movement = Cast<UFloatingPawnMovement>(Pawn->GetMovementComponent());
-	if (Movement != nullptr)
-	{
-		// 600 m/s crosses the 20 km world in about half a minute.
-		Movement->MaxSpeed = 60000.0f;
-		Movement->Acceleration = 120000.0f;
-		Movement->Deceleration = 240000.0f;
-	}
 }

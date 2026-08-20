@@ -90,9 +90,61 @@ void AMassifTerrainManager::Tick(float DeltaSeconds)
 
 	ApplyFinishedBuilds();
 
+	const FVector ViewMeters = GetViewLocationMeters();
 	BuildRequests.Reset();
-	UpdateNode(*RootNode, GetViewLocationMeters());
+	UpdateNode(*RootNode, ViewMeters);
 	LaunchBuilds();
+	UpdateTileCollision(ViewMeters);
+}
+
+void AMassifTerrainManager::UpdateTileCollision(const FVector& ViewMeters)
+{
+	int32 UpdatesLeft = MaxCollisionUpdatesPerFrame;
+	for (TPair<uint64, FQuadNode*>& Entry : LiveNodes)
+	{
+		if (UpdatesLeft <= 0)
+		{
+			return;
+		}
+		if (ApplyNodeCollision(*Entry.Value, ViewMeters))
+		{
+			--UpdatesLeft;
+		}
+	}
+}
+
+bool AMassifTerrainManager::ApplyNodeCollision(FQuadNode& Node, const FVector& ViewMeters)
+{
+	const bool bStandable = Node.bRendered
+		&& Node.bMeshReady
+		&& Node.ComponentIndex != INDEX_NONE
+		&& Node.SizeMeters <= MaxCollisionTileSizeMeters
+		&& DistanceToNodeMeters(Node, ViewMeters) <= CollisionRadiusMeters;
+	if (bStandable == Node.bCollisionEnabled)
+	{
+		return false;
+	}
+
+	SetNodeCollision(Node, bStandable);
+	return true;
+}
+
+void AMassifTerrainManager::SetNodeCollision(FQuadNode& Node, bool bEnabled)
+{
+	Node.bCollisionEnabled = bEnabled;
+	if (Node.ComponentIndex == INDEX_NONE)
+	{
+		return;
+	}
+
+	UDynamicMeshComponent* Component = ComponentPool[Node.ComponentIndex];
+	Component->SetComplexAsSimpleCollisionEnabled(bEnabled, true);
+	if (bEnabled)
+	{
+		Component->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+		return;
+	}
+	Component->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 }
 
 FVector AMassifTerrainManager::GetViewLocationMeters() const
@@ -326,6 +378,7 @@ void AMassifTerrainManager::ReleaseComponent(FQuadNode& Node)
 	{
 		return;
 	}
+	SetNodeCollision(Node, false);
 	ComponentPool[Node.ComponentIndex]->SetVisibility(false);
 	FreeComponentIndices.Add(Node.ComponentIndex);
 	Node.ComponentIndex = INDEX_NONE;

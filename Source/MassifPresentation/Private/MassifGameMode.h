@@ -23,13 +23,20 @@ public:
 
 	virtual void BeginPlay() override;
 
+	/** The loaded terrain, for the walker to stand on. Null until the elevation model is read. */
+	TSharedPtr<const FMassifTerrainField> GetTerrainField() const
+	{
+		return TerrainField;
+	}
+
 private:
 	void LoadTerrainAndSpawnManagers();
 	void SpawnEnvironmentActors();
 	void SpawnSunAndSky();
 	void SpawnAtmosphericHaze();
 	void SpawnPostProcess();
-	void ConfigureSpectatorPawn();
+	void ApplyEarthGravity();
+	void ConfigureFlyPawn();
 	void ScheduleDebugScreenshot();
 
 	/** Poses the spectator, then shoots a few seconds later once tiles have streamed in. */
