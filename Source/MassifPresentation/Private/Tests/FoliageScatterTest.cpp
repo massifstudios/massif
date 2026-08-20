@@ -11,7 +11,7 @@ namespace
 
 	/** Tiles spread over the massif, enough that some of them land on ground a species takes. */
 	constexpr int32 ScannedTilesPerSide = 8;
-	constexpr double GroundSampleSpacingMeters = 1.0;
+	constexpr double ScatterTestSpacingMeters = 1.0;
 
 	/**
 	 * Tile coordinates spanning the whole test world rather than a corner of it.
@@ -69,7 +69,7 @@ namespace
 			const FVector2d PositionMeters(
 				(Index % CoverageSamplesPerSide + 0.5) * StepMeters - 0.5 * WorldSizeMeters,
 				(Index / CoverageSamplesPerSide + 0.5) * StepMeters - 0.5 * WorldSizeMeters);
-			Samples.Add(Habitat.Sample(PositionMeters, GroundSampleSpacingMeters));
+			Samples.Add(Habitat.Sample(PositionMeters, ScatterTestSpacingMeters));
 		}
 		return Samples;
 	}
@@ -130,7 +130,7 @@ bool FFoliageScatterTest::RunTest(const FString& Parameters)
 				return false;
 			}
 
-			const FMassifHabitatSample Ground = Habitat->Sample(PositionMeters, GroundSampleSpacingMeters);
+			const FMassifHabitatSample Ground = Habitat->Sample(PositionMeters, ScatterTestSpacingMeters);
 			if (MassifFoliageScatter::HabitatWeight(Species, Ground) <= 0.0)
 			{
 				AddError(FString::Printf(

@@ -16,7 +16,7 @@ namespace
 	/** Clearance above the field when the walker is dropped in, so it lands rather than starts embedded. */
 	constexpr double WalkerDropClearanceMeters = 1.0;
 
-	constexpr double GroundSampleSpacingMeters = 1.0;
+	constexpr double SpawnProbeSpacingMeters = 1.0;
 }
 
 AMassifPlayerController::AMassifPlayerController()
@@ -164,7 +164,7 @@ AMassifWalkerPawn* AMassifPlayerController::AcquireWalkerPawn()
 		return WalkerPawn;
 	}
 
-	const double GroundMeters = TerrainField->SampleHeightMeters(PositionMeters, GroundSampleSpacingMeters);
+	const double GroundMeters = TerrainField->SampleHeightMeters(PositionMeters, SpawnProbeSpacingMeters);
 	const double StandMeters = GroundMeters + WalkerPawn->GetEyeHeightMeters() + WalkerDropClearanceMeters;
 	WalkerPawn->SetActorLocation(
 		FVector(CameraCentimeters.X, CameraCentimeters.Y, StandMeters * MetersToCentimeters));

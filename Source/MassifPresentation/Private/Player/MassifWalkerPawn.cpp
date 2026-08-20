@@ -14,7 +14,7 @@ using MassifUnits::MetersToCentimeters;
 namespace
 {
 	/** Sampling spacing for the catch: the ground the pawn stands on, not the ridge behind it. */
-	constexpr double GroundSampleSpacingMeters = 1.0;
+	constexpr double CatchSampleSpacingMeters = 1.0;
 }
 
 AMassifWalkerPawn::AMassifWalkerPawn()
@@ -119,7 +119,7 @@ void AMassifWalkerPawn::CatchFallThroughGround()
 	const FVector LocationCentimeters = GetActorLocation();
 	const FVector2d PositionMeters(
 		LocationCentimeters.X / MetersToCentimeters, LocationCentimeters.Y / MetersToCentimeters);
-	const double GroundMeters = TerrainField->SampleHeightMeters(PositionMeters, GroundSampleSpacingMeters);
+	const double GroundMeters = TerrainField->SampleHeightMeters(PositionMeters, CatchSampleSpacingMeters);
 	const double FeetMeters = LocationCentimeters.Z / MetersToCentimeters - GetEyeHeightMeters();
 	if (FeetMeters > GroundMeters - MaxSinkMeters)
 	{
