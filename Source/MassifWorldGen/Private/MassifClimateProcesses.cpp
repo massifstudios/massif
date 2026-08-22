@@ -10,6 +10,12 @@ namespace MassifEnvironmentChannels
 		static const FName Name(TEXT("Climate.MeanTemperature"));
 		return Name;
 	}
+
+	const FName& SeasonalTemperature()
+	{
+		static const FName Name(TEXT("Climate.SeasonalTemperature"));
+		return Name;
+	}
 }
 
 namespace MassifEnvironmentProcesses
@@ -19,10 +25,19 @@ namespace MassifEnvironmentProcesses
 		static const FName Name(TEXT("Climate.Temperature"));
 		return Name;
 	}
+
+	const FName& SeasonalClimate()
+	{
+		static const FName Name(TEXT("Climate.Seasonal"));
+		return Name;
+	}
 }
 
 namespace
 {
+	/** Half-monthly slices of a representative year (ARCHITECTURE §5.6.4). */
+	constexpr int32 SeasonalSliceCount = 24;
+
 	/** The surfaces the temperature is read off, sampled at whatever grid is being solved. */
 	class FClimateInputs
 	{
@@ -82,6 +97,31 @@ namespace
 		const double DepthScaleMeters = FMath::Max(Params.PoolingDepthScaleMeters, UE_DOUBLE_KINDA_SMALL_NUMBER);
 		const double Depth = FMath::Max(BasinDepthMeters, 0.0);
 		return -Params.PoolingDepressionCelsius * (1.0 - FMath::Exp(-Depth / DepthScaleMeters));
+	}
+
+	/**
+	 * How far one half-month stands from the annual mean.
+	 *
+	 * One cosine over the year, the same everywhere: what makes one slope colder
+	 * than another is already in the mean this is added to, and the swing itself is
+	 * a property of where on Earth the world sits rather than of its terrain.
+	 */
+	double SeasonalAnomalyCelsius(const FMassifClimateParams& Params, int32 TimeSlice)
+	{
+		const double PhaseRadians =
+			UE_DOUBLE_TWO_PI * (TimeSlice - Params.WarmestSlice) / SeasonalSliceCount;
+		return 0.5 * Params.AnnualTemperatureRangeCelsius * FMath::Cos(PhaseRadians);
+	}
+
+	/** Off is a year without seasons: the mean in every slice, so the channel still exists. */
+	double SeasonalAnomalyForFidelity(
+		const FMassifClimateParams& Params, int32 TimeSlice, EMassifFidelity Fidelity)
+	{
+		if (Fidelity == EMassifFidelity::Off)
+		{
+			return 0.0;
+		}
+		return SeasonalAnomalyCelsius(Params, TimeSlice);
 	}
 
 	void WriteConstant(FMassifChannelWriteScope& Scope, double Value)
@@ -205,8 +245,95 @@ void FTemperatureProcess::Execute(FMassifEnvironmentContext& Context, EMassifFid
 	Scope->Commit();
 }
 
+/**
+ * The mean temperature carried round a representative year.
+ *
+ * Per-slice, not sequential: a slice is a closed form of its own index over the
+ * mean, so nothing here carries state forward the way the snowpack that reads it
+ * does (ARCHITECTURE §5.6.4). The swing is uniform because everything that makes
+ * one slope colder than another is already in the mean it is added to.
+ */
+class FSeasonalTemperatureProcess final : public IMassifEnvironmentProcess
+{
+public:
+	explicit FSeasonalTemperatureProcess(const FMassifClimateParams& InParams)
+		: Params(InParams)
+	{
+	}
+
+	FMassifProcessDeclaration Declare() const override;
+	void Execute(FMassifEnvironmentContext& Context, EMassifFidelity Fidelity) const override;
+
+private:
+	void WriteSlice(FMassifEnvironmentContext& Context, int32 TimeSlice, double AnomalyCelsius) const;
+
+	static void SolveRow(
+		const FMassifEnvironmentState& State, FMassifChannelHandle MeanTemperature,
+		const FMassifChannelGrid& Grid, int32 Row, double AnomalyCelsius, TArrayView<double> OutCelsius);
+
+	FMassifClimateParams Params;
+};
+
+FMassifProcessDeclaration FSeasonalTemperatureProcess::Declare() const
+{
+	FMassifProcessDeclaration Declaration;
+	Declaration.Name = MassifEnvironmentProcesses::SeasonalClimate();
+	Declaration.InputChannels = {MassifEnvironmentChannels::MeanTemperature()};
+	Declaration.SupportedFidelities = {
+		EMassifFidelity::Cheap, EMassifFidelity::Standard, EMassifFidelity::Reference};
+
+	FMassifChannelDescriptor Descriptor;
+	Descriptor.Name = MassifEnvironmentChannels::SeasonalTemperature();
+	Descriptor.Type = EMassifChannelType::Scalar;
+	Descriptor.Encoding = EMassifChannelEncoding::Uint16;
+	Descriptor.CellSizeMeters = Params.CellSizeMeters;
+	Descriptor.TimeSliceCount = SeasonalSliceCount;
+	Descriptor.Unit = TEXT("C");
+	Descriptor.Description = TEXT("Half-monthly air temperature at the ground");
+	Descriptor.ColorMap = EMassifChannelColorMap::Magma;
+	Declaration.OutputChannels.Add(Descriptor);
+	return Declaration;
+}
+
+void FSeasonalTemperatureProcess::SolveRow(
+	const FMassifEnvironmentState& State, FMassifChannelHandle MeanTemperature, const FMassifChannelGrid& Grid,
+	int32 Row, double AnomalyCelsius, TArrayView<double> OutCelsius)
+{
+	for (int32 Column = 0; Column < Grid.Width; ++Column)
+	{
+		const double MeanCelsius = State.SampleScalar(MeanTemperature, Grid.CellCentreMeters(Column, Row));
+		OutCelsius[Row * Grid.Width + Column] = MeanCelsius + AnomalyCelsius;
+	}
+}
+
+void FSeasonalTemperatureProcess::WriteSlice(
+	FMassifEnvironmentContext& Context, int32 TimeSlice, double AnomalyCelsius) const
+{
+	const FMassifChannelHandle MeanTemperature = Context.GetInput(MassifEnvironmentChannels::MeanTemperature());
+	const TUniquePtr<FMassifChannelWriteScope> Scope =
+		Context.OpenOutput(MassifEnvironmentChannels::SeasonalTemperature(), TimeSlice);
+
+	const FMassifChannelGrid& Grid = Scope->GetGrid();
+	TArrayView<double> Celsius = Scope->GetComponent(0);
+	for (int32 Row = 0; Row < Grid.Height; ++Row)
+	{
+		SolveRow(Context.GetState(), MeanTemperature, Grid, Row, AnomalyCelsius, Celsius);
+	}
+
+	Scope->Commit();
+}
+
+void FSeasonalTemperatureProcess::Execute(FMassifEnvironmentContext& Context, EMassifFidelity Fidelity) const
+{
+	for (int32 TimeSlice = 0; TimeSlice < SeasonalSliceCount; ++TimeSlice)
+	{
+		WriteSlice(Context, TimeSlice, SeasonalAnomalyForFidelity(Params, TimeSlice, Fidelity));
+	}
+}
+
 void MassifRegisterClimateProcesses(
 	FMassifEnvironmentScheduler& Scheduler, const FMassifClimateParams& Params)
 {
 	Scheduler.RegisterProcess(MakeShared<FTemperatureProcess>(Params));
+	Scheduler.RegisterProcess(MakeShared<FSeasonalTemperatureProcess>(Params));
 }

@@ -30,6 +30,12 @@ struct FMassifClimateParams
 	 * Degrees between ground that takes a full day of sun and ground that takes
 	 * none at all, at the same altitude. This is why a north cirque holds snow
 	 * into July while the flank opposite it is bare.
+	 *
+	 * Held down deliberately. The insolation it multiplies is a ratio against level
+	 * open ground, and almost all real ground is tilted and takes less than that,
+	 * so the anomaly has a negative mean rather than averaging out. A large gain
+	 * therefore does not sharpen the contrast between two flanks - it cools the
+	 * whole world and drags the treeline down with it.
 	 */
 	double InsolationGainCelsius = 4.0;
 
@@ -46,4 +52,19 @@ struct FMassifClimateParams
 	 * than the cold layer is as cold as it is going to get.
 	 */
 	double PoolingDepthScaleMeters = 30.0;
+
+	/**
+	 * Degrees between the coldest half-month of the year and the warmest. Eighteen
+	 * is what an inland temperate massif runs at, and it is what decides how much
+	 * of the year sits below freezing — which no annual mean can say.
+	 */
+	double AnnualTemperatureRangeCelsius = 18.0;
+
+	/**
+	 * Half-month the swing peaks in, counting from the first half of January.
+	 * Slice 14 is high summer, a month or so past the solstice: ground and air
+	 * keep taking in heat after the days start shortening, so the warmest
+	 * fortnight lags the brightest one.
+	 */
+	int32 WarmestSlice = 14;
 };
