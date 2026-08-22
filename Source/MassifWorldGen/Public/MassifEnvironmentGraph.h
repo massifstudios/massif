@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "MassifElevationSource.h"
-#include "MassifEnvironmentBake.h"
+#include "MassifEnvironmentParams.h"
 #include "MassifEnvironmentScheduler.h"
 
 class FMassifRiverNetwork;
@@ -38,8 +38,20 @@ namespace MassifEnvironmentProcesses
 	MASSIFWORLDGEN_API const FName& Wetness();
 }
 
-/** Adds the water and soil processes to a scheduler. The scheduler orders them; this does not. */
+/** Adds every standard process to a scheduler. The scheduler orders them; this does not. */
 MASSIFWORLDGEN_API void MassifRegisterEnvironmentProcesses(
+	FMassifEnvironmentScheduler& Scheduler, const FMassifEnvironmentParams& Params);
+
+/** The same with every system but the water left at its defaults. */
+MASSIFWORLDGEN_API void MassifRegisterEnvironmentProcesses(
+	FMassifEnvironmentScheduler& Scheduler, const FMassifEnvironmentBakeParams& WaterParams);
+
+/**
+ * Adds only the process that samples the elevation source onto the graph's grid.
+ * Everything else reads that channel, so a graph exercising one system on its own
+ * still needs it.
+ */
+MASSIFWORLDGEN_API void MassifRegisterAltitudeProcess(
 	FMassifEnvironmentScheduler& Scheduler, const FMassifEnvironmentBakeParams& Params);
 
 /** Registers the standard processes, schedules them and runs them. Null if the schedule was refused. */

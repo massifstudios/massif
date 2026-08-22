@@ -2,7 +2,9 @@
 
 #include "MassifEnvironmentBakeGrid.h"
 #include "MassifClimateProcesses.h"
+#include "MassifPrecipitationProcesses.h"
 #include "MassifSunProcesses.h"
+#include "MassifWindProcesses.h"
 #include "MassifRiverNetwork.h"
 
 namespace MassifEnvironmentChannels
@@ -448,16 +450,26 @@ void MassifRegisterAltitudeProcess(
 }
 
 void MassifRegisterEnvironmentProcesses(
-	FMassifEnvironmentScheduler& Scheduler, const FMassifEnvironmentBakeParams& Params)
+	FMassifEnvironmentScheduler& Scheduler, const FMassifEnvironmentParams& Params)
 {
-	MassifRegisterAltitudeProcess(Scheduler, Params);
-	Scheduler.RegisterProcess(MakeShared<FDepressionFillProcess>(Params));
-	Scheduler.RegisterProcess(MakeShared<FStandingWaterProcess>(Params));
-	Scheduler.RegisterProcess(MakeShared<FFlowRoutingProcess>(Params));
-	Scheduler.RegisterProcess(MakeShared<FSoilDepthProcess>(Params));
-	Scheduler.RegisterProcess(MakeShared<FWetnessProcess>(Params));
-	MassifRegisterSunProcesses(Scheduler, FMassifSunParams());
-	MassifRegisterClimateProcesses(Scheduler, FMassifClimateParams());
+	MassifRegisterAltitudeProcess(Scheduler, Params.Water);
+	Scheduler.RegisterProcess(MakeShared<FDepressionFillProcess>(Params.Water));
+	Scheduler.RegisterProcess(MakeShared<FStandingWaterProcess>(Params.Water));
+	Scheduler.RegisterProcess(MakeShared<FFlowRoutingProcess>(Params.Water));
+	Scheduler.RegisterProcess(MakeShared<FSoilDepthProcess>(Params.Water));
+	Scheduler.RegisterProcess(MakeShared<FWetnessProcess>(Params.Water));
+	MassifRegisterSunProcesses(Scheduler, Params.Sun);
+	MassifRegisterClimateProcesses(Scheduler, Params.Climate);
+	MassifRegisterWindProcesses(Scheduler, Params.Wind);
+	MassifRegisterPrecipitationProcesses(Scheduler, Params.Precipitation);
+}
+
+void MassifRegisterEnvironmentProcesses(
+	FMassifEnvironmentScheduler& Scheduler, const FMassifEnvironmentBakeParams& WaterParams)
+{
+	FMassifEnvironmentParams Params;
+	Params.Water = WaterParams;
+	MassifRegisterEnvironmentProcesses(Scheduler, Params);
 }
 
 TUniquePtr<FMassifEnvironmentScheduler> MassifBuildEnvironment(
