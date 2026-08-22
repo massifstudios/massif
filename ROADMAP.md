@@ -180,7 +180,7 @@ See ARCHITECTURE §5.
   heightmap, so a bare checkout stays green. Manual — 20 km of the Ötztal at
   Sölden, 1168–3757 m, loads in 0.3 s and renders. **Done.**
 
-### M5g — Environment Bake: Water (next)
+### M5g — Environment Bake: Water — done
 Habitat currently guesses water from local slope and a noise field, so valley
 floors are no wetter than the shoulders above them and ground type is a slope
 threshold. Replace the guesses with a world-wide solve at world gen — where
@@ -208,20 +208,189 @@ ARCHITECTURE §5.6.
   valleys, standing water only in hollows, forest following wetness and soil
   rather than a contour.
 
-### M5h — Environment Bake: Sunlight
-Insolation over the same grid: how much sun each cell takes across a day, and
-how much sky it can see at all. Ridges shade their own north flanks and the
-valley floors below them, which is what puts a treeline where one belongs.
+### M5h — Environment Bake: Sunlight — folded into E6
+Superseded as a standalone milestone. Insolation is one process in the
+environment framework below, and lands as E6 with the rest of it.
 
-- Horizon sweep per azimuth over the heightmap → `SkyViewFactor`; the sun's
-  path across a representative growing-season day, ray-marched against the
-  horizon angles → `DirectInsolation`.
-- Habitat temperature reads insolation instead of the normal's southness.
-- Debug channels extended with both.
+## Environment Simulation (E-series)
+
+The whole environment is simulated and verified before any work on visual
+fidelity or game content. M5g proved the approach on four channels wired
+together by hand; that arrangement does not survive thirty channels, runtime
+fidelity switching, or the feedback loops between vegetation, soil, wind and
+snow. E0–E3 replace the hand-wiring with a channel graph and change no
+behaviour; E4–E5 build the switching and the verification tools; E6 onward add
+one system per milestone, each a single registration against the framework.
+
+Two hard requirements run through all of it:
+
+1. **Map independence.** Nothing in the environment layer may know what terrain
+   it is running over. Terrain enters through `IMassifElevationSource` and a
+   georeference, and through nothing else, so another elevation model can be
+   slotted in at any point. The two exemptions are the two quantities that are
+   genuinely properties of a place on Earth rather than of a shape: air
+   temperature reduced to the datum, and the sun's position and strength.
+2. **Every channel is visualisable the moment it exists.** A simulated quantity
+   whose only evidence is a second-order effect on where trees ended up cannot
+   be verified, and will be wrong for months without anyone noticing.
+
+### E0 — Elevation Source Interface
+Break the environment layer's dependency on `FMassifHeightmap`.
+
+- `IMassifElevationSource`: altitude by position and sample spacing, world
+  extent. Pure, thread-safe, the only terrain the environment layer sees.
+- `FMassifHeightmapElevationSource` adapter; `FMassifGeoreference` (latitude,
+  longitude, EPSG, datum mean temperature) carried beside it.
+- `FMassifAnalyticElevationSource`: cone, ridge, tilted plane, single pit,
+  saddle. Terrain for tests that needs no DEM on disk and solves in
+  milliseconds.
+- `FMassifEnvironmentBake::Build` takes the interface instead of the heightmap.
+- **Verify:** tests — analytic sources return their closed-form altitudes, the
+  heightmap adapter agrees with `FMassifHeightmap::Height` sample for sample,
+  a bake over an analytic cone drains radially outward. Grep-level check that
+  no environment source includes `MassifHeightmap.h`.
+
+### E1 — Channel Registry & State
+Channels become registered and self-describing rather than an enum.
+
+- `FMassifChannelDescriptor`: name, type (scalar/vector2/classified), encoding,
+  own cell size, time-slice count, unit, description, colour map, display range.
+- `FMassifEnvironmentState`: storage keyed by name, resolved to
+  `FMassifChannelHandle` once so inner loops index rather than hash. Bilinear
+  for scalars and vectors, nearest for classified. Per-channel resolution, so a
+  64 m climate channel costs a sixty-fourth of an 8 m hydrology channel.
+- Determinism hash over channels in name order.
+- **Verify:** tests — round-trip through each encoding within its quantisation
+  step, sampling agrees with `ReadCell` at cell centres, channels at different
+  resolutions sample consistently at the same world position, classified
+  channels never interpolate, hash stable across registration order.
+
+### E2 — Process Graph & Scheduler
+- `IMassifEnvironmentProcess`: declares inputs, outputs, supported fidelities;
+  `Execute(Context, Fidelity)` may touch nothing but the context. Optional GPU
+  path, CPU otherwise and always headless.
+- Scheduler: topological sort from the declared dependencies, Tarjan SCC to
+  find feedback groups, fixed iteration count per group — never a convergence
+  test (ARCHITECTURE §4).
+- Dirty propagation: a changed parameter or fidelity re-runs that process and
+  its transitive dependents, nothing else.
+- Seeded streams derived per process name, so adding a process cannot shift
+  another's random sequence.
+- **Verify:** tests — declared order independent of registration order, a
+  cycle lands in a relaxation group instead of failing, a process reading an
+  undeclared channel is rejected, dirty marking re-runs exactly the dependent
+  set, two schedules of the same graph produce identical hashes.
+
+### E3 — Port the Existing Bake
+The six M5g stages become six registered processes, bodies unchanged.
+
+- Depression fill, standing water, flow routing, droplets, wetness, river
+  extraction registered against the framework; `FMassifBakeSurfaces` and
+  `EMassifBakeChannel` deleted; `FMassifEnvironmentBakeParams` split so each
+  process owns its own parameters.
+- **Verify:** tests — the bake's content hash is bit-identical to the
+  pre-port hash on the same seed and elevation model. This is the whole point
+  of the milestone; a port that changes a value is a failed port.
+
+### E4 — Fidelity Levels & Graph Inspector
+- `EMassifFidelity` (Off / Cheap / Standard / Reference) per process. `Off`
+  still writes its channels, with a constant or trivial analytic value, so no
+  downstream code ever branches on whether a system is enabled.
+- Runtime UI: process list with a fidelity dropdown each, global presets, and
+  the dependency graph drawn with per-node fidelity, dirty state and last
+  execution time.
+- Re-solve on change, off the game thread, previous result held until the new
+  one lands.
+- **Verify:** tests — every process produces its declared channels at every
+  fidelity it claims including `Off`, switching fidelity and switching back
+  reproduces the original hash, `Off` output is independent of the seed.
+
+### E5 — Verification Tools
+Built before the systems that need verifying.
+
+- **Probe:** click a point, panel lists every channel's value there with units
+  and the process that wrote it.
+- **Vector overlay:** wind and flow direction as arrows or line-integral
+  convolution. A scalar heatmap cannot show a direction field being wrong.
+- **Transect:** drag a line, graph any set of channels along it.
+- **Difference view:** one channel at two fidelities, signed colour map.
+- **Histogram and range readout** per channel.
+- Debug channel selection moves from number keys to a list; the hand-written
+  switches in `MassifDebugChannels.cpp` are replaced by a registry walk, so a
+  new channel needs no presentation change at all.
+- **Verify:** tests — the registry walk covers every registered channel, probe
+  values match a direct `Sample` call. Manual — you read the overlays.
+
+### E6 — Sun
+- `Sun.Position` from georeference, day of year and hour. `Sun.Horizon`:
+  horizon angle per azimuth over the elevation source. `Sun.SkyViewFactor`,
+  `Sun.DirectInsolation`, `Sun.DiffuseInsolation`.
+- Fidelity: `cos` incidence → + horizon shadowing → + sky view and diffuse
+  split over a sampled sun path.
 - **Verify:** tests — a flat world takes full insolation and unit sky view, a
-  cell inside a pit takes neither, horizon angles monotone with obstruction
-  height, determinism hash. Manual — the shading in the debug view matches
-  where the sun actually falls in the rendered scene.
+  pit takes neither, horizon angles monotone with obstruction height, north and
+  south flanks of an analytic ridge differ in the expected direction and by a
+  plausible amount.
+
+### E7 — Temperature
+- `Climate.MeanTemperature` and per-slice `Climate.Temperature`: datum
+  temperature, lapse rate, insolation anomaly, and cold-air pooling read from
+  the basin depth the depression fill already computes.
+- Habitat stops computing temperature and reads the channel.
+- **Verify:** tests — lapse rate recovered from a tilted plane, sunny and shaded
+  flanks of a ridge separate, a closed basin is colder than its rim under
+  inversion and equal to it without, habitat contract tests updated.
+
+### E8 — Wind
+- `Wind.Synoptic` (seeded bearing and strength) → `Wind.Exposure` (Sx
+  topographic exposure index) → `Wind.Field` (vector2: channeling along valley
+  axes, speedup over crests, lee separation and recirculation) →
+  `Wind.Roughness` fed back from canopy at E11.
+- Fidelity: uniform → exposure index → + channeling and lee → + roughness and
+  diurnal slope winds.
+- **Verify:** tests — a crest is windier than the flat it rises from, a lee
+  pocket slower and reversed, a valley aligned with the synoptic bearing
+  accelerates and one across it does not, exposure invariant under rotating
+  both terrain and wind together.
+
+### E9 — Precipitation
+- `Precip.Annual`, per-slice `Precip.Rate`, `Precip.SnowFraction`: base rate,
+  orographic gain windward and loss leeward, altitude gradient, phase split by
+  temperature, moisture depleted along the advection path.
+- Habitat humidity reads the water balance rather than the windwardness term.
+- **Verify:** tests — windward and lee flanks of an analytic ridge separate in
+  the expected direction, total precipitation conserved against the inflow
+  moisture budget, snow fraction goes to 0 and 1 either side of the freezing
+  level.
+
+### E10 — Time Slices & Snowpack
+- Time-sliced channels (24 half-monthly) and the process kinds that come with
+  them: static, per-slice, sequential, reducing.
+- `Snow.Depth` as the first sequential process: accumulation from
+  `Precip.SnowFraction`, redistribution by `Wind.Field` and `Wind.Exposure`,
+  melt from `Sun.DirectInsolation` and `Climate.Temperature`, sublimation.
+  Reduced to `Snow.CoverDuration` and `Snow.PeakDepth`.
+- Time scrubber in the debug UI.
+- **Verify:** tests — mass conserved over a year on a closed domain minus melt
+  and sublimation, snow survives longer on shaded and lee ground, a warm world
+  ends the year bare, sequential processes reproduce under re-solve.
+
+### E11 — Vegetation & Feedback Loops
+- `Vegetation.Cover`, `Vegetation.Height`, `Vegetation.Canopy` as processes
+  reading temperature, water balance, soil, insolation and wind exposure.
+- Close the loops: vegetation → soil stability → soil depth; canopy →
+  roughness → wind → snow redistribution → vegetation. First real relaxation
+  groups.
+- **Verify:** tests — the SCC groups are exactly the expected ones, a fixed
+  iteration count gives an identical hash every run, forested cells retain more
+  soil and more snow than the same cells with vegetation forced `Off`.
+
+### E12 — Habitat as a Read
+- `FMassifHabitatField` stops computing climate and becomes a lookup over
+  channels plus ground-type classification. Masks (§5.5) derive from the same
+  channels, so mask and habitat cannot disagree.
+- **Verify:** tests — habitat contract suite green against channels, habitat
+  and mask classification agree cell for cell on the same input.
 
 ### M5f — Geological Refinement
 Erosion over the imported surface: smooth scanner artefacts, cut detail below

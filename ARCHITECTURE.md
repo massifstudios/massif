@@ -294,47 +294,187 @@ approximation — trees stop at a contour line rather than at a treeline, and
 valley floors are no wetter than the shoulders above them.
 
 The **environment bake** replaces the approximations with simulation over the
-whole world, run once at world gen against the imported grid. Channels:
+whole world, run once at world gen against the imported grid.
+
+It is not a function with stages in it. It is a **graph of processes over
+registered channels**, because the environment is not a pipeline: vegetation
+holds the soil that vegetation needs, canopy slows the wind that redistributes
+the snow that decides where canopy grows. A fixed sequence of stage calls
+cannot express that, and cannot be extended without editing the sequence, the
+channel enum and every debug view each time a system is added.
+
+Resolution is per channel. Hydrology is solved at 8 m — 2500² cells over the
+20 km world, about 12 MB per channel as quantised uint16 — because a stream
+channel is not resolved any coarser. Climate and wind are smooth at 64 m, a
+sixty-fourth of the cost, and sampling interpolates between the two. Habitat is
+read at species scale, and the DEM's own detail stays available through the
+terrain field for anything that needs finer.
+
+The bake is not saved. It is a pure function of the elevation source, the
+georeference and the master seed, so it is rebuilt at load like the mip chain
+(§9).
+
+#### 5.6.1 Map independence
+
+Nothing in the environment layer knows what terrain it runs over. Terrain
+enters through one interface:
+
+```
+IMassifElevationSource:
+    SampleAltitudeMeters(FVector2d PositionMeters, double SampleSpacingMeters) → double
+    GetWorldSizeMeters() → FVector2d
+```
+
+`FMassifHeightmap` gets an adapter; so do analytic sources — cone, ridge,
+tilted plane, pit, saddle — which are what the automation suite runs against,
+since they need no DEM on disk and solve in milliseconds. A process that
+secretly reached for the heightmap fails those tests.
+
+The one thing that is not derivable from a shape is where on Earth the shape
+sits. `FMassifGeoreference` carries latitude, longitude, EPSG code and the mean
+air temperature reduced to the datum, and it feeds exactly two things: the
+sun's position and strength, and the zero point of the temperature field.
+Those two are the deliberate exemptions from map independence. Everything else
+is derived from the elevation source, and a different elevation model can be
+slotted in without touching a process.
+
+#### 5.6.2 Channels
+
+Channels are registered, not enumerated. Each carries what both the solve and
+the debug views need to handle it without a hand-written case:
+
+```
+FMassifChannelDescriptor:
+    Name           "Hydrology.FlowAccumulation"
+    Type           Scalar | Vector2 | Classified
+    Encoding       Uint8 | Uint16 | Float32 | Logarithmic16
+    CellSizeMeters own resolution, interpolated against other channels
+    TimeSliceCount 1 for a climatological mean, 24 for half-monthly
+    Unit, Description, ColorMap, DisplayRange
+```
+
+Names resolve to handles once, at process registration, so inner loops index
+rather than hash. Classified channels are never interpolated. Flow accumulation
+spans six orders of magnitude between a hillside and a river, so it is stored
+logarithmically; the getters still speak square metres.
+
+Current and planned channels:
 
 | channel | from | drives |
 |---|---|---|
-| `StandingWaterDepth` | depression fill: filled surface minus measured | tarns, ponds, wetland |
-| `FlowAccumulation` | multiple-flow-direction routing over the filled surface | streams, rivers, catchment size |
-| `Wetness` | topographic wetness index, blended with standing water and climate | humidity, species density |
-| `SoilDepthMeters` | droplet erosion/deposition against a sediment capacity | rock vs scree vs earth |
-| `SkyViewFactor`, `DirectInsolation` | horizon sweep and a day's sun path (later milestone) | temperature, treeline, snow retention |
+| `Hydrology.StandingWaterDepth` | depression fill: filled surface minus measured | tarns, ponds, wetland |
+| `Hydrology.FlowAccumulation` | multiple-flow-direction routing over the filled surface | streams, rivers, catchment size |
+| `Hydrology.Wetness` | topographic wetness index, blended with standing water and climate | humidity, species density |
+| `Soil.Depth` | droplet erosion/deposition against a sediment capacity | rock vs scree vs earth |
+| `Sun.SkyViewFactor`, `Sun.DirectInsolation` | horizon sweep and a sampled sun path | temperature, treeline, snow retention |
+| `Climate.Temperature` | datum temperature, lapse rate, insolation, cold-air pooling | treeline, freezing level, melt |
+| `Wind.Exposure`, `Wind.Field` | topographic exposure index, channeling, lee separation | snow redistribution, krummholz |
+| `Precip.Rate`, `Precip.SnowFraction` | orographic gain and shadow, phase split by temperature | water balance, snowfall |
+| `Snow.Depth`, `Snow.CoverDuration` | accumulation, wind transport, melt, sublimation | snowline, season length |
+| `Vegetation.Cover`, `Vegetation.Canopy` | the channels above, relaxed against soil and wind | forests, masks, roughness |
 
-Resolution is 8 m — 2500² cells over the 20 km world, about 50 MB resident as
-quantised uint16. Finer would resolve stream channels better, but habitat is
-read at species scale and the DEM's own detail is already available through the
-terrain field for anything that needs it.
+#### 5.6.3 Processes
+
+A process declares its inputs, its outputs and the fidelities it implements,
+and executes against a context. It may touch nothing else — no globals, no
+heightmap, no other process — which is what allows independent branches of the
+graph to run in parallel and what makes the determinism guarantee checkable
+rather than hoped for. Seeded streams are derived per process name, so adding a
+process cannot shift another's random sequence.
+
+Adding a system to the environment is therefore one registration. No enum edit,
+no pipeline edit, no debug-view edit, no rewiring of anything downstream.
+
+**Fidelity.** Every process implements some subset of Off / Cheap / Standard /
+Reference, switchable at runtime. `Off` still writes its channels, filled with a
+constant or a trivial analytic value — wind off means uniform synoptic wind and
+unit exposure, not an absent channel. Downstream code never asks whether a
+system is enabled, which is what stops the graph rotting into thirty scattered
+availability checks. `Reference` is the slow physical implementation the cheaper
+ones are validated against.
+
+**Scheduling.** The scheduler topologically sorts the declared dependencies, and
+finds feedback cycles as strongly connected components. A cycle is not an error:
+it becomes a **relaxation group** run for a **fixed iteration count**, in a
+fixed order. Changing a parameter or a fidelity marks that process dirty and
+re-runs it and its transitive dependents, nothing else, which is what keeps the
+switching interactive.
 
 **Determinism.** Iteration counts are fixed, never driven by a convergence test
 against a readback — a solve that stops when it has converged stops at a
-different iteration on a different machine. Droplets start on a jittered
-lattice from a seeded stream, and scatter their sediment through **integer
-atomics on a fixed-point encoding**: float atomic adds commit in whatever order
-the hardware schedules, so a float accumulator would make the same bake differ
-run to run on one machine, never mind across two.
+different iteration on a different machine, and relaxation groups make this rule
+load-bearing rather than incidental. Droplets start on a jittered lattice from a
+seeded stream, and scatter their sediment through **integer atomics on a
+fixed-point encoding**: float atomic adds commit in whatever order the hardware
+schedules, so a float accumulator would make the same bake differ run to run on
+one machine, never mind across two.
 
-**Two implementations, one interface.** The CPU path is the definition of each
-algorithm and what the automation suite runs; the GPU compute path is the same
-algorithm arranged for the hardware, and is what actually runs at world gen.
-Headless (`-nullrhi`) falls back to the CPU path rather than skipping, so the
-bake is covered by tests on every machine. The two are held to agreeing within
-a tolerance, which is what catches a GPU port that has drifted from its
-reference.
+**Two implementations, one interface.** Per process, not per bake. The CPU path
+is the definition of each algorithm and what the automation suite runs; the GPU
+compute path is the same algorithm arranged for the hardware, and is what
+actually runs at world gen. Headless (`-nullrhi`) falls back to the CPU path
+rather than skipping, so every process is covered by tests on every machine. The
+two are held to agreeing within a tolerance, which is what catches a GPU port
+that has drifted from its reference.
 
-The bake is not saved. It is a pure function of the elevation model and the
-master seed, so it is rebuilt at load like the mip chain (§9).
+#### 5.6.4 Time
+
+Habitat is steady state; snow is not. Channels declare how many slices of a
+representative year they hold — 1 for a climatological mean, 24 half-monthly —
+and processes fall into four kinds against that: **static** (soil depth, flow
+accumulation), **per-slice** (insolation, temperature, precipitation),
+**sequential** (snowpack, the only one that carries state from slice to slice),
+and **reducing** (mean growing-season temperature, snow-cover duration).
+
+Sliced channels are held at coarse resolution and small encodings — 24 slices
+of `Uint8` at 64 m is single-digit megabytes — so the time axis costs nothing
+against the 8 m hydrology channels.
+
+#### 5.6.5 Bake and sim
+
+The same machinery describes two different things, and they must not be
+confused:
+
+| | environment **bake** (`MassifWorldGen`) | environment **state** (`MassifSim`) |
+|---|---|---|
+| what | climatology: the average year | this playthrough's weather and snow |
+| when | once at world load | fixed sim tick (§4) |
+| extent | whole world, coarse | resident tiles around activity (§5.4) |
+| saved | never — a pure function of source, georeference and seed | yes; it is sim state (§9) |
+| example | this slope averages 2.1 m of snow in February | this slope has 1.7 m of snow right now |
+
+The bake is the boundary condition the sim runs against: the bake says a cell is
+a lee deposition zone at exposure 0.2, and the sim moves actual snow into it.
+Keeping the split explicit is what keeps sim state out of presentation (§3) and
+the bake out of the save file (§9).
 
 ### 5.7 Debug channel views
 
-Any bake channel can be painted onto the terrain in place of its material,
-selected by the number keys, with a legend naming the channel and its range in
-the top-right corner. The channel is uploaded as one world-sized texture and
-sampled by world XY in the terrain material, so nothing about the mesh, the
-quadtree or the field changes when a view is switched on.
+Any channel can be painted onto the terrain in place of its material, with a
+legend naming the channel and its range in the top-right corner. The channel is
+uploaded as one world-sized texture and sampled by world XY in the terrain
+material, so nothing about the mesh, the quadtree or the field changes when a
+view is switched on.
+
+Presentation reads the channel registry (§5.6.2) rather than a hand-written case
+per channel, so a newly registered channel is visualisable the moment it exists,
+without any presentation change at all.
+
+A heatmap alone is not enough to verify a simulation, so the views come with:
+
+- **Probe** — a point, and every channel's value at it with units and the
+  process that wrote each.
+- **Vector overlay** — direction fields as arrows or line-integral convolution.
+  A scalar heatmap cannot show wind being steered the wrong way round a ridge.
+- **Transect** — a dragged line, and any set of channels graphed along it.
+- **Difference view** — one channel at two fidelities, signed colour map, which
+  is how you tell whether a more expensive model is doing anything the cheap one
+  did not.
+- **Histogram and range readout** — which catches the everything-is-0.03 class
+  of bug immediately.
+- **Graph inspector** — the process graph itself, per node fidelity, dirty state
+  and last execution time, and where fidelities are switched.
+- **Time scrubber** — over the slices of sliced channels (§5.6.4).
 
 This is presentation-only debug, not a game mode: it reads the bake and draws
 it. It exists because every one of these channels is a simulation whose output
