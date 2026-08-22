@@ -439,10 +439,16 @@ namespace
 	};
 }
 
-void MassifRegisterEnvironmentProcesses(
+void MassifRegisterAltitudeProcess(
 	FMassifEnvironmentScheduler& Scheduler, const FMassifEnvironmentBakeParams& Params)
 {
 	Scheduler.RegisterProcess(MakeShared<FAltitudeProcess>(Params));
+}
+
+void MassifRegisterEnvironmentProcesses(
+	FMassifEnvironmentScheduler& Scheduler, const FMassifEnvironmentBakeParams& Params)
+{
+	MassifRegisterAltitudeProcess(Scheduler, Params);
 	Scheduler.RegisterProcess(MakeShared<FDepressionFillProcess>(Params));
 	Scheduler.RegisterProcess(MakeShared<FStandingWaterProcess>(Params));
 	Scheduler.RegisterProcess(MakeShared<FFlowRoutingProcess>(Params));
