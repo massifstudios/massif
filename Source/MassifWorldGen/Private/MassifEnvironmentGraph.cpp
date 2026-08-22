@@ -1,6 +1,7 @@
 #include "MassifEnvironmentGraph.h"
 
 #include "MassifEnvironmentBakeGrid.h"
+#include "MassifSunProcesses.h"
 #include "MassifRiverNetwork.h"
 
 namespace MassifEnvironmentChannels
@@ -454,6 +455,7 @@ void MassifRegisterEnvironmentProcesses(
 	Scheduler.RegisterProcess(MakeShared<FFlowRoutingProcess>(Params));
 	Scheduler.RegisterProcess(MakeShared<FSoilDepthProcess>(Params));
 	Scheduler.RegisterProcess(MakeShared<FWetnessProcess>(Params));
+	MassifRegisterSunProcesses(Scheduler, FMassifSunParams());
 }
 
 TUniquePtr<FMassifEnvironmentScheduler> MassifBuildEnvironment(
