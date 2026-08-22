@@ -1,44 +1,44 @@
 #include "MassifHabitat.h"
 
-#include "MassifEnvironmentBake.h"
+#include "MassifClimateProcesses.h"
+#include "MassifEnvironmentGraph.h"
+#include "MassifPrecipitationProcesses.h"
+#include "MassifEnvironmentState.h"
 #include "MassifRiverField.h"
-#include "MassifSeed.h"
 #include "MassifTerrainField.h"
-#include "MassifValueNoise.h"
 
 namespace
 {
 	namespace Climate
 	{
-		/** Growing-season mean at sea level, falling with altitude: the treeline lands near 2000 m. */
-		constexpr double SeaLevelTemperatureCelsius = 19.0;
-		constexpr double LapseRateCelsiusPerMeter = 0.0065;
+		/**
+		 * Damp a point has before either the catchment above it or the rain on it.
+		 *
+		 * Small, because it is only what neither term accounts for. It used to stand
+		 * in for the rainfall nothing modelled; now that rainfall is a term of its
+		 * own, leaving the old figure in would put a floor under the dry end and
+		 * there would be no parched ground anywhere.
+		 */
+		constexpr double BaseHumidity = 0.05;
 
-		/** Warmth gained on ground facing full south and lost facing full north, scaled by steepness. */
-		constexpr double SolarAspectGainCelsius = 2.5;
-
-		/** Damp a point has before any of the ground water the bake routed to it. */
-		constexpr double BaseHumidity = 0.2;
-
-		/** How much of the humidity range the bake's wetness accounts for. */
+		/**
+		 * How much of the humidity range each source accounts for.
+		 *
+		 * They sum with the base to exactly 1, so saturated ground under a wet sky
+		 * reaches the top of the range and parched ground under a dry one reaches the
+		 * bottom. Anything less and the bog plants and the dry-scree layers both
+		 * describe ground that never occurs.
+		 */
 		constexpr double GroundWaterHumidityWeight = 0.7;
+		constexpr double RainfallHumidityWeight = 0.25;
 
-		/** Orographic lift: air pushed higher over the massif drops more of its water. */
-		constexpr double HumidityPerMeterOfLift = 0.00014;
-		constexpr double LiftReferenceAltitudeMeters = 1200.0;
-
-		/** Ground facing into the prevailing wind takes the rain; the lee side stays dry. */
-		constexpr double WindwardHumidityGain = 0.18;
+		/** Annual rainfall that counts as parched, and as thoroughly wet. */
+		constexpr double DryAnnualMillimetres = 600.0;
+		constexpr double WetAnnualMillimetres = 2200.0;
 
 		/** Water leaves the ground where it is hot, whatever drained into it. */
 		constexpr double EvaporationHumidityPerCelsius = 0.02;
 		constexpr double EvaporationTemperatureCelsius = 8.0;
-
-		/** Wet and dry regions of the massif, as two octaves of seeded noise. */
-		constexpr double RegionalHumidityAmplitude = 0.12;
-		constexpr double RegionalWeatherCellMeters = 3000.0;
-		constexpr double LocalWeatherCellMeters = 900.0;
-		constexpr double LocalWeatherWeight = 0.3;
 
 		/** Ground too steep to hold anything, and the looser debris slope below it. */
 		constexpr double RockSlopeDegrees = 45.0;
@@ -93,43 +93,27 @@ namespace
 		return FRotator3d::ClampAxis(Bearing);
 	}
 
-	/**
-	 * How much of the sun the ground takes: 1 where it leans full south, -1 full
-	 * north, 0 where it is flat. The normal's south component already carries the
-	 * steepness, so a gentle south slope gains less than a headwall does.
-	 */
-	double Southness(FVector3d Normal)
+	/** 0 where a point takes a parched year's rain, 1 where it takes a thoroughly wet one. */
+	double RainfallFraction(double AnnualMillimetres)
 	{
-		return -Normal.Y;
-	}
-
-	double TemperatureCelsius(double AltitudeMeters, FVector3d Normal)
-	{
-		return Climate::SeaLevelTemperatureCelsius
-			- Climate::LapseRateCelsiusPerMeter * AltitudeMeters
-			+ Climate::SolarAspectGainCelsius * Southness(Normal);
+		const double Span = Climate::WetAnnualMillimetres - Climate::DryAnnualMillimetres;
+		return FMath::Clamp((AnnualMillimetres - Climate::DryAnnualMillimetres) / Span, 0.0, 1.0);
 	}
 
 	/**
 	 * The bake's wetness is the ground water: everything draining through the
 	 * point from the catchment above it, which is what makes a valley floor damp
-	 * and a shoulder at the same altitude dry. Climate moves that figure rather
-	 * than replacing it — lift and windward exposure add rain, heat takes it back.
+	 * and a shoulder at the same altitude dry. What falls out of the sky is the
+	 * other half of it, and heat takes some of both back.
 	 */
 	double HumidityFraction(
-		double GroundWetness,
-		double AltitudeMeters,
-		double TemperatureCelsius,
-		double Windwardness,
-		double WeatherVariation)
+		double GroundWetness, double AnnualMillimetres, double TemperatureCelsius)
 	{
 		const double Evaporation = FMath::Max(TemperatureCelsius - Climate::EvaporationTemperatureCelsius, 0.0);
 		const double Humidity = Climate::BaseHumidity
 			+ Climate::GroundWaterHumidityWeight * GroundWetness
-			+ Climate::HumidityPerMeterOfLift * (AltitudeMeters - Climate::LiftReferenceAltitudeMeters)
-			+ Climate::WindwardHumidityGain * Windwardness
-			- Climate::EvaporationHumidityPerCelsius * Evaporation
-			+ Climate::RegionalHumidityAmplitude * WeatherVariation;
+			+ Climate::RainfallHumidityWeight * RainfallFraction(AnnualMillimetres)
+			- Climate::EvaporationHumidityPerCelsius * Evaporation;
 		return FMath::Clamp(Humidity, 0.0, 1.0);
 	}
 
@@ -201,15 +185,16 @@ namespace
 
 FMassifHabitatField::FMassifHabitatField(
 	TSharedRef<const FMassifTerrainField> InTerrainField,
-	TSharedRef<const FMassifEnvironmentBake> InEnvironmentBake,
+	TSharedRef<const FMassifEnvironmentState> InEnvironment,
 	uint32 InMasterSeed)
 	: TerrainField(MoveTemp(InTerrainField))
-	, EnvironmentBake(MoveTemp(InEnvironmentBake))
-	, WeatherSeed(FMassifSeed(InMasterSeed).MakeChannelSeed(TEXT("Habitat.Weather")))
+	, Environment(MoveTemp(InEnvironment))
 {
-	const FRandomStream WindStream = FMassifSeed(InMasterSeed).MakeChannelStream(TEXT("Habitat.PrevailingWind"));
-	const double WindBearingRadians = WindStream.FRand() * UE_DOUBLE_TWO_PI;
-	PrevailingWindDirection = FVector2d(FMath::Sin(WindBearingRadians), FMath::Cos(WindBearingRadians));
+	SoilDepthChannel = Environment->FindChannel(MassifEnvironmentChannels::SoilDepth());
+	StandingWaterChannel = Environment->FindChannel(MassifEnvironmentChannels::StandingWaterDepth());
+	WetnessChannel = Environment->FindChannel(MassifEnvironmentChannels::Wetness());
+	TemperatureChannel = Environment->FindChannel(MassifEnvironmentChannels::MeanTemperature());
+	PrecipitationChannel = Environment->FindChannel(MassifEnvironmentChannels::AnnualPrecipitation());
 }
 
 FMassifHabitatSample FMassifHabitatField::Sample(FVector2d PositionMeters, double SampleSpacingMeters) const
@@ -220,18 +205,14 @@ FMassifHabitatSample FMassifHabitatField::Sample(FVector2d PositionMeters, doubl
 	Habitat.AltitudeMeters = TerrainField->SampleHeightMeters(PositionMeters, SampleSpacingMeters);
 	Habitat.SlopeDegrees = SlopeDegreesFromNormal(Normal);
 	Habitat.AspectDegrees = AspectDegreesFromNormal(Normal);
-	Habitat.TemperatureCelsius = TemperatureCelsius(Habitat.AltitudeMeters, Normal);
-	Habitat.SoilDepthMeters = EnvironmentBake->Sample(EMassifBakeChannel::SoilDepth, PositionMeters);
-	Habitat.StandingWaterDepthMeters =
-		EnvironmentBake->Sample(EMassifBakeChannel::StandingWaterDepth, PositionMeters);
+	Habitat.TemperatureCelsius = Environment->SampleScalar(TemperatureChannel, PositionMeters);
+	Habitat.SoilDepthMeters = Environment->SampleScalar(SoilDepthChannel, PositionMeters);
+	Habitat.StandingWaterDepthMeters = Environment->SampleScalar(StandingWaterChannel, PositionMeters);
 
-	const double Windwardness = -FVector2d(Normal.X, Normal.Y).Dot(PrevailingWindDirection);
 	Habitat.Humidity = HumidityFraction(
-		EnvironmentBake->Sample(EMassifBakeChannel::Wetness, PositionMeters),
-		Habitat.AltitudeMeters,
-		Habitat.TemperatureCelsius,
-		Windwardness,
-		SampleWeatherVariation(PositionMeters));
+		Environment->SampleScalar(WetnessChannel, PositionMeters),
+		Environment->SampleScalar(PrecipitationChannel, PositionMeters),
+		Habitat.TemperatureCelsius);
 
 	Habitat.ChannelDistanceMeters = SampleChannelDistanceMeters(PositionMeters);
 	// Ground beside running water is wet whatever the catchment above it says,
@@ -258,14 +239,4 @@ double FMassifHabitatField::SampleChannelDistanceMeters(FVector2d PositionMeters
 		return TNumericLimits<double>::Max();
 	}
 	return RiverField->SampleSignedDistanceMeters(PositionMeters);
-}
-
-double FMassifHabitatField::SampleWeatherVariation(FVector2d PositionMeters) const
-{
-	const double Regional =
-		MassifNoise::ValueNoise(WeatherSeed, PositionMeters / Climate::RegionalWeatherCellMeters);
-	const double Local =
-		MassifNoise::ValueNoise(WeatherSeed + 1, PositionMeters / Climate::LocalWeatherCellMeters);
-	const double Combined = FMath::Lerp(Regional, Local, Climate::LocalWeatherWeight);
-	return 2.0 * Combined - 1.0;
 }

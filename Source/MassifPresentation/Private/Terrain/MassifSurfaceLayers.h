@@ -466,7 +466,10 @@ namespace MassifSurface
 			.MaxSlopeDegrees = 28.0,
 			.SlopeFadeDegrees = 8.0,
 			.GroundTypeMask = MassifGround::Soil,
-			.Abundance = 0.9,
+			// Enough to win somewhere. The band it describes is real ground - warm,
+			// damp, gentle, soil - but it is narrow, and at a lower weight the
+			// broader forest floors took every point of it.
+			.Abundance = 1.2,
 			.PatchWavelengthMeters = 45.0,
 		},
 

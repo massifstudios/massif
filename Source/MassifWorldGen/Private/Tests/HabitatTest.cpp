@@ -1,4 +1,5 @@
-#include "MassifEnvironmentBake.h"
+#include "MassifEnvironmentBakeParams.h"
+#include "MassifTestEnvironment.h"
 #include "MassifHabitat.h"
 #include "MassifHeightmap.h"
 #include "MassifTerrainField.h"
@@ -19,7 +20,7 @@ namespace
 		Params.CellSizeMeters = HabitatTestSpacingMeters;
 		return MakeShared<const FMassifHabitatField>(
 			Field,
-			FMassifEnvironmentBake::BuildOnCpu(Field->GetHeightmap(), MasterSeed, Params),
+			MassifSolveTestEnvironmentState(Field->GetHeightmapShared(), MasterSeed, Params),
 			MasterSeed);
 	}
 
@@ -106,9 +107,14 @@ bool FHabitatAspectTest::RunTest(const FString& Parameters)
 		FMath::IsNearlyEqual(SouthFlank.AspectDegrees, 180.0, 5.0));
 	TestTrue(FString::Printf(TEXT("The northern flank faces north (%.0f deg)"), NorthFlank.AspectDegrees),
 		FMath::Abs(FRotator3d::NormalizeAxis(NorthFlank.AspectDegrees)) < 5.0);
-	TestTrue(FString::Printf(TEXT("Sun warms the southern flank (%.1f C against %.1f C)"),
+	// A quarter of a degree, not the half this asked for while habitat invented its
+	// own aspect term. The warming is now whatever the insolation the sun actually
+	// solved says it is, and on a flank of this angle that is a few tenths - well
+	// clear of the channel's quantisation, and a good deal less than the flat 2.5 C
+	// the old southness term applied whatever the sky was doing.
+	TestTrue(FString::Printf(TEXT("Sun warms the southern flank (%.2f C against %.2f C)"),
 		SouthFlank.TemperatureCelsius, NorthFlank.TemperatureCelsius),
-		SouthFlank.TemperatureCelsius > NorthFlank.TemperatureCelsius + 0.5);
+		SouthFlank.TemperatureCelsius > NorthFlank.TemperatureCelsius + 0.25);
 	return true;
 }
 
@@ -179,11 +185,8 @@ bool FHabitatHumidityTest::RunTest(const FString& Parameters)
 		MaxHumidity - MinHumidity > 0.02);
 
 	// Windward and lee are opposite sides of the same ridge, so one of the two
-	// flanks must come out wetter whichever way the seeded wind blows.
-	const FVector2d WindDirection = Habitat->GetPrevailingWindDirection();
-	TestTrue(TEXT("The prevailing wind has a direction"),
-		FMath::IsNearlyEqual(WindDirection.Length(), 1.0, 1.0e-6));
-
+	// flanks must come out wetter whichever way the wind blows. Habitat no longer
+	// decides that itself: the rain it reads was solved against the wind field.
 	const double SouthFlank = Habitat->Sample(FVector2d(0.0, -100.0), HabitatSampleSpacingMeters).Humidity;
 	const double NorthFlank = Habitat->Sample(FVector2d(0.0, 100.0), HabitatSampleSpacingMeters).Humidity;
 	TestTrue(FString::Printf(TEXT("The two flanks of a ridge are not equally wet (%.3f and %.3f)"),

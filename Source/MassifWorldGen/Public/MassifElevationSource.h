@@ -45,8 +45,15 @@ struct FMassifGeoreference
 	double LongitudeDegrees = 11.4;
 	int32 SourceEpsgCode = 31254;
 
-	/** Mean annual air temperature reduced to the datum. The temperature field's zero point. */
-	double SeaLevelMeanTemperatureCelsius = 14.0;
+	/**
+	 * Growing-season mean air temperature reduced to the datum: the temperature
+	 * field's zero point, and through it where the treeline lands.
+	 *
+	 * The growing-season mean rather than the annual one, because what decides
+	 * whether a tree can stand somewhere is the season it has to grow in, not the
+	 * average of that season and the winter it sleeps through.
+	 */
+	double SeaLevelMeanTemperatureCelsius = 19.0;
 };
 
 /** The imported elevation model as an elevation source. */

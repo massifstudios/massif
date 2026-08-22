@@ -1,8 +1,9 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "MassifEnvironmentChannel.h"
 
-class FMassifEnvironmentBake;
+class FMassifEnvironmentState;
 class FMassifTerrainField;
 
 /** Ground cover class of a point on the surface, as far as anything growing on it cares. */
@@ -82,13 +83,15 @@ struct FMassifHabitatSample
  * whoever asks and in whatever order, so this can be sampled from the thread
  * pool and tested headless like the fields it reads.
  *
- * Temperature is altitude by lapse rate, warmed or cooled by how the ground
- * faces the sun. Humidity starts from the bake's wetness — the catchment
- * draining through the point, which no local measurement can see — and climate
- * moves it: orographic lift, the windward side of the massif, evaporation where
- * it is hot, and the seed's own wet and dry regions. Ground type is soil depth
- * and standing water first and slope second, so bare rock is ground the water
- * stripped rather than ground over an angle.
+ * Climate is read, not invented. Temperature comes from the temperature channel,
+ * which already carries the lapse rate, the sun the ground actually took and the
+ * cold air pooled in its hollows; rainfall comes from the precipitation channel,
+ * which already carries the orographic gain and the rain shadow behind it. What
+ * is left here is the part that is genuinely about the ground: the catchment
+ * water draining through a point, what evaporation takes back out of it, the wet
+ * margin beside a channel, and a ground type decided by soil depth and standing
+ * water first and slope second — so bare rock is ground the water stripped
+ * rather than ground over an angle.
  *
  * Presentation reads this for what to plant; it is not sim state. When forest
  * and scree become semantic masks (ARCHITECTURE §5.5) those masks are derived
@@ -101,7 +104,7 @@ class MASSIFWORLDGEN_API FMassifHabitatField
 public:
 	FMassifHabitatField(
 		TSharedRef<const FMassifTerrainField> InTerrainField,
-		TSharedRef<const FMassifEnvironmentBake> InEnvironmentBake,
+		TSharedRef<const FMassifEnvironmentState> InEnvironment,
 		uint32 InMasterSeed);
 
 	FMassifHabitatField(const FMassifHabitatField&) = delete;
@@ -115,26 +118,22 @@ public:
 		return TerrainField.Get();
 	}
 
-	const FMassifEnvironmentBake& GetEnvironmentBake() const
+	const FMassifEnvironmentState& GetEnvironment() const
 	{
-		return EnvironmentBake.Get();
-	}
-
-	/** Direction the prevailing wind travels, drawn from the seed. Slopes facing into it collect the rain. */
-	FVector2d GetPrevailingWindDirection() const
-	{
-		return PrevailingWindDirection;
+		return Environment.Get();
 	}
 
 private:
-	/** Large-scale wet and dry regions, -1 to 1, so one massif is not uniformly damp. */
-	double SampleWeatherVariation(FVector2d PositionMeters) const;
-
 	/** Distance to the nearest channel, from the river field the terrain was carved with. */
 	double SampleChannelDistanceMeters(FVector2d PositionMeters) const;
 
 	TSharedRef<const FMassifTerrainField> TerrainField;
-	TSharedRef<const FMassifEnvironmentBake> EnvironmentBake;
-	uint32 WeatherSeed = 0;
-	FVector2d PrevailingWindDirection = FVector2d(1.0, 0.0);
+	TSharedRef<const FMassifEnvironmentState> Environment;
+
+	/** Resolved once: sampling a channel by name on every query would hash a string per plant. */
+	FMassifChannelHandle SoilDepthChannel;
+	FMassifChannelHandle StandingWaterChannel;
+	FMassifChannelHandle WetnessChannel;
+	FMassifChannelHandle TemperatureChannel;
+	FMassifChannelHandle PrecipitationChannel;
 };
