@@ -1,6 +1,7 @@
 #include "MassifEnvironmentGraph.h"
 
 #include "MassifEnvironmentBakeGrid.h"
+#include "MassifClimateProcesses.h"
 #include "MassifSunProcesses.h"
 #include "MassifRiverNetwork.h"
 
@@ -456,6 +457,7 @@ void MassifRegisterEnvironmentProcesses(
 	Scheduler.RegisterProcess(MakeShared<FSoilDepthProcess>(Params));
 	Scheduler.RegisterProcess(MakeShared<FWetnessProcess>(Params));
 	MassifRegisterSunProcesses(Scheduler, FMassifSunParams());
+	MassifRegisterClimateProcesses(Scheduler, FMassifClimateParams());
 }
 
 TUniquePtr<FMassifEnvironmentScheduler> MassifBuildEnvironment(
