@@ -234,7 +234,7 @@ Two hard requirements run through all of it:
    whose only evidence is a second-order effect on where trees ended up cannot
    be verified, and will be wrong for months without anyone noticing.
 
-### E0 — Elevation Source Interface
+### E0 — Elevation Source Interface — done
 Break the environment layer's dependency on `FMassifHeightmap`.
 
 - `IMassifElevationSource`: altitude by position and sample spacing, world
@@ -250,7 +250,7 @@ Break the environment layer's dependency on `FMassifHeightmap`.
   a bake over an analytic cone drains radially outward. Grep-level check that
   no environment source includes `MassifHeightmap.h`.
 
-### E1 — Channel Registry & State
+### E1 — Channel Registry & State — done
 Channels become registered and self-describing rather than an enum.
 
 - `FMassifChannelDescriptor`: name, type (scalar/vector2/classified), encoding,
@@ -265,7 +265,7 @@ Channels become registered and self-describing rather than an enum.
   resolutions sample consistently at the same world position, classified
   channels never interpolate, hash stable across registration order.
 
-### E2 — Process Graph & Scheduler
+### E2 — Process Graph & Scheduler — done
 - `IMassifEnvironmentProcess`: declares inputs, outputs, supported fidelities;
   `Execute(Context, Fidelity)` may touch nothing but the context. Optional GPU
   path, CPU otherwise and always headless.
@@ -281,7 +281,7 @@ Channels become registered and self-describing rather than an enum.
   undeclared channel is rejected, dirty marking re-runs exactly the dependent
   set, two schedules of the same graph produce identical hashes.
 
-### E3 — Port the Existing Bake
+### E3 — Port the Existing Bake (next)
 The six M5g stages become six registered processes, bodies unchanged.
 
 - Depression fill, standing water, flow routing, droplets, wetness, river
