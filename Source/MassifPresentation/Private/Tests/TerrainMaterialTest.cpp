@@ -2,6 +2,7 @@
 #include "Materials/Material.h"
 #include "Materials/MaterialInterface.h"
 #include "MaterialShared.h"
+#include "Misc/App.h"
 #include "Misc/AutomationTest.h"
 
 /**
@@ -20,6 +21,15 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainMaterialTest,
 
 bool FTerrainMaterialTest::RunTest(const FString& Parameters)
 {
+	// A material caches no resources at all without an RHI, so under -nullrhi there
+	// is nothing translated to inspect and the check would fail on every machine
+	// whatever the material contains.
+	if (!FApp::CanEverRender())
+	{
+		AddInfo(TEXT("Skipped: material resources are not cached without an RHI"));
+		return true;
+	}
+
 	UMaterial* Material = LoadObject<UMaterial>(nullptr, TEXT("/Game/Materials/M_Terrain.M_Terrain"));
 	if (!TestNotNull(TEXT("M_Terrain loads"), Material))
 	{
