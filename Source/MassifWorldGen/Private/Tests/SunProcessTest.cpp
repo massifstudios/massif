@@ -35,7 +35,7 @@ namespace
 		return Scheduler;
 	}
 
-	FMassifAnalyticElevationSource::FParams MakeTerrain(
+	FMassifAnalyticElevationSource::FParams MakeSunTerrain(
 		EMassifAnalyticTerrain Shape, double BearingDegrees, double ReliefMeters = 900.0)
 	{
 		FMassifAnalyticElevationSource::FParams Params;
@@ -59,7 +59,7 @@ namespace
 		return FMath::Square(FMath::Cos(WallAngleRadians));
 	}
 
-	double SampleChannel(
+	double SampleSunChannel(
 		const FMassifEnvironmentScheduler& Scheduler, const FName& ChannelName, FVector2d PositionMeters)
 	{
 		const FMassifEnvironmentState& State = Scheduler.GetState();
@@ -76,11 +76,11 @@ bool FSunFlatWorldTest::RunTest(const FString& Parameters)
 	// Level open ground is what the channels are measured against, so it has to
 	// come out as one on both counts or every reading elsewhere is scaled wrong.
 	const TUniquePtr<FMassifEnvironmentScheduler> Flat =
-		SolveSun(MakeTerrain(EMassifAnalyticTerrain::Flat, 0.0), EMassifFidelity::Standard);
+		SolveSun(MakeSunTerrain(EMassifAnalyticTerrain::Flat, 0.0), EMassifFidelity::Standard);
 
-	const double SkyView = SampleChannel(*Flat, MassifEnvironmentChannels::SkyViewFactor(), FVector2d::ZeroVector);
+	const double SkyView = SampleSunChannel(*Flat, MassifEnvironmentChannels::SkyViewFactor(), FVector2d::ZeroVector);
 	const double Direct =
-		SampleChannel(*Flat, MassifEnvironmentChannels::DirectInsolation(), FVector2d::ZeroVector);
+		SampleSunChannel(*Flat, MassifEnvironmentChannels::DirectInsolation(), FVector2d::ZeroVector);
 
 	TestTrue(FString::Printf(TEXT("A flat world sees the whole sky (%.4f)"), SkyView), SkyView > 0.999);
 	TestTrue(FString::Printf(TEXT("A flat world takes a full day of sun (%.4f)"), Direct), Direct > 0.999);
@@ -96,10 +96,10 @@ bool FSunPitTest::RunTest(const FString& Parameters)
 	// The floor of a hole has ground all around it above the horizontal, which is
 	// exactly the case a local slope-and-aspect estimate cannot see at all.
 	const TUniquePtr<FMassifEnvironmentScheduler> Pit =
-		SolveSun(MakeTerrain(EMassifAnalyticTerrain::Pit, 0.0), EMassifFidelity::Standard);
+		SolveSun(MakeSunTerrain(EMassifAnalyticTerrain::Pit, 0.0), EMassifFidelity::Standard);
 
-	const double SkyView = SampleChannel(*Pit, MassifEnvironmentChannels::SkyViewFactor(), FVector2d::ZeroVector);
-	const double Direct = SampleChannel(*Pit, MassifEnvironmentChannels::DirectInsolation(), FVector2d::ZeroVector);
+	const double SkyView = SampleSunChannel(*Pit, MassifEnvironmentChannels::SkyViewFactor(), FVector2d::ZeroVector);
+	const double Direct = SampleSunChannel(*Pit, MassifEnvironmentChannels::DirectInsolation(), FVector2d::ZeroVector);
 
 	const double Expected = ExpectedPitSkyViewFactor(900.0);
 	TestTrue(
@@ -122,12 +122,12 @@ bool FSunRidgeAspectTest::RunTest(const FString& Parameters)
 	// 47 degrees north in July the noon sun is high and a gentle flank barely
 	// separates from its opposite number.
 	const TUniquePtr<FMassifEnvironmentScheduler> Ridge =
-		SolveSun(MakeTerrain(EMassifAnalyticTerrain::Ridge, 90.0, 2400.0), EMassifFidelity::Standard);
+		SolveSun(MakeSunTerrain(EMassifAnalyticTerrain::Ridge, 90.0, 2400.0), EMassifFidelity::Standard);
 
 	const double SouthFlank =
-		SampleChannel(*Ridge, MassifEnvironmentChannels::DirectInsolation(), FVector2d(0.0, -900.0));
+		SampleSunChannel(*Ridge, MassifEnvironmentChannels::DirectInsolation(), FVector2d(0.0, -900.0));
 	const double NorthFlank =
-		SampleChannel(*Ridge, MassifEnvironmentChannels::DirectInsolation(), FVector2d(0.0, 900.0));
+		SampleSunChannel(*Ridge, MassifEnvironmentChannels::DirectInsolation(), FVector2d(0.0, 900.0));
 
 	TestTrue(
 		FString::Printf(TEXT("The south flank takes more sun than the north (%.3f against %.3f)"),
@@ -145,20 +145,20 @@ bool FSunShadowingTest::RunTest(const FString& Parameters)
 	// Cheap is the same cosine law without a horizon. Turning the sweep on may only
 	// ever take light away, and in a pit it must take a visible amount.
 	const FMassifAnalyticElevationSource::FParams Terrain =
-		MakeTerrain(EMassifAnalyticTerrain::Pit, 0.0, 2400.0);
+		MakeSunTerrain(EMassifAnalyticTerrain::Pit, 0.0, 2400.0);
 	const TUniquePtr<FMassifEnvironmentScheduler> Unshadowed = SolveSun(Terrain, EMassifFidelity::Cheap);
 	const TUniquePtr<FMassifEnvironmentScheduler> Shadowed = SolveSun(Terrain, EMassifFidelity::Standard);
 
 	const double CheapSkyView =
-		SampleChannel(*Unshadowed, MassifEnvironmentChannels::SkyViewFactor(), FVector2d::ZeroVector);
+		SampleSunChannel(*Unshadowed, MassifEnvironmentChannels::SkyViewFactor(), FVector2d::ZeroVector);
 	TestTrue(
 		FString::Printf(TEXT("Without a sweep the sky is taken as open (%.4f)"), CheapSkyView),
 		CheapSkyView > 0.999);
 
 	const double CheapDirect =
-		SampleChannel(*Unshadowed, MassifEnvironmentChannels::DirectInsolation(), FVector2d::ZeroVector);
+		SampleSunChannel(*Unshadowed, MassifEnvironmentChannels::DirectInsolation(), FVector2d::ZeroVector);
 	const double ShadowedDirect =
-		SampleChannel(*Shadowed, MassifEnvironmentChannels::DirectInsolation(), FVector2d::ZeroVector);
+		SampleSunChannel(*Shadowed, MassifEnvironmentChannels::DirectInsolation(), FVector2d::ZeroVector);
 	TestTrue(
 		FString::Printf(TEXT("Shadowing only ever removes light (%.4f against %.4f)"),
 			ShadowedDirect, CheapDirect),
@@ -175,7 +175,7 @@ bool FSunOffTest::RunTest(const FString& Parameters)
 	// Off still writes the channels, so nothing downstream has to ask whether the
 	// sun was solved before reading it.
 	const TUniquePtr<FMassifEnvironmentScheduler> Unlit =
-		SolveSun(MakeTerrain(EMassifAnalyticTerrain::Pit, 0.0), EMassifFidelity::Off);
+		SolveSun(MakeSunTerrain(EMassifAnalyticTerrain::Pit, 0.0), EMassifFidelity::Off);
 	const FMassifEnvironmentState& State = Unlit->GetState();
 
 	const FName Names[] = {

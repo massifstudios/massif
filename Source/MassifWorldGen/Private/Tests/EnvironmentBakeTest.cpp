@@ -1,5 +1,6 @@
-#include "MassifEnvironmentBake.h"
 #include "MassifEnvironmentBakeGrid.h"
+#include "MassifEnvironmentGraph.h"
+#include "MassifTestEnvironment.h"
 #include "MassifHeightmap.h"
 #include "Misc/AutomationTest.h"
 
@@ -18,7 +19,7 @@ namespace
 			BakeTestHalfWorldMeters - (Row + 0.5) * BakeTestSpacingMeters);
 	}
 
-	TSharedRef<const FMassifHeightmap> MakeHeightmap(TFunctionRef<double(FVector2d)> AltitudeAt)
+	TSharedRef<const FMassifHeightmap> MakeBakeHeightmap(TFunctionRef<double(FVector2d)> AltitudeAt)
 	{
 		TArray<double> Altitudes;
 		Altitudes.Reserve(BakeTestSide * BakeTestSide);
@@ -35,7 +36,7 @@ namespace
 	/** A V-shaped valley on the X = 0 axis, falling south so everything it collects leaves the world. */
 	TSharedRef<const FMassifHeightmap> MakeValley()
 	{
-		return MakeHeightmap([](FVector2d Position)
+		return MakeBakeHeightmap([](FVector2d Position)
 		{
 			return 1500.0 + FMath::Abs(Position.X) * 0.5 + Position.Y * 0.1;
 		});
@@ -44,7 +45,7 @@ namespace
 	/** The same slope with a round pit punched into the middle of it: one hollow, and nothing else to fill. */
 	TSharedRef<const FMassifHeightmap> MakePittedSlope(double PitDepthMeters, double PitRadiusMeters)
 	{
-		return MakeHeightmap([PitDepthMeters, PitRadiusMeters](FVector2d Position)
+		return MakeBakeHeightmap([PitDepthMeters, PitRadiusMeters](FVector2d Position)
 		{
 			const double PlaneAltitude = 1500.0 + Position.Y * 0.1;
 			const double DistanceMeters = Position.Length();
@@ -125,25 +126,29 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FEnvironmentBakeStandingWaterTest,
 bool FEnvironmentBakeStandingWaterTest::RunTest(const FString& Parameters)
 {
 	constexpr double PitDepthMeters = 40.0;
-	const TSharedRef<const FMassifEnvironmentBake> Pitted =
-		FMassifEnvironmentBake::BuildOnCpu(*MakePittedSlope(PitDepthMeters, 120.0), BakeTestSeed, MakeTestParams());
+	const TUniquePtr<FMassifEnvironmentScheduler> Pitted =
+		MassifSolveTestEnvironment(MakePittedSlope(PitDepthMeters, 120.0), BakeTestSeed, MakeTestParams());
+	const FMassifEnvironmentState& PittedState = Pitted->GetState();
+	const FMassifChannelHandle PittedWater =
+		PittedState.FindChannel(MassifEnvironmentChannels::StandingWaterDepth());
 
-	const double PitWaterMeters = Pitted->Sample(EMassifBakeChannel::StandingWaterDepth, FVector2d::ZeroVector);
+	const double PitWaterMeters = PittedState.SampleScalar(PittedWater, FVector2d::ZeroVector);
 	TestTrue(FString::Printf(TEXT("Water stands in the pit (%.1f m in a %.0f m hollow)"),
 		PitWaterMeters, PitDepthMeters),
 		PitWaterMeters > 0.5 * PitDepthMeters && PitWaterMeters <= PitDepthMeters + 1.0);
 
-	const double SlopeWaterMeters =
-		Pitted->Sample(EMassifBakeChannel::StandingWaterDepth, FVector2d(250.0, 250.0));
+	const double SlopeWaterMeters = PittedState.SampleScalar(PittedWater, FVector2d(250.0, 250.0));
 	TestTrue(FString::Printf(TEXT("None stands on the open slope (%.3f m)"), SlopeWaterMeters),
 		SlopeWaterMeters < 0.05);
 
 	// A clean valley has no hollow anywhere, so nothing at all should pond in it.
-	const TSharedRef<const FMassifEnvironmentBake> Valley =
-		FMassifEnvironmentBake::BuildOnCpu(*MakeValley(), BakeTestSeed, MakeTestParams());
+	const TUniquePtr<FMassifEnvironmentScheduler> Valley =
+		MassifSolveTestEnvironment(MakeValley(), BakeTestSeed, MakeTestParams());
+	const double DeepestValleyWaterMeters = Valley->GetState().GetChannelMaximum(
+		Valley->GetState().FindChannel(MassifEnvironmentChannels::StandingWaterDepth()));
 	TestTrue(FString::Printf(TEXT("A valley that drains has no standing water (max %.3f m)"),
-		Valley->GetChannelMaximum(EMassifBakeChannel::StandingWaterDepth)),
-		Valley->GetChannelMaximum(EMassifBakeChannel::StandingWaterDepth) < 0.05);
+		DeepestValleyWaterMeters),
+		DeepestValleyWaterMeters < 0.05);
 	return true;
 }
 
@@ -198,18 +203,18 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FEnvironmentBakeWetnessTest,
 
 bool FEnvironmentBakeWetnessTest::RunTest(const FString& Parameters)
 {
-	const TSharedRef<const FMassifEnvironmentBake> Bake =
-		FMassifEnvironmentBake::BuildOnCpu(*MakeValley(), BakeTestSeed, MakeTestParams());
+	const TUniquePtr<FMassifEnvironmentScheduler> Environment =
+		MassifSolveTestEnvironment(MakeValley(), BakeTestSeed, MakeTestParams());
+	const FMassifEnvironmentState& State = Environment->GetState();
+	const FMassifChannelHandle Wetness = State.FindChannel(MassifEnvironmentChannels::Wetness());
 
 	TestTrue(FString::Printf(TEXT("Wetness stays inside 0-1 (%.3f to %.3f)"),
-		Bake->GetChannelMinimum(EMassifBakeChannel::Wetness),
-		Bake->GetChannelMaximum(EMassifBakeChannel::Wetness)),
-		Bake->GetChannelMinimum(EMassifBakeChannel::Wetness) >= 0.0
-			&& Bake->GetChannelMaximum(EMassifBakeChannel::Wetness) <= 1.0);
+		State.GetChannelMinimum(Wetness), State.GetChannelMaximum(Wetness)),
+		State.GetChannelMinimum(Wetness) >= 0.0 && State.GetChannelMaximum(Wetness) <= 1.0);
 
 	// Valley floor against the flank two hundred metres up the same cross-section.
-	const double FloorWetness = Bake->Sample(EMassifBakeChannel::Wetness, FVector2d(0.0, -200.0));
-	const double FlankWetness = Bake->Sample(EMassifBakeChannel::Wetness, FVector2d(300.0, -200.0));
+	const double FloorWetness = State.SampleScalar(Wetness, FVector2d(0.0, -200.0));
+	const double FlankWetness = State.SampleScalar(Wetness, FVector2d(300.0, -200.0));
 	TestTrue(FString::Printf(TEXT("The valley floor is wetter than its flank (%.3f against %.3f)"),
 		FloorWetness, FlankWetness),
 		FloorWetness > FlankWetness + 0.1);
@@ -223,20 +228,21 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FEnvironmentBakeSoilTest,
 bool FEnvironmentBakeSoilTest::RunTest(const FString& Parameters)
 {
 	const FMassifEnvironmentBakeParams Params = MakeTestParams();
-	const TSharedRef<const FMassifEnvironmentBake> Bake =
-		FMassifEnvironmentBake::BuildOnCpu(*MakeValley(), BakeTestSeed, Params);
+	const TUniquePtr<FMassifEnvironmentScheduler> Environment =
+		MassifSolveTestEnvironment(MakeValley(), BakeTestSeed, Params);
+	const FMassifEnvironmentState& State = Environment->GetState();
+	const FMassifChannelHandle SoilDepth = State.FindChannel(MassifEnvironmentChannels::SoilDepth());
 
 	TestTrue(FString::Printf(TEXT("Soil depth stays inside its band (%.2f to %.2f m)"),
-		Bake->GetChannelMinimum(EMassifBakeChannel::SoilDepth),
-		Bake->GetChannelMaximum(EMassifBakeChannel::SoilDepth)),
-		Bake->GetChannelMinimum(EMassifBakeChannel::SoilDepth) >= 0.0
-			&& Bake->GetChannelMaximum(EMassifBakeChannel::SoilDepth) <= Params.MaxSoilDepthMeters);
+		State.GetChannelMinimum(SoilDepth), State.GetChannelMaximum(SoilDepth)),
+		State.GetChannelMinimum(SoilDepth) >= 0.0
+			&& State.GetChannelMaximum(SoilDepth) <= Params.MaxSoilDepthMeters);
 
 	// Droplets pick material up where they run fastest and drop it where the
 	// ground flattens out, so the valley floor must end up better covered than
 	// the flank that feeds it.
-	const double FloorSoilMeters = Bake->Sample(EMassifBakeChannel::SoilDepth, FVector2d(0.0, -200.0));
-	const double FlankSoilMeters = Bake->Sample(EMassifBakeChannel::SoilDepth, FVector2d(300.0, -200.0));
+	const double FloorSoilMeters = State.SampleScalar(SoilDepth, FVector2d(0.0, -200.0));
+	const double FlankSoilMeters = State.SampleScalar(SoilDepth, FVector2d(300.0, -200.0));
 	TestTrue(FString::Printf(TEXT("Sediment settles on the valley floor (%.3f m against %.3f m on the flank)"),
 		FloorSoilMeters, FlankSoilMeters),
 		FloorSoilMeters > FlankSoilMeters);
@@ -253,11 +259,11 @@ bool FEnvironmentBakeDeterminismTest::RunTest(const FString& Parameters)
 	const FMassifEnvironmentBakeParams Params = MakeTestParams();
 
 	const uint64 FirstHash =
-		FMassifEnvironmentBake::BuildOnCpu(*Heightmap, BakeTestSeed, Params)->ComputeContentHash();
+		MassifSolveTestEnvironment(Heightmap, BakeTestSeed, Params)->GetState().ComputeContentHash();
 	const uint64 SecondHash =
-		FMassifEnvironmentBake::BuildOnCpu(*Heightmap, BakeTestSeed, Params)->ComputeContentHash();
+		MassifSolveTestEnvironment(Heightmap, BakeTestSeed, Params)->GetState().ComputeContentHash();
 	const uint64 OtherSeedHash =
-		FMassifEnvironmentBake::BuildOnCpu(*Heightmap, BakeTestSeed + 1, Params)->ComputeContentHash();
+		MassifSolveTestEnvironment(Heightmap, BakeTestSeed + 1, Params)->GetState().ComputeContentHash();
 
 	// The droplet pass runs across the thread pool and scatters into shared
 	// cells. Equal hashes are what says that scatter is order-independent.
@@ -272,10 +278,13 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FEnvironmentBakeSamplingTest,
 
 bool FEnvironmentBakeSamplingTest::RunTest(const FString& Parameters)
 {
-	const TSharedRef<const FMassifEnvironmentBake> Bake =
-		FMassifEnvironmentBake::BuildOnCpu(*MakeValley(), BakeTestSeed, MakeTestParams());
+	const TUniquePtr<FMassifEnvironmentScheduler> Environment =
+		MassifSolveTestEnvironment(MakeValley(), BakeTestSeed, MakeTestParams());
+	const FMassifEnvironmentState& State = Environment->GetState();
+	const FMassifChannelHandle Wetness = State.FindChannel(MassifEnvironmentChannels::Wetness());
 
-	TestEqual(TEXT("The bake grid covers the world at the requested cell size"), Bake->GetWidth(), BakeTestSide);
+	TestEqual(TEXT("The bake grid covers the world at the requested cell size"),
+		State.GetGrid(Wetness).Width, BakeTestSide);
 
 	// A position query at a cell centre has to answer that cell, or every
 	// consumer of the bake is reading it half a cell off the ground it describes.
@@ -285,15 +294,15 @@ bool FEnvironmentBakeSamplingTest::RunTest(const FString& Parameters)
 		const int32 Column = 3 + Step * 2;
 		const int32 Row = 5 + Step;
 		const FVector2d Position = TestSamplePosition(Column, Row);
-		const double Sampled = Bake->Sample(EMassifBakeChannel::Wetness, Position);
-		const double Cell = Bake->ReadCell(EMassifBakeChannel::Wetness, Column, Row);
+		const double Sampled = State.SampleScalar(Wetness, Position);
+		const double Cell = State.ReadCell(Wetness, Column, Row);
 		WorstDifference = FMath::Max(WorstDifference, FMath::Abs(Sampled - Cell));
 	}
 	TestTrue(FString::Printf(TEXT("Sampling a cell centre reads that cell (worst %.6f)"), WorstDifference),
 		WorstDifference < 1.0e-6);
 
 	// Outside the world the bake clamps rather than reading off the end of its grid.
-	const double FarOutside = Bake->Sample(EMassifBakeChannel::Wetness, FVector2d(50000.0, -50000.0));
+	const double FarOutside = State.SampleScalar(Wetness, FVector2d(50000.0, -50000.0));
 	TestTrue(TEXT("Positions outside the world clamp to its border"), FarOutside >= 0.0 && FarOutside <= 1.0);
 	return true;
 }

@@ -16,7 +16,7 @@ namespace
 			RiverTestHalfWorldMeters - (Row + 0.5) * RiverTestSpacingMeters);
 	}
 
-	TSharedRef<const FMassifHeightmap> MakeHeightmap(TFunctionRef<double(FVector2d)> AltitudeAt)
+	TSharedRef<const FMassifHeightmap> MakeRiverNetworkHeightmap(TFunctionRef<double(FVector2d)> AltitudeAt)
 	{
 		TArray<double> Altitudes;
 		Altitudes.Reserve(RiverTestSide * RiverTestSide);
@@ -37,7 +37,7 @@ namespace
 	 */
 	TSharedRef<const FMassifHeightmap> MakeSingleValley()
 	{
-		return MakeHeightmap([](FVector2d Position)
+		return MakeRiverNetworkHeightmap([](FVector2d Position)
 		{
 			return 1500.0 + FMath::Abs(Position.X) * 0.4 + Position.Y * 0.15;
 		});
@@ -49,7 +49,7 @@ namespace
 	 */
 	TSharedRef<const FMassifHeightmap> MakeConfluence()
 	{
-		return MakeHeightmap([](FVector2d Position)
+		return MakeRiverNetworkHeightmap([](FVector2d Position)
 		{
 			// The two valley floors converge on X = 0 as they run south, so above
 			// the meeting point there are two channels and below it one.

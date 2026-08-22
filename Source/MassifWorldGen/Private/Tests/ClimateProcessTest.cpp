@@ -28,7 +28,7 @@ namespace
 		return Params;
 	}
 
-	FMassifAnalyticElevationSource::FParams MakeTerrain(
+	FMassifAnalyticElevationSource::FParams MakeClimateTerrain(
 		EMassifAnalyticTerrain Shape, double BearingDegrees, double ReliefMeters)
 	{
 		FMassifAnalyticElevationSource::FParams Params;
@@ -92,7 +92,7 @@ namespace
 		return SpanCelsius / ClimateTestQuantisationSteps;
 	}
 
-	double SampleChannel(
+	double SampleClimateChannel(
 		const FMassifEnvironmentScheduler& Scheduler, const FName& ChannelName, FVector2d PositionMeters)
 	{
 		const FMassifEnvironmentState& State = Scheduler.GetState();
@@ -102,8 +102,8 @@ namespace
 	/** Depth of the hollow the fill had to flood here: what the pooling term is keyed to. */
 	double BasinDepthMeters(const FMassifEnvironmentScheduler& Scheduler, FVector2d PositionMeters)
 	{
-		return SampleChannel(Scheduler, MassifEnvironmentChannels::FilledAltitude(), PositionMeters)
-			- SampleChannel(Scheduler, MassifEnvironmentChannels::Altitude(), PositionMeters);
+		return SampleClimateChannel(Scheduler, MassifEnvironmentChannels::FilledAltitude(), PositionMeters)
+			- SampleClimateChannel(Scheduler, MassifEnvironmentChannels::Altitude(), PositionMeters);
 	}
 
 	/** The model's pooling term, written out here rather than called, so the test states it. */
@@ -141,7 +141,7 @@ bool FClimateLapseRateTest::RunTest(const FString& Parameters)
 	// to give the rate back: the drop between two cells times the rate, against the
 	// altitude channel the solve itself read.
 	const TUniquePtr<FMassifEnvironmentScheduler> Plane =
-		SolveClimate(MakeTerrain(EMassifAnalyticTerrain::TiltedPlane, 0.0, 900.0), EMassifFidelity::Cheap);
+		SolveClimate(MakeClimateTerrain(EMassifAnalyticTerrain::TiltedPlane, 0.0, 900.0), EMassifFidelity::Cheap);
 
 	// The plane descends towards its bearing, and row 0 is north.
 	const FMassifChannelGrid Grid = TemperatureGrid(*Plane);
@@ -150,9 +150,9 @@ bool FClimateLapseRateTest::RunTest(const FString& Parameters)
 	const int32 HighRow = 3 * Grid.Height / 4;
 
 	const double LowAltitude =
-		SampleChannel(*Plane, MassifEnvironmentChannels::Altitude(), Grid.CellCentreMeters(Column, LowRow));
+		SampleClimateChannel(*Plane, MassifEnvironmentChannels::Altitude(), Grid.CellCentreMeters(Column, LowRow));
 	const double HighAltitude =
-		SampleChannel(*Plane, MassifEnvironmentChannels::Altitude(), Grid.CellCentreMeters(Column, HighRow));
+		SampleClimateChannel(*Plane, MassifEnvironmentChannels::Altitude(), Grid.CellCentreMeters(Column, HighRow));
 	TestTrue(
 		FString::Printf(TEXT("The two cells stand at different altitudes (%.1f m against %.1f m)"),
 			HighAltitude, LowAltitude),
@@ -178,7 +178,7 @@ bool FClimateOffTest::RunTest(const FString& Parameters)
 	// Off is the datum everywhere, over a kilometre of relief that would otherwise
 	// move it by six and a half degrees.
 	const TUniquePtr<FMassifEnvironmentScheduler> Uniform =
-		SolveClimate(MakeTerrain(EMassifAnalyticTerrain::Cone, 0.0, 1000.0), EMassifFidelity::Off);
+		SolveClimate(MakeClimateTerrain(EMassifAnalyticTerrain::Cone, 0.0, 1000.0), EMassifFidelity::Off);
 
 	const FMassifEnvironmentState& State = Uniform->GetState();
 	const FMassifChannelHandle Channel = TemperatureChannel(*Uniform);
@@ -204,7 +204,7 @@ bool FClimateRidgeAspectTest::RunTest(const FString& Parameters)
 	// measured against the insolation the sun channel actually holds rather than
 	// against a guess at what it should hold.
 	const TUniquePtr<FMassifEnvironmentScheduler> Ridge =
-		SolveClimate(MakeTerrain(EMassifAnalyticTerrain::Ridge, 90.0, 1200.0), EMassifFidelity::Standard);
+		SolveClimate(MakeClimateTerrain(EMassifAnalyticTerrain::Ridge, 90.0, 1200.0), EMassifFidelity::Standard);
 
 	const FMassifChannelGrid Grid = TemperatureGrid(*Ridge);
 	const int32 Column = Grid.Width / 2;
@@ -214,8 +214,8 @@ bool FClimateRidgeAspectTest::RunTest(const FString& Parameters)
 	const FVector2d NorthPosition = Grid.CellCentreMeters(Column, NorthRow);
 	const FVector2d SouthPosition = Grid.CellCentreMeters(Column, SouthRow);
 	TestEqual(TEXT("The two flanks stand at the same altitude"),
-		SampleChannel(*Ridge, MassifEnvironmentChannels::Altitude(), SouthPosition),
-		SampleChannel(*Ridge, MassifEnvironmentChannels::Altitude(), NorthPosition));
+		SampleClimateChannel(*Ridge, MassifEnvironmentChannels::Altitude(), SouthPosition),
+		SampleClimateChannel(*Ridge, MassifEnvironmentChannels::Altitude(), NorthPosition));
 
 	const double SouthCelsius = TemperatureAtCell(*Ridge, Column, SouthRow);
 	const double NorthCelsius = TemperatureAtCell(*Ridge, Column, NorthRow);
@@ -225,8 +225,8 @@ bool FClimateRidgeAspectTest::RunTest(const FString& Parameters)
 		SouthCelsius > NorthCelsius);
 
 	const double InsolationGap =
-		SampleChannel(*Ridge, MassifEnvironmentChannels::DirectInsolation(), SouthPosition)
-		- SampleChannel(*Ridge, MassifEnvironmentChannels::DirectInsolation(), NorthPosition);
+		SampleClimateChannel(*Ridge, MassifEnvironmentChannels::DirectInsolation(), SouthPosition)
+		- SampleClimateChannel(*Ridge, MassifEnvironmentChannels::DirectInsolation(), NorthPosition);
 	const double ExpectedCelsius = FMassifClimateParams().InsolationGainCelsius * InsolationGap;
 	TestTrue(
 		FString::Printf(TEXT("And by what the insolation between them is worth (%.4f C against %.4f C)"),
@@ -248,7 +248,7 @@ bool FClimateColdAirPoolingTest::RunTest(const FString& Parameters)
 	// does not, so a deep enough hollow is warm at the bottom again. The sun is off
 	// so that nothing but the pooling term separates the two runs.
 	const FMassifAnalyticElevationSource::FParams Terrain =
-		MakeTerrain(EMassifAnalyticTerrain::Pit, 0.0, 60.0);
+		MakeClimateTerrain(EMassifAnalyticTerrain::Pit, 0.0, 60.0);
 	const TUniquePtr<FMassifEnvironmentScheduler> Unpooled =
 		SolveClimate(Terrain, EMassifFidelity::Standard, EMassifFidelity::Off);
 	const TUniquePtr<FMassifEnvironmentScheduler> Pooled =
@@ -262,8 +262,8 @@ bool FClimateColdAirPoolingTest::RunTest(const FString& Parameters)
 	const FVector2d FloorPosition = Grid.CellCentreMeters(FloorColumn, Row);
 	const FVector2d RimPosition = Grid.CellCentreMeters(RimColumn, Row);
 	const double FloorAltitude =
-		SampleChannel(*Pooled, MassifEnvironmentChannels::Altitude(), FloorPosition);
-	const double RimAltitude = SampleChannel(*Pooled, MassifEnvironmentChannels::Altitude(), RimPosition);
+		SampleClimateChannel(*Pooled, MassifEnvironmentChannels::Altitude(), FloorPosition);
+	const double RimAltitude = SampleClimateChannel(*Pooled, MassifEnvironmentChannels::Altitude(), RimPosition);
 
 	const double LapseCelsius =
 		FMassifClimateParams().LapseRateCelsiusPerMeter * (RimAltitude - FloorAltitude);
@@ -305,7 +305,7 @@ bool FClimateChannelAtEveryFidelityTest::RunTest(const FString& Parameters)
 	for (EMassifFidelity Fidelity : Fidelities)
 	{
 		const TUniquePtr<FMassifEnvironmentScheduler> Solved =
-			SolveClimate(MakeTerrain(EMassifAnalyticTerrain::Pit, 0.0, 300.0), Fidelity);
+			SolveClimate(MakeClimateTerrain(EMassifAnalyticTerrain::Pit, 0.0, 300.0), Fidelity);
 		const FMassifChannelHandle Channel = TemperatureChannel(*Solved);
 		TestTrue(
 			FString::Printf(TEXT("The channel exists at %s"), MassifFidelityName(Fidelity)), Channel.IsValid());
