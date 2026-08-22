@@ -447,6 +447,14 @@ when cells change) with the deformation RT for close-range detail.
   swapped.
 - Git LFS for binary content. `Binaries/`, `Intermediate/`, `Saved/`,
   `DerivedDataCache/` never committed.
+- Trees are grown, not modelled. The flora simulation
+  (`../massif-flora-simulation`) writes one OBJ per detail level plus a baked
+  impostor atlas; `Tools/flora_obj_to_gltf.py` converts that into
+  `Content/Models/Flora/<Name>/` with a manifest, and `task flora` builds
+  `/Game/Models/Flora/SM_<Name>` from the manifest — a single static mesh
+  whose LODs are the simulation's own levels, the last a camera-facing
+  impostor quad reading an eight-yaw atlas. A species draws its placeholder
+  until its mesh exists, so grown models arrive one species at a time.
 
 ## 12. World Scale (decided)
 

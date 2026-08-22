@@ -36,7 +36,8 @@ namespace
 	/** One colour per EMassifGroundType, in the enum's own order. */
 	const FLinearColor GroundTypeColors[] = {
 		FLinearColor(0.46f, 0.45f, 0.44f), FLinearColor(0.73f, 0.63f, 0.47f), FLinearColor(0.29f, 0.51f, 0.21f),
-		FLinearColor(0.19f, 0.56f, 0.56f), FLinearColor(0.96f, 0.97f, 0.99f) };
+		FLinearColor(0.19f, 0.56f, 0.56f), FLinearColor(0.96f, 0.97f, 0.99f),
+		FLinearColor(0.09f, 0.28f, 0.72f) };
 
 	static_assert(UE_ARRAY_COUNT(GroundTypeColors) == static_cast<int32>(EMassifGroundType::Count),
 		"Every ground type needs a debug colour");

@@ -59,3 +59,8 @@ tasks:
     desc: Import downloaded Poly Haven vegetation models as Nanite static meshes
     cmds:
       - UnrealEditor-Cmd {{.PROJECT}} -run=pythonscript -script={{.TASKFILE_DIR}}/Tools/create_foliage_content.py -unattended -nosplash -nullrhi
+
+  flora:
+    desc: Build the grown flora trees under Content/Models/Flora into LOD static meshes
+    cmds:
+      - UnrealEditor-Cmd {{.PROJECT}} -run=pythonscript -script={{.TASKFILE_DIR}}/Tools/create_flora_content.py -unattended -nosplash -nullrhi

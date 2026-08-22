@@ -1,0 +1,161 @@
+{
+ "format": "massif-flora-model",
+ "version": 1,
+ "name": "PiceaAbies",
+ "species": "Norway Spruce",
+ "source": {
+  "preset": "presets/spruce.json",
+  "seed": 3,
+  "steps": 30
+ },
+ "heightMeters": 15.115,
+ "alphaCutoff": 0.5,
+ "materials": [
+  {
+   "name": "bark",
+   "role": "bark",
+   "textures": {
+    "color": "textures/PiceaAbies_Bark.png"
+   }
+  },
+  {
+   "name": "foliage_0",
+   "role": "foliage",
+   "textures": {
+    "color": "textures/PiceaAbies_Foliage0.png"
+   }
+  },
+  {
+   "name": "foliage_1",
+   "role": "foliage",
+   "textures": {
+    "color": "textures/PiceaAbies_Foliage1.png"
+   }
+  },
+  {
+   "name": "foliage_2",
+   "role": "foliage",
+   "textures": {
+    "color": "textures/PiceaAbies_Foliage2.png"
+   }
+  },
+  {
+   "name": "foliage_3",
+   "role": "foliage",
+   "textures": {
+    "color": "textures/PiceaAbies_Foliage3.png"
+   }
+  },
+  {
+   "name": "impostor",
+   "role": "impostor",
+   "textures": {
+    "color": "textures/PiceaAbies_Impostor.png",
+    "normal": "textures/PiceaAbies_ImpostorNormal.png"
+   },
+   "atlas": {
+    "columns": 4,
+    "rows": 2,
+    "angles": 8
+   }
+  }
+ ],
+ "levels": [
+  {
+   "level": 0,
+   "file": "PiceaAbies_LOD0.gltf",
+   "screenSize": 1.0,
+   "materials": [
+    "bark",
+    "foliage_0",
+    "foliage_1",
+    "foliage_2",
+    "foliage_3"
+   ],
+   "vertices": 9954,
+   "triangles": 5948,
+   "boundsMin": [
+    -3.9191,
+    0.0,
+    -3.4378
+   ],
+   "boundsMax": [
+    3.1072,
+    15.1145,
+    4.1287
+   ],
+   "heightMeters": 15.115
+  },
+  {
+   "level": 1,
+   "file": "PiceaAbies_LOD1.gltf",
+   "screenSize": 0.4,
+   "materials": [
+    "bark",
+    "foliage_0",
+    "foliage_1",
+    "foliage_2",
+    "foliage_3"
+   ],
+   "vertices": 4011,
+   "triangles": 2921,
+   "boundsMin": [
+    -3.1675,
+    0.0,
+    -2.8244
+   ],
+   "boundsMax": [
+    2.9813,
+    14.3417,
+    3.155
+   ],
+   "heightMeters": 14.342
+  },
+  {
+   "level": 2,
+   "file": "PiceaAbies_LOD2.gltf",
+   "screenSize": 0.15,
+   "materials": [
+    "bark",
+    "foliage_0",
+    "foliage_1",
+    "foliage_2",
+    "foliage_3"
+   ],
+   "vertices": 2545,
+   "triangles": 2115,
+   "boundsMin": [
+    -3.3558,
+    0.0,
+    -2.9851
+   ],
+   "boundsMax": [
+    2.8371,
+    14.3417,
+    3.3621
+   ],
+   "heightMeters": 14.342
+  },
+  {
+   "level": 3,
+   "file": "PiceaAbies_LOD3.gltf",
+   "screenSize": 0.05,
+   "materials": [
+    "impostor"
+   ],
+   "vertices": 4,
+   "triangles": 2,
+   "boundsMin": [
+    -3.7341,
+    0.0,
+    0.0231
+   ],
+   "boundsMax": [
+    3.811,
+    14.3375,
+    0.0231
+   ],
+   "heightMeters": 14.337
+  }
+ ]
+}

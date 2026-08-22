@@ -56,6 +56,24 @@ namespace
 		return FMassifSeed(MasterSeed).MakeChannelSeed(Layer.Name);
 	}
 
+	/**
+	 * How much the ground's angle counts against a layer.
+	 *
+	 * Not at all under a river. A channel bed is as steep as the cross-section cut
+	 * for it — a brook a metre wide has banks at forty degrees — and that says
+	 * nothing about what is lying on the bottom of it. Everywhere else the angle is
+	 * exactly what decides between a face, a scree and a meadow.
+	 */
+	double SlopeFit(const FMassifSurfaceLayer& Layer, const FMassifHabitatSample& Habitat)
+	{
+		if (Habitat.GroundType == EMassifGroundType::Water)
+		{
+			return 1.0;
+		}
+		return MassifBandWeight(
+			Habitat.SlopeDegrees, Layer.MinSlopeDegrees, Layer.MaxSlopeDegrees, Layer.SlopeFadeDegrees);
+	}
+
 	/** How well one layer suits the ground, before the patch noise breaks ties. */
 	double HabitatFit(const FMassifSurfaceLayer& Layer, const FMassifHabitatSample& Habitat)
 	{
@@ -71,9 +89,7 @@ namespace
 			Layer.TemperatureFadeCelsius);
 		const double Humidity = MassifBandWeight(
 			Habitat.Humidity, Layer.MinHumidity, Layer.MaxHumidity, Layer.HumidityFade);
-		const double Slope = MassifBandWeight(
-			Habitat.SlopeDegrees, Layer.MinSlopeDegrees, Layer.MaxSlopeDegrees, Layer.SlopeFadeDegrees);
-		return Temperature * Humidity * Slope;
+		return Temperature * Humidity * SlopeFit(Layer, Habitat);
 	}
 
 	double LayerWeight(
@@ -128,9 +144,7 @@ namespace
 		{
 			return 0.0;
 		}
-		const double Slope = MassifBandWeight(
-			Habitat.SlopeDegrees, Layer.MinSlopeDegrees, Layer.MaxSlopeDegrees, Layer.SlopeFadeDegrees);
-		return Slope * Layer.Abundance;
+		return SlopeFit(Layer, Habitat) * Layer.Abundance;
 	}
 
 	FLayerRanking RankBySlopeOnly(const FMassifHabitatSample& Habitat)

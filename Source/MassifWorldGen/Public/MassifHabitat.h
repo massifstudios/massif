@@ -13,6 +13,10 @@ enum class EMassifGroundType : uint8
 	Soil,
 	Wetland,
 	PermanentSnow,
+
+	/** The wetted bed of a channel. Nothing roots in a river, whatever else is true of the ground. */
+	Water,
+
 	Count
 };
 
@@ -29,6 +33,7 @@ namespace MassifGround
 	inline constexpr uint32 Soil = MassifGroundTypeBit(EMassifGroundType::Soil);
 	inline constexpr uint32 Wetland = MassifGroundTypeBit(EMassifGroundType::Wetland);
 	inline constexpr uint32 PermanentSnow = MassifGroundTypeBit(EMassifGroundType::PermanentSnow);
+	inline constexpr uint32 Water = MassifGroundTypeBit(EMassifGroundType::Water);
 }
 
 /** The growing conditions at one point on the surface. */
@@ -51,6 +56,17 @@ struct FMassifHabitatSample
 
 	/** Water standing on the surface: a tarn, a pond, or a boggy hollow. */
 	double StandingWaterDepthMeters = 0.0;
+
+	/**
+	 * Metres out from the wetted edge of the nearest river, negative in the water
+	 * and enormous where there is no channel within reach.
+	 *
+	 * Standing water above does not cover this: the depression fill only finds
+	 * hollows water cannot leave, and a river is water that is leaving. Without it
+	 * the whole channel network reads as ordinary damp ground, and trees are
+	 * planted in it.
+	 */
+	double ChannelDistanceMeters = TNumericLimits<double>::Max();
 
 	EMassifGroundType GroundType = EMassifGroundType::Soil;
 };
@@ -113,6 +129,9 @@ public:
 private:
 	/** Large-scale wet and dry regions, -1 to 1, so one massif is not uniformly damp. */
 	double SampleWeatherVariation(FVector2d PositionMeters) const;
+
+	/** Distance to the nearest channel, from the river field the terrain was carved with. */
+	double SampleChannelDistanceMeters(FVector2d PositionMeters) const;
 
 	TSharedRef<const FMassifTerrainField> TerrainField;
 	TSharedRef<const FMassifEnvironmentBake> EnvironmentBake;

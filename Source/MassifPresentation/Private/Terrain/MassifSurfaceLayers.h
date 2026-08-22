@@ -260,14 +260,15 @@ namespace MassifSurface
 			.TextureSet = TEXT("DryRiverPebbles"),
 			.TileMeters = 2.5,
 			.ReliefMeters = 0.04,
-			// The bars a braided channel leaves dry between floods.
+			// The bars a braided channel leaves dry between floods, which is most of
+			// what a bank is made of.
 			.MinTemperatureCelsius = 5.0,
 			.TemperatureFadeCelsius = 1.6,
 			.MinHumidity = 0.35,
-			.MaxHumidity = 0.85,
+			.MaxHumidity = 1.2,
 			.MaxSlopeDegrees = 16.0,
 			.SlopeFadeDegrees = 5.0,
-			.GroundTypeMask = MassifGround::Scree | MassifGround::Soil,
+			.GroundTypeMask = MassifGround::Scree | MassifGround::Soil | MassifGround::Wetland,
 			.Abundance = 1.0,
 			.PatchWavelengthMeters = 55.0,
 		},
@@ -277,12 +278,16 @@ namespace MassifSurface
 			.TextureSet = TEXT("RiverSmallRocks"),
 			.TileMeters = 2.5,
 			.ReliefMeters = 0.06,
-			// The wetted bed itself, which is why the humidity floor is so high.
+			// The wetted bed itself, which is why the humidity floor is so high and
+			// why this is the one layer that covers the bed of a channel. Nothing
+			// else in the table takes Water, so the ground under a river would
+			// otherwise fall through to whatever the fallback happened to rank first.
 			.MinHumidity = 0.72,
 			.HumidityFade = 0.10,
 			.MaxSlopeDegrees = 14.0,
 			.SlopeFadeDegrees = 5.0,
-			.GroundTypeMask = MassifGround::Scree | MassifGround::Wetland | MassifGround::Soil,
+			.GroundTypeMask =
+				MassifGround::Water | MassifGround::Scree | MassifGround::Wetland | MassifGround::Soil,
 			.Abundance = 1.4,
 			.PatchWavelengthMeters = 45.0,
 		},

@@ -1,6 +1,7 @@
 #include "MassifHabitat.h"
 
 #include "MassifEnvironmentBake.h"
+#include "MassifRiverField.h"
 #include "MassifSeed.h"
 #include "MassifTerrainField.h"
 #include "MassifValueNoise.h"
@@ -54,6 +55,26 @@ namespace
 
 		/** Water standing this deep makes the ground it covers wetland whatever else it is. */
 		constexpr double PondedWaterMeters = 0.1;
+
+		/**
+		 * How far out from a channel the ground it drains keeps a water table near
+		 * the surface: the gravel bars, the alder gallery, the willow scrub. Not
+		 * scaled to the channel — a brook and a river both wet about a bank's width
+		 * of ground, because what sets it is how far the water table spreads
+		 * sideways rather than how much water is going past.
+		 */
+		constexpr double RiparianReachMeters = 4.0;
+
+		/**
+		 * Share of that reach the water table is at the surface across before it
+		 * starts dropping away. A margin that peaked at the waterline and fell off
+		 * immediately would be saturated nowhere a plant could stand, and the alder
+		 * and willow that want it would never be placed at all.
+		 */
+		constexpr double RiparianCoreFraction = 0.45;
+
+		/** How damp the ground immediately beside a channel is, whatever the catchment above says. */
+		constexpr double RiparianHumidity = 0.95;
 
 		constexpr double PermanentSnowTemperatureCelsius = 0.0;
 		constexpr double WetlandHumidity = 0.8;
@@ -112,15 +133,37 @@ namespace
 		return FMath::Clamp(Humidity, 0.0, 1.0);
 	}
 
+	/** 1 across the wet margin beside a channel, falling to 0 at the far side of the bank. */
+	double RiparianWeight(double ChannelDistanceMeters)
+	{
+		const double CoreMeters = Climate::RiparianCoreFraction * Climate::RiparianReachMeters;
+		if (ChannelDistanceMeters <= CoreMeters)
+		{
+			return 1.0;
+		}
+		if (ChannelDistanceMeters >= Climate::RiparianReachMeters)
+		{
+			return 0.0;
+		}
+
+		const double Fraction =
+			(ChannelDistanceMeters - CoreMeters) / (Climate::RiparianReachMeters - CoreMeters);
+		return 1.0 - Fraction * Fraction * (3.0 - 2.0 * Fraction);
+	}
+
 	/**
-	 * What the surface is made of. Order matters: a face steep enough to shed
-	 * everything is rock however deep the soil elsewhere, only ground that snow
-	 * can settle on stays under it year round, and past those two it is the soil
-	 * the water left that decides — bare rock, loose debris, or ground a root
-	 * can hold in.
+	 * What the surface is made of. Order matters: a channel is a channel whatever
+	 * the ground around it is doing, a face steep enough to shed everything is rock
+	 * however deep the soil elsewhere, only ground that snow can settle on stays
+	 * under it year round, and past those it is the soil the water left that
+	 * decides — bare rock, loose debris, or ground a root can hold in.
 	 */
 	EMassifGroundType ClassifyGround(const FMassifHabitatSample& Habitat)
 	{
+		if (Habitat.ChannelDistanceMeters <= 0.0)
+		{
+			return EMassifGroundType::Water;
+		}
 		if (Habitat.SlopeDegrees >= Climate::RockSlopeDegrees)
 		{
 			return EMassifGroundType::Rock;
@@ -128,6 +171,12 @@ namespace
 		if (Habitat.TemperatureCelsius <= Climate::PermanentSnowTemperatureCelsius)
 		{
 			return EMassifGroundType::PermanentSnow;
+		}
+		// The bank the channel keeps wet: gravel the water reworks, and the alder
+		// and willow that hold it.
+		if (Habitat.ChannelDistanceMeters < Climate::RiparianReachMeters)
+		{
+			return EMassifGroundType::Wetland;
 		}
 		if (Habitat.StandingWaterDepthMeters >= Climate::PondedWaterMeters)
 		{
@@ -184,8 +233,31 @@ FMassifHabitatSample FMassifHabitatField::Sample(FVector2d PositionMeters, doubl
 		Windwardness,
 		SampleWeatherVariation(PositionMeters));
 
+	Habitat.ChannelDistanceMeters = SampleChannelDistanceMeters(PositionMeters);
+	// Ground beside running water is wet whatever the catchment above it says,
+	// which is what puts the gallery of alder and willow along a channel rather
+	// than leaving it to whatever the hillside behind is growing.
+	Habitat.Humidity = FMath::Max(
+		Habitat.Humidity,
+		Climate::RiparianHumidity * RiparianWeight(Habitat.ChannelDistanceMeters));
+
 	Habitat.GroundType = ClassifyGround(Habitat);
 	return Habitat;
+}
+
+/**
+ * The rivers the terrain was carved for, read back through the same field that
+ * carved it. Habitat and ground therefore agree about where a channel is by
+ * construction rather than by two thresholds being kept in step.
+ */
+double FMassifHabitatField::SampleChannelDistanceMeters(FVector2d PositionMeters) const
+{
+	const FMassifRiverField* RiverField = TerrainField->GetRiverField();
+	if (RiverField == nullptr)
+	{
+		return TNumericLimits<double>::Max();
+	}
+	return RiverField->SampleSignedDistanceMeters(PositionMeters);
 }
 
 double FMassifHabitatField::SampleWeatherVariation(FVector2d PositionMeters) const
