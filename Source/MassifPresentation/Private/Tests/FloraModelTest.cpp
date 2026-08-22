@@ -26,7 +26,7 @@ namespace
 		{TEXT("PiceaAbies"), SpruceScreenSizes, 2},
 	};
 
-	const FMassifFoliageSpecies* FindSpecies(const TCHAR* Name)
+	const FMassifFoliageSpecies* FindGrownModelSpecies(const TCHAR* Name)
 	{
 		for (const FMassifFoliageSpecies& Species : MassifFoliage::Species)
 		{
@@ -47,7 +47,7 @@ bool FFloraModelTest::RunTest(const FString& Parameters)
 {
 	for (const FGrownModel& Model : GrownModels)
 	{
-		const FMassifFoliageSpecies* Species = FindSpecies(Model.SpeciesName);
+		const FMassifFoliageSpecies* Species = FindGrownModelSpecies(Model.SpeciesName);
 		if (!TestNotNull(FString::Printf(TEXT("%s is in the foliage table"), Model.SpeciesName), Species))
 		{
 			continue;
