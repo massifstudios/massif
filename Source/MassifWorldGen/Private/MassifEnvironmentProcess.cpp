@@ -57,6 +57,15 @@ FMassifChannelHandle FMassifEnvironmentContext::GetInput(FName ChannelName) cons
 	return Channel;
 }
 
+FMassifChannelHandle FMassifEnvironmentContext::FindOptionalInput(FName ChannelName) const
+{
+	checkf(
+		Declaration.OptionalInputChannels.Contains(ChannelName),
+		TEXT("Process %s read channel %s without declaring it as an optional input"),
+		*Declaration.Name.ToString(), *ChannelName.ToString());
+	return State.FindChannel(ChannelName);
+}
+
 FMassifChannelHandle FMassifEnvironmentContext::GetOutput(FName ChannelName) const
 {
 	const bool bDeclared = Declaration.OutputChannels.ContainsByPredicate(

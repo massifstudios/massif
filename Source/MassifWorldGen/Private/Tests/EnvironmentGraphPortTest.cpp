@@ -45,6 +45,11 @@ namespace
 		Params.CellSizeMeters = PortTestSpacingMeters;
 		Params.DropletsPerCell = 0.25;
 		Params.MaxDropletSteps = 32;
+
+		// The port is what is being measured, so the soil must be what the droplets
+		// left and nothing else. Roots hold soil where vegetation grows, and that is
+		// a later milestone's business, not this one's.
+		Params.VegetationSoilRetention = 0.0;
 		return Params;
 	}
 

@@ -1,5 +1,7 @@
 #include "MassifWindProcesses.h"
 
+#include "MassifVegetationProcesses.h"
+
 #include "MassifEnvironmentGraph.h"
 
 namespace MassifEnvironmentChannels
@@ -304,7 +306,8 @@ private:
 	void SolveRow(
 		const FWindTerrain& Terrain, const FSynopticWind& Wind, const FMassifWindParams& RunParams,
 		const FMassifChannelGrid& Grid, int32 Row, EMassifFidelity Fidelity, TArrayView<double> OutExposure,
-		TArrayView<double> OutEastward, TArrayView<double> OutNorthward) const;
+		TArrayView<double> OutEastward, TArrayView<double> OutNorthward,
+		TFunctionRef<double(FVector2d)> CanopyAt) const;
 
 	FMassifWindParams Params;
 };
@@ -339,6 +342,11 @@ FMassifProcessDeclaration FWindFieldProcess::Declare() const
 	FMassifProcessDeclaration Declaration;
 	Declaration.Name = MassifEnvironmentProcesses::Wind();
 	Declaration.InputChannels = {MassifEnvironmentChannels::Altitude()};
+	Declaration.OptionalInputChannels = {MassifEnvironmentChannels::VegetationCanopy()};
+
+	// Vegetation reads the snow this wind moves, so the scheduler finds a cycle
+	// through it and has to be told it is meant.
+	Declaration.bParticipatesInFeedback = true;
 	Declaration.SupportedFidelities = {
 		EMassifFidelity::Cheap, EMassifFidelity::Standard, EMassifFidelity::Reference};
 	Declaration.OutputChannels.Add(MakeExposureChannel());
@@ -372,7 +380,8 @@ void FWindFieldProcess::WriteSynoptic(FMassifEnvironmentContext& Context, const 
 void FWindFieldProcess::SolveRow(
 	const FWindTerrain& Terrain, const FSynopticWind& Wind, const FMassifWindParams& RunParams,
 	const FMassifChannelGrid& Grid, int32 Row, EMassifFidelity Fidelity, TArrayView<double> OutExposure,
-	TArrayView<double> OutEastward, TArrayView<double> OutNorthward) const
+	TArrayView<double> OutEastward, TArrayView<double> OutNorthward,
+	TFunctionRef<double(FVector2d)> CanopyAt) const
 {
 	const bool bTerrainSteers = Fidelity != EMassifFidelity::Cheap;
 
@@ -382,10 +391,12 @@ void FWindFieldProcess::SolveRow(
 		const FWindSample Sample =
 			SolveWindAt(Terrain, Position, Wind, Grid.CellSizeMeters, bTerrainSteers, RunParams);
 
+		const double Drag = 1.0 - RunParams.CanopyDragFraction * CanopyAt(Position);
+
 		const int32 CellIndex = Row * Grid.Width + Column;
 		OutExposure[CellIndex] = Sample.Exposure;
-		OutEastward[CellIndex] = Sample.FieldMetersPerSecond.X;
-		OutNorthward[CellIndex] = Sample.FieldMetersPerSecond.Y;
+		OutEastward[CellIndex] = Sample.FieldMetersPerSecond.X * Drag;
+		OutNorthward[CellIndex] = Sample.FieldMetersPerSecond.Y * Drag;
 	}
 }
 
@@ -405,12 +416,24 @@ void FWindFieldProcess::Execute(FMassifEnvironmentContext& Context, EMassifFidel
 		Context.OpenOutput(MassifEnvironmentChannels::WindExposure());
 	const TUniquePtr<FMassifChannelWriteScope> Field = Context.OpenOutput(MassifEnvironmentChannels::WindField());
 
+	const FMassifEnvironmentState& State = Context.GetState();
+	const FMassifChannelHandle Canopy =
+		Context.FindOptionalInput(MassifEnvironmentChannels::VegetationCanopy());
+	const auto CanopyAt = [&State, Canopy](FVector2d Position)
+	{
+		if (!Canopy.IsValid())
+		{
+			return 0.0;
+		}
+		return State.SampleScalar(Canopy, Position);
+	};
+
 	const FMassifChannelGrid& Grid = Exposure->GetGrid();
 	for (int32 Row = 0; Row < Grid.Height; ++Row)
 	{
 		SolveRow(
 			Terrain, Wind, RunParams, Grid, Row, Fidelity, Exposure->GetComponent(0), Field->GetComponent(0),
-			Field->GetComponent(1));
+			Field->GetComponent(1), CanopyAt);
 	}
 
 	Exposure->Commit();

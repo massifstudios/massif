@@ -279,8 +279,23 @@ bool FMassifEnvironmentScheduler::BuildDependencyEdges(
 			}
 			DependentsOfNode[*ProducerIndex].AddUnique(NodeIndex);
 		}
+
+		AddOptionalDependencies(ProducerOfChannel, NodeIndex);
 	}
 	return true;
+}
+
+void FMassifEnvironmentScheduler::AddOptionalDependencies(
+	const TMap<FName, int32>& ProducerOfChannel, int32 NodeIndex)
+{
+	for (FName InputName : Nodes[NodeIndex].Declaration.OptionalInputChannels)
+	{
+		const int32* ProducerIndex = ProducerOfChannel.Find(InputName);
+		if (ProducerIndex != nullptr)
+		{
+			DependentsOfNode[*ProducerIndex].AddUnique(NodeIndex);
+		}
+	}
 }
 
 void FMassifEnvironmentScheduler::RegisterOutputChannels()

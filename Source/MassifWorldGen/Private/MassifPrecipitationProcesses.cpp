@@ -181,6 +181,10 @@ FMassifProcessDeclaration FPrecipitationProcess::Declare() const
 	Declaration.SupportedFidelities = {
 		EMassifFidelity::Cheap, EMassifFidelity::Standard, EMassifFidelity::Reference};
 
+	// The wind it reads is slowed by a canopy that grows on the snow this feeds, so
+	// precipitation sits inside the loop whether or not it closes one itself.
+	Declaration.bParticipatesInFeedback = true;
+
 	Declaration.OutputChannels.Add(MakeChannel(
 		MassifEnvironmentChannels::AnnualPrecipitation(), TEXT("mm/yr"), Params.CellSizeMeters,
 		EMassifChannelColorMap::BlueWhite));

@@ -159,6 +159,7 @@ private:
 	bool MapProducers(TMap<FName, int32>& OutProducerOfChannel, FString& OutError) const;
 	bool ValidateFidelities(FString& OutError) const;
 	bool BuildDependencyEdges(const TMap<FName, int32>& ProducerOfChannel, FString& OutError);
+	void AddOptionalDependencies(const TMap<FName, int32>& ProducerOfChannel, int32 NodeIndex);
 	bool BuildGroups(FString& OutError);
 	void RegisterOutputChannels();
 

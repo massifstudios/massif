@@ -14,6 +14,16 @@
 struct FMassifWindParams
 {
 	/**
+	 * Share of the wind a fully closed canopy takes out of the flow.
+	 *
+	 * Canopy slows the wind that redistributes the snow that decides where canopy
+	 * grows, which is why snow under trees lies deep and undrifted. Reading zero -
+	 * what an unwritten vegetation channel gives on the loop's first round - leaves
+	 * the flow exactly as the terrain shaped it.
+	 */
+	double CanopyDragFraction = 0.55;
+
+	/**
 	 * Cells the wind channels are solved at. Coarse like the rest of the climate:
 	 * the flow is turned by whole flanks and crests rather than by anything a few
 	 * metres across, and the exposure sweep costs cells times steps.

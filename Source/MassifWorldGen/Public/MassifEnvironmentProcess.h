@@ -43,6 +43,18 @@ struct FMassifProcessDeclaration
 	/** Channels read. Reading anything else is rejected, so the graph's edges are the real ones. */
 	TArray<FName> InputChannels;
 
+	/**
+	 * Channels read where something produces them, and absent otherwise.
+	 *
+	 * This is what lets a system couple back to one downstream of it without
+	 * making that system compulsory: wind is slowed by a canopy when vegetation is
+	 * in the graph, and is simply the wind the terrain shaped when it is not. The
+	 * scheduler adds the dependency edge only where a producer exists, so the two
+	 * arrangements are both valid graphs rather than one being a broken version of
+	 * the other.
+	 */
+	TArray<FName> OptionalInputChannels;
+
 	/** Channels written. Registered with the state when the schedule is built. */
 	TArray<FMassifChannelDescriptor> OutputChannels;
 
@@ -100,6 +112,9 @@ public:
 
 	/** Handle of a declared input. An undeclared name is a failure, not an empty handle. */
 	FMassifChannelHandle GetInput(FName ChannelName) const;
+
+	/** Handle of a declared optional input, invalid where nothing in this graph produces it. */
+	FMassifChannelHandle FindOptionalInput(FName ChannelName) const;
 
 	/** Handle of a declared output, for reading back what this process has already written. */
 	FMassifChannelHandle GetOutput(FName ChannelName) const;

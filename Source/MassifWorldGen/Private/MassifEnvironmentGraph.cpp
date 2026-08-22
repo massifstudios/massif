@@ -3,7 +3,9 @@
 #include "MassifEnvironmentBakeGrid.h"
 #include "MassifClimateProcesses.h"
 #include "MassifPrecipitationProcesses.h"
+#include "MassifSnowProcesses.h"
 #include "MassifSunProcesses.h"
+#include "MassifVegetationProcesses.h"
 #include "MassifWindProcesses.h"
 #include "MassifRiverNetwork.h"
 
@@ -157,7 +159,7 @@ namespace
 		Scope.Commit();
 	}
 
-	void WriteConstant(FMassifChannelWriteScope& Scope, double Value)
+	void FillWithConstant(FMassifChannelWriteScope& Scope, double Value)
 	{
 		TArrayView<double> Scratch = Scope.GetComponent(0);
 		for (int32 CellIndex = 0; CellIndex < Scratch.Num(); ++CellIndex)
@@ -292,7 +294,7 @@ namespace
 				Context.OpenOutput(MassifEnvironmentChannels::StandingWaterDepth());
 			if (Fidelity == EMassifFidelity::Off)
 			{
-				WriteConstant(*Scope, 0.0);
+				FillWithConstant(*Scope, 0.0);
 				return;
 			}
 
@@ -339,7 +341,7 @@ namespace
 			if (Fidelity == EMassifFidelity::Off)
 			{
 				// Every cell drains itself and nothing else: no catchment anywhere.
-				WriteConstant(*Scope, Grid.CellAreaSquareMeters());
+				FillWithConstant(*Scope, Grid.CellAreaSquareMeters());
 				return;
 			}
 
@@ -363,11 +365,48 @@ namespace
 			FMassifProcessDeclaration Declaration;
 			Declaration.Name = MassifEnvironmentProcesses::SoilDepth();
 			Declaration.InputChannels = {MassifEnvironmentChannels::FilledAltitude()};
+			Declaration.OptionalInputChannels = {MassifEnvironmentChannels::VegetationCover()};
 			Declaration.SupportedFidelities = {EMassifFidelity::Standard};
+
+			// Vegetation reads the soil this writes, so the scheduler finds a cycle
+			// here and has to be told it is meant.
+			Declaration.bParticipatesInFeedback = true;
 			Declaration.OutputChannels.Add(MakeChannel(
 				MassifEnvironmentChannels::SoilDepth(), EMassifChannelEncoding::Uint16, Params.CellSizeMeters,
 				TEXT("m"), EMassifChannelColorMap::Magma));
 			return Declaration;
+		}
+
+		/** Nothing where no vegetation is in the graph at all, which leaves the soil untouched. */
+		static double CoverAt(
+			const FMassifEnvironmentContext& Context, FMassifChannelHandle Cover, const FMassifChannelGrid& Grid,
+			int32 CellIndex)
+		{
+			if (!Cover.IsValid())
+			{
+				return 0.0;
+			}
+			const FVector2d Position = Grid.CellCentreMeters(CellIndex % Grid.Width, CellIndex / Grid.Width);
+			return Context.GetState().SampleScalar(Cover, Position);
+		}
+
+		/** Ground that grew something keeps more of what the droplets left on it. */
+		void ApplyRootRetention(
+			const FMassifEnvironmentContext& Context, FMassifChannelWriteScope& Scope,
+			TArrayView<const float> SoilDepthMeters) const
+		{
+			const FMassifChannelHandle Cover =
+				Context.FindOptionalInput(MassifEnvironmentChannels::VegetationCover());
+			const FMassifChannelGrid& Grid = Scope.GetGrid();
+
+			TArrayView<double> Scratch = Scope.GetComponent(0);
+			for (int32 CellIndex = 0; CellIndex < Scratch.Num(); ++CellIndex)
+			{
+				const double Retained = 1.0 + Params.VegetationSoilRetention
+					* CoverAt(Context, Cover, Grid, CellIndex);
+				Scratch[CellIndex] = FMath::Min(SoilDepthMeters[CellIndex] * Retained, Params.MaxSoilDepthMeters);
+			}
+			Scope.Commit();
 		}
 
 		void Execute(FMassifEnvironmentContext& Context, EMassifFidelity Fidelity) const override
@@ -377,7 +416,7 @@ namespace
 			if (Fidelity == EMassifFidelity::Off)
 			{
 				// Regolith on ground nothing has moved, everywhere.
-				WriteConstant(*Scope, Params.BaseSoilDepthMeters);
+				FillWithConstant(*Scope, Params.BaseSoilDepthMeters);
 				return;
 			}
 
@@ -388,7 +427,7 @@ namespace
 			MassifBakeCpu::RunDroplets(
 				MakeBakeGrid(Scope->GetGrid()), Params, Context.MakeSeed(TEXT("Droplets")), Filled,
 				SoilDepthMeters);
-			WriteCells(*Scope, SoilDepthMeters);
+			ApplyRootRetention(Context, *Scope, SoilDepthMeters);
 		}
 	};
 
@@ -421,7 +460,7 @@ namespace
 				Context.OpenOutput(MassifEnvironmentChannels::Wetness());
 			if (Fidelity == EMassifFidelity::Off)
 			{
-				WriteConstant(*Scope, 0.0);
+				FillWithConstant(*Scope, 0.0);
 				return;
 			}
 
@@ -462,6 +501,8 @@ void MassifRegisterEnvironmentProcesses(
 	MassifRegisterClimateProcesses(Scheduler, Params.Climate);
 	MassifRegisterWindProcesses(Scheduler, Params.Wind);
 	MassifRegisterPrecipitationProcesses(Scheduler, Params.Precipitation);
+	MassifRegisterSnowProcesses(Scheduler, Params.Snow);
+	MassifRegisterVegetationProcesses(Scheduler, Params.Vegetation);
 }
 
 void MassifRegisterEnvironmentProcesses(

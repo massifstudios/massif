@@ -4,7 +4,9 @@
 #include "MassifClimateParams.h"
 #include "MassifEnvironmentBakeParams.h"
 #include "MassifPrecipitationParams.h"
+#include "MassifSnowParams.h"
 #include "MassifSunParams.h"
+#include "MassifVegetationParams.h"
 #include "MassifWindParams.h"
 
 /**
@@ -21,4 +23,6 @@ struct FMassifEnvironmentParams
 	FMassifClimateParams Climate;
 	FMassifWindParams Wind;
 	FMassifPrecipitationParams Precipitation;
+	FMassifSnowParams Snow;
+	FMassifVegetationParams Vegetation;
 };
