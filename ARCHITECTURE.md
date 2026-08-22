@@ -385,6 +385,14 @@ process cannot shift another's random sequence.
 Adding a system to the environment is therefore one registration. No enum edit,
 no pipeline edit, no debug-view edit, no rewiring of anything downstream.
 
+**Optional inputs.** A process may declare a channel it reads *where something
+produces it*, and does without otherwise. This is what lets a system couple back
+to one downstream of it without making that system compulsory: wind is slowed by
+a canopy when vegetation is in the graph, and is the wind the terrain shaped when
+it is not. Every such coupling is arranged so that zero means no effect — which
+is also what an unwritten channel reads as on a relaxation group's first round,
+so a loop starts from bare ground without a special case.
+
 **Fidelity.** Every process implements some subset of Off / Cheap / Standard /
 Reference, switchable at runtime. `Off` still writes its channels, filled with a
 constant or a trivial analytic value — wind off means uniform synoptic wind and

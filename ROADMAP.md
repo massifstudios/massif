@@ -212,7 +212,7 @@ ARCHITECTURE §5.6.
 Superseded as a standalone milestone. Insolation is one process in the
 environment framework below, and lands as E6 with the rest of it.
 
-## Environment Simulation (E-series)
+## Environment Simulation (E-series) — complete
 
 The whole environment is simulated and verified before any work on visual
 fidelity or game content. M5g proved the approach on four channels wired
@@ -281,7 +281,7 @@ Channels become registered and self-describing rather than an enum.
   undeclared channel is rejected, dirty marking re-runs exactly the dependent
   set, two schedules of the same graph produce identical hashes.
 
-### E3 — Port the Existing Bake (next)
+### E3 — Port the Existing Bake — done
 The six M5g stages become six registered processes, bodies unchanged.
 
 - Depression fill, standing water, flow routing, droplets, wetness, river
@@ -292,7 +292,7 @@ The six M5g stages become six registered processes, bodies unchanged.
   pre-port hash on the same seed and elevation model. This is the whole point
   of the milestone; a port that changes a value is a failed port.
 
-### E4 — Fidelity Levels & Graph Inspector
+### E4 — Fidelity Levels & Graph Inspector — done
 - `EMassifFidelity` (Off / Cheap / Standard / Reference) per process. `Off`
   still writes its channels, with a constant or trivial analytic value, so no
   downstream code ever branches on whether a system is enabled.
@@ -305,7 +305,7 @@ The six M5g stages become six registered processes, bodies unchanged.
   fidelity it claims including `Off`, switching fidelity and switching back
   reproduces the original hash, `Off` output is independent of the seed.
 
-### E5 — Verification Tools
+### E5 — Verification Tools — done
 Built before the systems that need verifying.
 
 - **Probe:** click a point, panel lists every channel's value there with units
@@ -321,7 +321,7 @@ Built before the systems that need verifying.
 - **Verify:** tests — the registry walk covers every registered channel, probe
   values match a direct `Sample` call. Manual — you read the overlays.
 
-### E6 — Sun
+### E6 — Sun — done
 - `Sun.Position` from georeference, day of year and hour. `Sun.Horizon`:
   horizon angle per azimuth over the elevation source. `Sun.SkyViewFactor`,
   `Sun.DirectInsolation`, `Sun.DiffuseInsolation`.
@@ -332,7 +332,7 @@ Built before the systems that need verifying.
   south flanks of an analytic ridge differ in the expected direction and by a
   plausible amount.
 
-### E7 — Temperature
+### E7 — Temperature — done
 - `Climate.MeanTemperature` and per-slice `Climate.Temperature`: datum
   temperature, lapse rate, insolation anomaly, and cold-air pooling read from
   the basin depth the depression fill already computes.
@@ -341,7 +341,7 @@ Built before the systems that need verifying.
   flanks of a ridge separate, a closed basin is colder than its rim under
   inversion and equal to it without, habitat contract tests updated.
 
-### E8 — Wind
+### E8 — Wind — done
 - `Wind.Synoptic` (seeded bearing and strength) → `Wind.Exposure` (Sx
   topographic exposure index) → `Wind.Field` (vector2: channeling along valley
   axes, speedup over crests, lee separation and recirculation) →
@@ -353,7 +353,7 @@ Built before the systems that need verifying.
   accelerates and one across it does not, exposure invariant under rotating
   both terrain and wind together.
 
-### E9 — Precipitation
+### E9 — Precipitation — done
 - `Precip.Annual`, per-slice `Precip.Rate`, `Precip.SnowFraction`: base rate,
   orographic gain windward and loss leeward, altitude gradient, phase split by
   temperature, moisture depleted along the advection path.
@@ -363,7 +363,7 @@ Built before the systems that need verifying.
   moisture budget, snow fraction goes to 0 and 1 either side of the freezing
   level.
 
-### E10 — Time Slices & Snowpack
+### E10 — Time Slices & Snowpack — done
 - Time-sliced channels (24 half-monthly) and the process kinds that come with
   them: static, per-slice, sequential, reducing.
 - `Snow.Depth` as the first sequential process: accumulation from
@@ -375,7 +375,7 @@ Built before the systems that need verifying.
   and sublimation, snow survives longer on shaded and lee ground, a warm world
   ends the year bare, sequential processes reproduce under re-solve.
 
-### E11 — Vegetation & Feedback Loops
+### E11 — Vegetation & Feedback Loops — done
 - `Vegetation.Cover`, `Vegetation.Height`, `Vegetation.Canopy` as processes
   reading temperature, water balance, soil, insolation and wind exposure.
 - Close the loops: vegetation → soil stability → soil depth; canopy →
@@ -385,7 +385,7 @@ Built before the systems that need verifying.
   iteration count gives an identical hash every run, forested cells retain more
   soil and more snow than the same cells with vegetation forced `Off`.
 
-### E12 — Habitat as a Read
+### E12 — Habitat as a Read — done
 - `FMassifHabitatField` stops computing climate and becomes a lookup over
   channels plus ground-type classification. Masks (§5.5) derive from the same
   channels, so mask and habitat cannot disagree.
