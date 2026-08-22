@@ -15,6 +15,9 @@ enum class EMassifChannelEncoding : uint8
 	Uint16,
 	Float32,
 
+	/** Raw doubles. For surfaces where a float's resolution is coarser than the differences that matter. */
+	Float64,
+
 	/** uint16 over the logarithm of the value, for quantities spanning orders of magnitude. */
 	Logarithmic16,
 };

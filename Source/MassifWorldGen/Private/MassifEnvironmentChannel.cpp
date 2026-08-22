@@ -49,6 +49,7 @@ const TCHAR* MassifChannelEncodingName(EMassifChannelEncoding Encoding)
 		case EMassifChannelEncoding::Uint8: return TEXT("Uint8");
 		case EMassifChannelEncoding::Uint16: return TEXT("Uint16");
 		case EMassifChannelEncoding::Float32: return TEXT("Float32");
+		case EMassifChannelEncoding::Float64: return TEXT("Float64");
 		case EMassifChannelEncoding::Logarithmic16: return TEXT("Logarithmic16");
 		default: return TEXT("Unknown");
 	}

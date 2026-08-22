@@ -48,11 +48,12 @@ namespace
 			case EMassifChannelEncoding::Uint16: return 2;
 			case EMassifChannelEncoding::Logarithmic16: return 2;
 			case EMassifChannelEncoding::Float32: return 4;
+			case EMassifChannelEncoding::Float64: return 8;
 			default: return 2;
 		}
 	}
 
-	void MeasureRange(TArrayView<const float> Values, double& OutMinimum, double& OutMaximum)
+	void MeasureRange(TArrayView<const double> Values, double& OutMinimum, double& OutMaximum)
 	{
 		OutMinimum = 0.0;
 		OutMaximum = 0.0;
@@ -63,10 +64,10 @@ namespace
 
 		OutMinimum = TNumericLimits<double>::Max();
 		OutMaximum = TNumericLimits<double>::Lowest();
-		for (float Value : Values)
+		for (double Value : Values)
 		{
-			OutMinimum = FMath::Min(OutMinimum, static_cast<double>(Value));
-			OutMaximum = FMath::Max(OutMaximum, static_cast<double>(Value));
+			OutMinimum = FMath::Min(OutMinimum, Value);
+			OutMaximum = FMath::Max(OutMaximum, Value);
 		}
 	}
 
@@ -95,19 +96,29 @@ namespace
 		return Entry / Uint16QuantisationSteps;
 	}
 
-	void StoreFloats(TArray<uint8>& Payload, TArrayView<const float> Values)
+	void StoreFloats(TArray<uint8>& Payload, TArrayView<const double> Values)
 	{
 		Payload.SetNumZeroed(Values.Num() * static_cast<int32>(sizeof(float)));
+		for (int32 CellIndex = 0; CellIndex < Values.Num(); ++CellIndex)
+		{
+			const float Entry = static_cast<float>(Values[CellIndex]);
+			FMemory::Memcpy(Payload.GetData() + CellIndex * sizeof(float), &Entry, sizeof(float));
+		}
+	}
+
+	void StoreDoubles(TArray<uint8>& Payload, TArrayView<const double> Values)
+	{
+		Payload.SetNumZeroed(Values.Num() * static_cast<int32>(sizeof(double)));
 		if (Values.IsEmpty())
 		{
 			return;
 		}
-		FMemory::Memcpy(Payload.GetData(), Values.GetData(), Values.Num() * sizeof(float));
+		FMemory::Memcpy(Payload.GetData(), Values.GetData(), Values.Num() * sizeof(double));
 	}
 
 	void StoreIntegers(
 		TArray<uint8>& Payload, EMassifChannelEncoding Encoding, double MinValue, double MaxValue,
-		TArrayView<const float> Values)
+		TArrayView<const double> Values)
 	{
 		Payload.SetNumZeroed(Values.Num() * EncodingByteCount(Encoding));
 
@@ -134,6 +145,12 @@ namespace
 		{
 			float Value = 0.0f;
 			FMemory::Memcpy(&Value, Payload.GetData() + CellIndex * sizeof(float), sizeof(float));
+			return Value;
+		}
+		if (Encoding == EMassifChannelEncoding::Float64)
+		{
+			double Value = 0.0;
+			FMemory::Memcpy(&Value, Payload.GetData() + CellIndex * sizeof(double), sizeof(double));
 			return Value;
 		}
 
@@ -179,7 +196,7 @@ FMassifChannelWriteScope::FMassifChannelWriteScope(
 		TEXT("Time slice %d is outside channel '%s'"), InTimeSlice, *Descriptor.Name.ToString());
 
 	ComponentScratch.SetNum(MassifChannelComponentCount(Descriptor.Type));
-	for (TArray<float>& Component : ComponentScratch)
+	for (TArray<double>& Component : ComponentScratch)
 	{
 		Component.SetNumZeroed(Grid.CellCount());
 	}
@@ -191,7 +208,7 @@ FMassifChannelWriteScope::~FMassifChannelWriteScope()
 		*State.GetDescriptor(Channel).Name.ToString(), TimeSlice);
 }
 
-TArrayView<float> FMassifChannelWriteScope::GetComponent(int32 ComponentIndex)
+TArrayView<double> FMassifChannelWriteScope::GetComponent(int32 ComponentIndex)
 {
 	checkf(ComponentScratch.IsValidIndex(ComponentIndex), TEXT("Channel '%s' has no component %d"),
 		*State.GetDescriptor(Channel).Name.ToString(), ComponentIndex);
@@ -335,7 +352,7 @@ const FMassifEnvironmentState::FComponentSlice& FMassifEnvironmentState::GetComp
 }
 
 void FMassifEnvironmentState::CommitSlice(
-	FMassifChannelHandle Channel, int32 TimeSlice, const TArray<TArray<float>>& ComponentValues)
+	FMassifChannelHandle Channel, int32 TimeSlice, const TArray<TArray<double>>& ComponentValues)
 {
 	FChannelStorage& Storage = GetStorage(Channel);
 	for (int32 ComponentIndex = 0; ComponentIndex < ComponentValues.Num(); ++ComponentIndex)
@@ -346,7 +363,7 @@ void FMassifEnvironmentState::CommitSlice(
 }
 
 void FMassifEnvironmentState::StoreComponentSlice(
-	FChannelStorage& Storage, int32 TimeSlice, int32 ComponentIndex, TArrayView<const float> Values)
+	FChannelStorage& Storage, int32 TimeSlice, int32 ComponentIndex, TArrayView<const double> Values)
 {
 	checkf(Values.Num() == Storage.Grid.CellCount(), TEXT("Channel '%s' was given %d values for %d cells"),
 		*Storage.Descriptor.Name.ToString(), Values.Num(), Storage.Grid.CellCount());
@@ -359,6 +376,11 @@ void FMassifEnvironmentState::StoreComponentSlice(
 	if (Encoding == EMassifChannelEncoding::Float32)
 	{
 		StoreFloats(Slice.Payload, Values);
+		return;
+	}
+	if (Encoding == EMassifChannelEncoding::Float64)
+	{
+		StoreDoubles(Slice.Payload, Values);
 		return;
 	}
 	StoreIntegers(Slice.Payload, Encoding, Slice.MinValue, Slice.MaxValue, Values);

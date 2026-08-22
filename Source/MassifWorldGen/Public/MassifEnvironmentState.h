@@ -8,8 +8,11 @@ struct FMassifStateHash;
 class FMassifEnvironmentState;
 
 /**
- * Float scratch for one slice of one channel, quantised into the state on Commit.
- * Processes solve in float and never see the encoding.
+ * Scratch for one slice of one channel, encoded into the state on Commit.
+ *
+ * The scratch is double: a process solves in double and the channel's encoding
+ * decides what is kept, so precision is a property of the channel rather than of
+ * every process that writes one. Processes never see the encoding.
  */
 class MASSIFWORLDGEN_API FMassifChannelWriteScope
 {
@@ -21,11 +24,11 @@ public:
 	FMassifChannelWriteScope& operator=(const FMassifChannelWriteScope&) = delete;
 
 	/** Scratch for one component, CellCount() long. Component 0 is the only one for scalars. */
-	TArrayView<float> GetComponent(int32 ComponentIndex);
+	TArrayView<double> GetComponent(int32 ComponentIndex);
 
 	const FMassifChannelGrid& GetGrid() const;
 
-	/** Quantises the scratch into the state and measures the range. */
+	/** Encodes the scratch into the state and measures the range. */
 	void Commit();
 
 private:
@@ -33,7 +36,7 @@ private:
 	FMassifChannelHandle Channel;
 	int32 TimeSlice = 0;
 	FMassifChannelGrid Grid;
-	TArray<TArray<float>> ComponentScratch;
+	TArray<TArray<double>> ComponentScratch;
 	bool bCommitted = false;
 };
 
@@ -143,11 +146,11 @@ private:
 	static const FComponentSlice& GetComponentSlice(
 		const FChannelStorage& Storage, int32 TimeSlice, int32 ComponentIndex);
 
-	/** Quantises every component of one slice out of the write scope's scratch. */
-	void CommitSlice(FMassifChannelHandle Channel, int32 TimeSlice, const TArray<TArray<float>>& ComponentValues);
+	/** Encodes every component of one slice out of the write scope's scratch. */
+	void CommitSlice(FMassifChannelHandle Channel, int32 TimeSlice, const TArray<TArray<double>>& ComponentValues);
 
 	static void StoreComponentSlice(
-		FChannelStorage& Storage, int32 TimeSlice, int32 ComponentIndex, TArrayView<const float> Values);
+		FChannelStorage& Storage, int32 TimeSlice, int32 ComponentIndex, TArrayView<const double> Values);
 	static void WidenChannelRange(FChannelStorage& Storage, int32 ComponentIndex, double Minimum, double Maximum);
 
 	static double DecodeCell(const FChannelStorage& Storage, const FComponentSlice& Slice, int32 Column, int32 Row);

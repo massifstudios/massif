@@ -89,8 +89,8 @@ namespace
 		void WriteMarker(FMassifEnvironmentContext& Context, FName OutputName, EMassifFidelity Fidelity) const
 		{
 			const TUniquePtr<FMassifChannelWriteScope> Scope = Context.OpenOutput(OutputName);
-			TArrayView<float> Values = Scope->GetComponent(0);
-			const float Marker = 1.0f + static_cast<float>(Fidelity);
+			TArrayView<double> Values = Scope->GetComponent(0);
+			const double Marker = 1.0 + static_cast<double>(Fidelity);
 			for (int32 CellIndex = 0; CellIndex < Values.Num(); ++CellIndex)
 			{
 				Values[CellIndex] = Marker;

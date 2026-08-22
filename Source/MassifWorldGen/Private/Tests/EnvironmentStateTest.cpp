@@ -25,13 +25,13 @@ namespace
 	}
 
 	void FillComponent(
-		const FMassifChannelGrid& Grid, TArrayView<float> Values, TFunctionRef<double(FVector2d)> ValueAt)
+		const FMassifChannelGrid& Grid, TArrayView<double> Values, TFunctionRef<double(FVector2d)> ValueAt)
 	{
 		for (int32 Row = 0; Row < Grid.Height; ++Row)
 		{
 			for (int32 Column = 0; Column < Grid.Width; ++Column)
 			{
-				Values[Grid.CellIndex(Column, Row)] = static_cast<float>(ValueAt(Grid.CellCentreMeters(Column, Row)));
+				Values[Grid.CellIndex(Column, Row)] = ValueAt(Grid.CellCentreMeters(Column, Row));
 			}
 		}
 	}
@@ -46,10 +46,10 @@ namespace
 	}
 
 	void CommitVectorSlice(
-		FMassifEnvironmentState& State, FMassifChannelHandle Channel,
+		FMassifEnvironmentState& State, FMassifChannelHandle Channel, int32 TimeSlice,
 		TFunctionRef<double(FVector2d)> EastingAt, TFunctionRef<double(FVector2d)> NorthingAt)
 	{
-		FMassifChannelWriteScope Scope(State, Channel);
+		FMassifChannelWriteScope Scope(State, Channel, TimeSlice);
 		FillComponent(Scope.GetGrid(), Scope.GetComponent(0), EastingAt);
 		FillComponent(Scope.GetGrid(), Scope.GetComponent(1), NorthingAt);
 		Scope.Commit();
@@ -71,6 +71,65 @@ namespace
 	double LinearFieldAt(FVector2d Position)
 	{
 		return 100.0 + 0.01 * Position.X - 0.02 * Position.Y;
+	}
+
+	/**
+	 * A lake surface as the depression fill leaves it: 2000 m with a tenth of a
+	 * micrometre of rise a column. A float at 2000 m resolves a tenth of a
+	 * millimetre, so the whole ramp collapses onto one value.
+	 */
+	double FineAltitudeAtColumn(int32 Column)
+	{
+		const double Rise = Column * 1.0e-7;
+		return 2000.0 + Rise;
+	}
+
+	void CommitFineAltitudeRamp(FMassifEnvironmentState& State, FMassifChannelHandle Channel)
+	{
+		FMassifChannelWriteScope Scope(State, Channel);
+		const FMassifChannelGrid& Grid = Scope.GetGrid();
+		TArrayView<double> Values = Scope.GetComponent(0);
+		for (int32 Row = 0; Row < Grid.Height; ++Row)
+		{
+			for (int32 Column = 0; Column < Grid.Width; ++Column)
+			{
+				Values[Grid.CellIndex(Column, Row)] = FineAltitudeAtColumn(Column);
+			}
+		}
+		Scope.Commit();
+	}
+
+	/** The same tenth-of-a-micrometre steps on a per-slice base, for vector and multi-slice channels. */
+	double FineComponentAt(double CoordinateMeters, int32 TimeSlice)
+	{
+		const double Rise = CoordinateMeters * 1.0e-7;
+		return 2000.0 + TimeSlice + Rise;
+	}
+
+	int32 CountFineCellMismatches(
+		const FMassifEnvironmentState& State, FMassifChannelHandle Channel, int32 Column, int32 Row, int32 TimeSlice)
+	{
+		const FVector2d Centre = State.GetGrid(Channel).CellCentreMeters(Column, Row);
+		const bool bEastingExact =
+			State.ReadCell(Channel, Column, Row, 0, TimeSlice) == FineComponentAt(Centre.X, TimeSlice);
+		const bool bNorthingExact =
+			State.ReadCell(Channel, Column, Row, 1, TimeSlice) == FineComponentAt(Centre.Y, TimeSlice);
+		return static_cast<int32>(!bEastingExact) + static_cast<int32>(!bNorthingExact);
+	}
+
+	int32 CountFineSliceMismatches(
+		const FMassifEnvironmentState& State, FMassifChannelHandle Channel, int32 TimeSlice)
+	{
+		const FMassifChannelGrid& Grid = State.GetGrid(Channel);
+		int32 Mismatches = 0;
+		for (int32 Row = 0; Row < Grid.Height; ++Row)
+		{
+			for (int32 Column = 0; Column < Grid.Width; ++Column)
+			{
+				Mismatches += CountFineCellMismatches(State, Channel, Column, Row, TimeSlice);
+			}
+		}
+		return Mismatches;
 	}
 
 	double WorstCellError(
@@ -152,6 +211,88 @@ bool FEnvironmentStateEncodingTest::RunTest(const FString& Parameters)
 	TestTrue(FString::Printf(TEXT("Logarithmic16 holds the ramp to its step (%.7f of %.7f)"),
 		LogarithmicError, LogarithmicTolerance),
 		LogarithmicError <= LogarithmicTolerance);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FEnvironmentStateFloat64Test,
+	"Massif.WorldGen.EnvironmentState.Float64",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FEnvironmentStateFloat64Test::RunTest(const FString& Parameters)
+{
+	FMassifEnvironmentState State(StateTestWorldSize());
+	const FMassifChannelHandle Float64Channel =
+		State.RegisterChannel(MakeDescriptor(TEXT("Test.AltitudeFloat64"), EMassifChannelEncoding::Float64));
+	const FMassifChannelHandle Float32Channel =
+		State.RegisterChannel(MakeDescriptor(TEXT("Test.AltitudeFloat32"), EMassifChannelEncoding::Float32));
+
+	CommitFineAltitudeRamp(State, Float64Channel);
+	CommitFineAltitudeRamp(State, Float32Channel);
+
+	const FMassifChannelGrid& Grid = State.GetGrid(Float64Channel);
+	int32 Float64Mismatches = 0;
+	int32 Float32Mismatches = 0;
+	for (int32 Column = 0; Column < Grid.Width; ++Column)
+	{
+		Float64Mismatches +=
+			static_cast<int32>(State.ReadCell(Float64Channel, Column, 0) != FineAltitudeAtColumn(Column));
+		Float32Mismatches +=
+			static_cast<int32>(State.ReadCell(Float32Channel, Column, 0) != FineAltitudeAtColumn(Column));
+	}
+
+	TestEqual(TEXT("Float64 reads every altitude back bit-exactly"), Float64Mismatches, 0);
+	TestTrue(FString::Printf(TEXT("Float32 cannot hold the same ramp (%d of %d cells differ)"),
+		Float32Mismatches, Grid.Width),
+		Float32Mismatches > 0);
+
+	// The point of the encoding: the rise a depression fill leaves behind is what
+	// the flow routing follows out of a filled lake, and in float there is none.
+	int32 Float64StepsWithoutRise = 0;
+	int32 Float32StepsWithoutRise = 0;
+	for (int32 Column = 1; Column < Grid.Width; ++Column)
+	{
+		Float64StepsWithoutRise += static_cast<int32>(
+			State.ReadCell(Float64Channel, Column, 0) <= State.ReadCell(Float64Channel, Column - 1, 0));
+		Float32StepsWithoutRise += static_cast<int32>(
+			State.ReadCell(Float32Channel, Column, 0) <= State.ReadCell(Float32Channel, Column - 1, 0));
+	}
+
+	TestEqual(TEXT("Every Float64 step still rises above the one before it"), Float64StepsWithoutRise, 0);
+	TestEqual(TEXT("In Float32 the whole ramp is flat"), Float32StepsWithoutRise, Grid.Width - 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FEnvironmentStateFloat64ShapesTest,
+	"Massif.WorldGen.EnvironmentState.Float64Shapes",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FEnvironmentStateFloat64ShapesTest::RunTest(const FString& Parameters)
+{
+	FMassifEnvironmentState State(StateTestWorldSize());
+	FMassifChannelDescriptor Descriptor = MakeDescriptor(TEXT("Test.FineFlow"), EMassifChannelEncoding::Float64);
+	Descriptor.Type = EMassifChannelType::Vector2;
+	Descriptor.TimeSliceCount = 3;
+	const FMassifChannelHandle Channel = State.RegisterChannel(Descriptor);
+
+	for (int32 TimeSlice = 0; TimeSlice < Descriptor.TimeSliceCount; ++TimeSlice)
+	{
+		CommitVectorSlice(State, Channel, TimeSlice,
+			[TimeSlice](FVector2d Position) { return FineComponentAt(Position.X, TimeSlice); },
+			[TimeSlice](FVector2d Position) { return FineComponentAt(Position.Y, TimeSlice); });
+	}
+
+	int32 Mismatches = 0;
+	for (int32 TimeSlice = 0; TimeSlice < Descriptor.TimeSliceCount; ++TimeSlice)
+	{
+		Mismatches += CountFineSliceMismatches(State, Channel, TimeSlice);
+	}
+	TestEqual(TEXT("Both components of every slice read back bit-exactly"), Mismatches, 0);
+
+	const int64 ExpectedBytes =
+		static_cast<int64>(State.GetGrid(Channel).CellCount()) * 2 * Descriptor.TimeSliceCount * 8;
+	TestTrue(FString::Printf(TEXT("Float64 holds eight bytes a cell for each component of each slice (%lld of %lld)"),
+		State.GetResidentByteCount(), ExpectedBytes),
+		State.GetResidentByteCount() == ExpectedBytes);
 	return true;
 }
 
@@ -344,7 +485,7 @@ bool FEnvironmentStateVectorTest::RunTest(const FString& Parameters)
 	Descriptor.Type = EMassifChannelType::Vector2;
 	const FMassifChannelHandle Channel = State.RegisterChannel(Descriptor);
 
-	CommitVectorSlice(State, Channel,
+	CommitVectorSlice(State, Channel, 0,
 		[](FVector2d Position) { return 0.5 + Position.X * 0.001; },
 		[](FVector2d Position) { return -20.0 + Position.Y * 0.002; });
 
