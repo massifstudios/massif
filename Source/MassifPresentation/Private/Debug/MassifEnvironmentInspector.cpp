@@ -45,6 +45,21 @@ bool MassifEnvironmentInspector::IsPanelVisible()
 	return CVarEnvironmentInspector.GetValueOnGameThread() != 0;
 }
 
+FMassifEnvironmentScheduler* MassifEnvironmentInspector::FindScheduler(UWorld* World)
+{
+	if (World == nullptr)
+	{
+		return nullptr;
+	}
+
+	const AMassifGameMode* GameMode = World->GetAuthGameMode<AMassifGameMode>();
+	if (GameMode == nullptr)
+	{
+		return nullptr;
+	}
+	return GameMode->GetEnvironmentScheduler().Get();
+}
+
 FMassifInspectorSnapshot MassifEnvironmentInspector::Snapshot(const FMassifEnvironmentScheduler& Scheduler)
 {
 	FMassifInspectorSnapshot Result;
@@ -105,21 +120,6 @@ int32 MassifEnvironmentInspector::SetPresetAndResolve(
 
 namespace
 {
-	FMassifEnvironmentScheduler* FindScheduler(UWorld* World)
-	{
-		if (World == nullptr)
-		{
-			return nullptr;
-		}
-
-		const AMassifGameMode* GameMode = World->GetAuthGameMode<AMassifGameMode>();
-		if (GameMode == nullptr)
-		{
-			return nullptr;
-		}
-		return GameMode->GetEnvironmentScheduler().Get();
-	}
-
 	void ListProcesses(const FMassifEnvironmentScheduler& Scheduler)
 	{
 		for (const FMassifInspectorProcessRow& Row : MassifEnvironmentInspector::Snapshot(Scheduler).Processes)
@@ -131,7 +131,7 @@ namespace
 
 	void HandleFidelityCommand(const TArray<FString>& Arguments, UWorld* World)
 	{
-		FMassifEnvironmentScheduler* Scheduler = FindScheduler(World);
+		FMassifEnvironmentScheduler* Scheduler = MassifEnvironmentInspector::FindScheduler(World);
 		if (Scheduler == nullptr)
 		{
 			UE_LOG(LogTemp, Warning, TEXT("massif.Env.Fidelity: no environment has been solved yet"));
@@ -166,7 +166,7 @@ namespace
 
 	void HandlePresetCommand(const TArray<FString>& Arguments, UWorld* World)
 	{
-		FMassifEnvironmentScheduler* Scheduler = FindScheduler(World);
+		FMassifEnvironmentScheduler* Scheduler = MassifEnvironmentInspector::FindScheduler(World);
 		if (Scheduler == nullptr || Arguments.IsEmpty())
 		{
 			UE_LOG(LogTemp, Display, TEXT("massif.Env.Preset <Off|Cheap|Standard|Reference>"));

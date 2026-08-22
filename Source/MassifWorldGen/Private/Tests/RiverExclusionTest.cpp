@@ -1,4 +1,5 @@
-#include "MassifEnvironmentBake.h"
+#include "MassifEnvironmentBakeParams.h"
+#include "MassifTestEnvironment.h"
 #include "MassifHabitat.h"
 #include "MassifHeightmap.h"
 #include "MassifRiverField.h"
@@ -65,7 +66,7 @@ namespace
 		BakeParams.CellSizeMeters = ExclusionTestSpacingMeters;
 		World.Habitat = MakeShared<const FMassifHabitatField>(
 			Field,
-			FMassifEnvironmentBake::BuildOnCpu(Field->GetHeightmap(), ExclusionTestSeed, BakeParams),
+			MassifSolveTestEnvironmentState(Field->GetHeightmapShared(), ExclusionTestSeed, BakeParams),
 			ExclusionTestSeed);
 		return World;
 	}

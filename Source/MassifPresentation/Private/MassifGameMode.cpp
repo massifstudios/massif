@@ -12,10 +12,15 @@
 #include "Debug/MassifDebugHud.h"
 #include "Foliage/MassifFoliageManager.h"
 #include "GameFramework/WorldSettings.h"
-#include "MassifEnvironmentBake.h"
+#include "MassifElevationSource.h"
+#include "MassifEnvironmentBakeParams.h"
+#include "MassifEnvironmentGraph.h"
+#include "MassifEnvironmentScheduler.h"
+#include "MassifEnvironmentState.h"
 #include "MassifHabitat.h"
 #include "MassifHeightmap.h"
 #include "MassifRiverField.h"
+#include "MassifRiverNetwork.h"
 #include "MassifTerrainField.h"
 #include "MaterialShared.h"
 #include "Materials/MaterialInterface.h"
@@ -117,13 +122,16 @@ namespace
 		}
 	}
 
-	const TCHAR* DescribeBakePath(bool bBuiltOnGpu)
+	/** One set of knobs for the solve and for the rivers traced out of it, so the two cannot drift. */
+	const FMassifEnvironmentBakeParams& GetEnvironmentParams()
 	{
-		if (bBuiltOnGpu)
-		{
-			return TEXT("GPU");
-		}
-		return TEXT("CPU");
+		static const FMassifEnvironmentBakeParams Params;
+		return Params;
+	}
+
+	double GetChannelMaximum(const FMassifEnvironmentState& Environment, const FName& ChannelName)
+	{
+		return Environment.GetChannelMaximum(Environment.FindChannel(ChannelName));
 	}
 
 	UMaterialInterface* LoadTerrainMaterial()
@@ -196,10 +204,13 @@ void AMassifGameMode::LoadTerrainAndSpawnManagers()
 		*Heightmap->GetSourceInfo().Label, Heightmap->GetMinAltitudeMeters(), Heightmap->GetMaxAltitudeMeters(),
 		Heightmap->GetMipCount(), FPlatformTime::Seconds() - StartSeconds);
 
-	// The bake reads the elevation model, and the terrain field reads the rivers
-	// the bake traced. That order is what keeps the carve out of the solve that
-	// produced it.
-	BuildEnvironmentBake(*Heightmap);
+	// The environment reads the elevation model, and the terrain field reads the
+	// rivers traced out of it. That order is what keeps the carve out of the solve
+	// that produced it.
+	if (!BuildEnvironment(Heightmap.ToSharedRef()))
+	{
+		return;
+	}
 	BuildTerrainField(Heightmap.ToSharedRef());
 	SpawnAltitudeMeters = static_cast<float>(TerrainField->GetMaxAltitudeMeters()) + 2200.0f;
 
@@ -207,15 +218,16 @@ void AMassifGameMode::LoadTerrainAndSpawnManagers()
 	// textures, the plants standing on them and the debug views all have to
 	// answer the same about a given point, and they do so by construction when
 	// they read the same field.
+	const TSharedRef<const FMassifEnvironmentState> Environment = EnvironmentScheduler->GetSharedState();
 	const TSharedRef<const FMassifHabitatField> HabitatField = MakeShared<const FMassifHabitatField>(
-		TerrainField.ToSharedRef(), EnvironmentBake.ToSharedRef(), GetMasterSeed());
+		TerrainField.ToSharedRef(), Environment, GetMasterSeed());
 
 	TerrainManager = GetWorld()->SpawnActor<AMassifTerrainManager>();
 	TerrainManager->Initialize(TerrainField, LoadTerrainMaterial());
 	TerrainManager->ApplySurfaceMap(HabitatField.Get(), GetMasterSeed());
 
 	FoliageManager = GetWorld()->SpawnActor<AMassifFoliageManager>();
-	FoliageManager->Initialize(TerrainField, EnvironmentBake, GetMasterSeed());
+	FoliageManager->Initialize(TerrainField, Environment, GetMasterSeed());
 
 	RiverManager = GetWorld()->SpawnActor<AMassifRiverManager>();
 	RiverManager->Initialize(RiverField, LoadRiverMaterial());
@@ -226,8 +238,12 @@ void AMassifGameMode::LoadTerrainAndSpawnManagers()
 
 void AMassifGameMode::BuildTerrainField(TSharedRef<const FMassifHeightmap> Heightmap)
 {
+	const TSharedRef<const FMassifRiverNetwork> Rivers =
+		MassifExtractRivers(EnvironmentScheduler->GetState(), GetEnvironmentParams().Rivers);
+	LogRiverSummary(Rivers.Get());
+
 	const FMassifRiverCarveParams CarveParams;
-	RiverField = FMassifRiverField::Build(EnvironmentBake->GetRivers(), CarveParams.MaxBankMeters);
+	RiverField = FMassifRiverField::Build(Rivers.Get(), CarveParams.MaxBankMeters);
 	TerrainField =
 		MakeShared<const FMassifTerrainField>(MoveTemp(Heightmap), RiverField.ToSharedRef(), CarveParams);
 
@@ -235,23 +251,45 @@ void AMassifGameMode::BuildTerrainField(TSharedRef<const FMassifHeightmap> Heigh
 		TerrainField->GetWorldSizeMeters(), RiverField->GetSegmentCount());
 }
 
-void AMassifGameMode::BuildEnvironmentBake(const FMassifHeightmap& Heightmap)
+bool AMassifGameMode::BuildEnvironment(TSharedRef<const FMassifHeightmap> Heightmap)
 {
 	const double StartSeconds = FPlatformTime::Seconds();
-	EnvironmentBake = FMassifEnvironmentBake::Build(
-		Heightmap, GetMasterSeed(), FMassifEnvironmentBakeParams());
+
+	FString BuildError;
+	TUniquePtr<FMassifEnvironmentScheduler> Scheduler = MassifBuildEnvironment(
+		MakeShared<const FMassifHeightmapElevationSource>(MoveTemp(Heightmap)),
+		FMassifGeoreference(),
+		GetMasterSeed(),
+		GetEnvironmentParams(),
+		BuildError);
+	if (!Scheduler.IsValid())
+	{
+		UE_LOG(LogTemp, Error, TEXT("Environment: %s. Nothing downstream of the solve is built."), *BuildError);
+		return false;
+	}
+
+	EnvironmentScheduler = MakeShareable(Scheduler.Release());
+	LogEnvironmentSummary(FPlatformTime::Seconds() - StartSeconds);
+	return true;
+}
+
+void AMassifGameMode::LogEnvironmentSummary(double SolveSeconds) const
+{
+	const FMassifEnvironmentState& Environment = EnvironmentScheduler->GetState();
+	const FMassifChannelGrid& Grid =
+		Environment.GetGrid(Environment.FindChannel(MassifEnvironmentChannels::Wetness()));
 
 	UE_LOG(LogTemp, Display,
-		TEXT("Environment: %d x %d cells at %.0f m, %s, solved in %.2f s "
+		TEXT("Environment: %d x %d cells at %.0f m, %d channels, solved in %.2f s "
 			"(water to %.1f m, flow to %.0f m2, soil to %.2f m)"),
-		EnvironmentBake->GetWidth(), EnvironmentBake->GetHeight(), EnvironmentBake->GetCellSizeMeters(),
-		DescribeBakePath(EnvironmentBake->WasBuiltOnGpu()),
-		FPlatformTime::Seconds() - StartSeconds,
-		EnvironmentBake->GetChannelMaximum(EMassifBakeChannel::StandingWaterDepth),
-		EnvironmentBake->GetChannelMaximum(EMassifBakeChannel::FlowAccumulation),
-		EnvironmentBake->GetChannelMaximum(EMassifBakeChannel::SoilDepth));
+		Grid.Width, Grid.Height, Grid.CellSizeMeters, Environment.GetChannelCount(), SolveSeconds,
+		GetChannelMaximum(Environment, MassifEnvironmentChannels::StandingWaterDepth()),
+		GetChannelMaximum(Environment, MassifEnvironmentChannels::FlowAccumulation()),
+		GetChannelMaximum(Environment, MassifEnvironmentChannels::SoilDepth()));
+}
 
-	const FMassifRiverNetwork& Rivers = EnvironmentBake->GetRivers();
+void AMassifGameMode::LogRiverSummary(const FMassifRiverNetwork& Rivers) const
+{
 	UE_LOG(LogTemp, Display,
 		TEXT("Rivers: %d reaches from %d sources, %.1f km of channel, order %d, "
 			"largest %.1f m3/s and %.1f m wide"),

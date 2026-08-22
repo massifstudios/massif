@@ -3,7 +3,7 @@
 #include "Async/ParallelFor.h"
 #include "Engine/Texture2D.h"
 #include "MassifBandWeight.h"
-#include "MassifEnvironmentBake.h"
+#include "MassifEnvironmentRaster.h"
 #include "MassifHabitat.h"
 #include "MassifSeed.h"
 #include "MassifSurfaceLayers.h"
@@ -12,7 +12,7 @@
 
 namespace
 {
-	/** Spacing habitat is sampled at for the whole-world pass: the bake's own cell size. */
+	/** Spacing habitat is sampled at for the whole-world pass: the hydrology channels' cell size. */
 	constexpr double SurfaceSampleSpacingMeters = 8.0;
 
 	/**
@@ -215,20 +215,20 @@ namespace
 	void ClassifyRow(
 		const FMassifHabitatField& HabitatField,
 		uint32 MasterSeed,
+		const FMassifChannelGrid& Grid,
 		int32 Row,
 		FColor* IndexPixels,
 		FColor* BlendPixels)
 	{
-		const FMassifEnvironmentBake& Bake = HabitatField.GetEnvironmentBake();
-		for (int32 Column = 0; Column < Bake.GetWidth(); ++Column)
+		for (int32 Column = 0; Column < Grid.Width; ++Column)
 		{
-			const FVector2d PositionMeters = Bake.GetCellCentreMeters(Column, Row);
+			const FVector2d PositionMeters = Grid.CellCentreMeters(Column, Row);
 			const FMassifHabitatSample Habitat =
 				HabitatField.Sample(PositionMeters, SurfaceSampleSpacingMeters);
 			const FMassifSurfaceBlend Blend =
 				MassifSurfaceMap::Classify(Habitat, PositionMeters, MasterSeed);
 
-			const int32 Index = Row * Bake.GetWidth() + Column;
+			const int32 Index = Row * Grid.Width + Column;
 			IndexPixels[Index] = FColor(
 				static_cast<uint8>(Blend.LowerLayer), static_cast<uint8>(Blend.UpperLayer), 0, 255);
 			BlendPixels[Index] = FColor(ToByte(Blend.UpperWeight), ToByte(Blend.SnowCover), 0, 255);
@@ -270,18 +270,18 @@ void MassifSurfaceMap::Render(
 	TObjectPtr<UTexture2D>& IndexTexture,
 	TObjectPtr<UTexture2D>& BlendTexture)
 {
-	const FMassifEnvironmentBake& Bake = Habitat.GetEnvironmentBake();
-	UTexture2D* Indices = EnsureTexture(IndexTexture, Bake.GetWidth(), Bake.GetHeight(), TF_Nearest);
-	UTexture2D* Blends = EnsureTexture(BlendTexture, Bake.GetWidth(), Bake.GetHeight(), TF_Bilinear);
+	const FMassifChannelGrid& Grid = MassifEnvironmentRaster::GetGrid(Habitat.GetEnvironment());
+	UTexture2D* Indices = EnsureTexture(IndexTexture, Grid.Width, Grid.Height, TF_Nearest);
+	UTexture2D* Blends = EnsureTexture(BlendTexture, Grid.Width, Grid.Height, TF_Bilinear);
 
 	FTexture2DMipMap& IndexMip = Indices->GetPlatformData()->Mips[0];
 	FTexture2DMipMap& BlendMip = Blends->GetPlatformData()->Mips[0];
 	FColor* IndexPixels = static_cast<FColor*>(IndexMip.BulkData.Lock(LOCK_READ_WRITE));
 	FColor* BlendPixels = static_cast<FColor*>(BlendMip.BulkData.Lock(LOCK_READ_WRITE));
 
-	ParallelFor(Bake.GetHeight(), [&Habitat, MasterSeed, IndexPixels, BlendPixels](int32 Row)
+	ParallelFor(Grid.Height, [&Habitat, MasterSeed, &Grid, IndexPixels, BlendPixels](int32 Row)
 	{
-		ClassifyRow(Habitat, MasterSeed, Row, IndexPixels, BlendPixels);
+		ClassifyRow(Habitat, MasterSeed, Grid, Row, IndexPixels, BlendPixels);
 	});
 
 	IndexMip.BulkData.Unlock();

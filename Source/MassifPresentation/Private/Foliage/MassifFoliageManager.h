@@ -4,7 +4,7 @@
 #include "GameFramework/Actor.h"
 #include "MassifFoliageManager.generated.h"
 
-class FMassifEnvironmentBake;
+class FMassifEnvironmentState;
 class FMassifHabitatField;
 class FMassifTerrainField;
 class UHierarchicalInstancedStaticMeshComponent;
@@ -36,13 +36,13 @@ public:
 
 	void Initialize(
 		TSharedPtr<const FMassifTerrainField> InField,
-		TSharedPtr<const FMassifEnvironmentBake> InEnvironmentBake,
+		TSharedPtr<const FMassifEnvironmentState> InEnvironment,
 		uint32 InMasterSeed);
 
 	/** Drops every planted tile and regrows against a new field, as ResetField does for terrain. */
 	void ResetField(
 		TSharedPtr<const FMassifTerrainField> InField,
-		TSharedPtr<const FMassifEnvironmentBake> InEnvironmentBake,
+		TSharedPtr<const FMassifEnvironmentState> InEnvironment,
 		uint32 InMasterSeed);
 
 	virtual void Tick(float DeltaSeconds) override;

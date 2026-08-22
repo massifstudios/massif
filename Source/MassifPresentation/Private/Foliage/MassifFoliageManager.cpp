@@ -7,7 +7,7 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "MassifFoliageScatter.h"
 #include "MassifFoliageSpecies.h"
-#include "MassifEnvironmentBake.h"
+#include "MassifEnvironmentState.h"
 #include "MassifHabitat.h"
 #include "MassifTerrainField.h"
 #include "UObject/SoftObjectPath.h"
@@ -66,22 +66,22 @@ AMassifFoliageManager::AMassifFoliageManager()
 
 void AMassifFoliageManager::Initialize(
 	TSharedPtr<const FMassifTerrainField> InField,
-	TSharedPtr<const FMassifEnvironmentBake> InEnvironmentBake,
+	TSharedPtr<const FMassifEnvironmentState> InEnvironment,
 	uint32 InMasterSeed)
 {
 	LoadSpeciesMeshes();
-	ResetField(InField, InEnvironmentBake, InMasterSeed);
+	ResetField(InField, InEnvironment, InMasterSeed);
 }
 
 void AMassifFoliageManager::ResetField(
 	TSharedPtr<const FMassifTerrainField> InField,
-	TSharedPtr<const FMassifEnvironmentBake> InEnvironmentBake,
+	TSharedPtr<const FMassifEnvironmentState> InEnvironment,
 	uint32 InMasterSeed)
 {
-	check(InField.IsValid() && InEnvironmentBake.IsValid());
+	check(InField.IsValid() && InEnvironment.IsValid());
 	DropAllTiles();
 	Habitat = MakeShared<const FMassifHabitatField>(
-		InField.ToSharedRef(), InEnvironmentBake.ToSharedRef(), InMasterSeed);
+		InField.ToSharedRef(), InEnvironment.ToSharedRef(), InMasterSeed);
 	MasterSeed = InMasterSeed;
 }
 

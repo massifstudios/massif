@@ -4,6 +4,7 @@
 #include "MassifEnvironmentProcess.h"
 
 class FMassifEnvironmentScheduler;
+class UWorld;
 
 /** One process, as the inspector draws it. */
 struct FMassifInspectorProcessRow
@@ -55,6 +56,9 @@ namespace MassifEnvironmentInspector
 {
 	/** Whether the panel is drawn. Toggled by massif.Env.Inspector. */
 	bool IsPanelVisible();
+
+	/** The solved graph the world is running on, null until one has been built. */
+	FMassifEnvironmentScheduler* FindScheduler(UWorld* World);
 
 	FMassifInspectorSnapshot Snapshot(const FMassifEnvironmentScheduler& Scheduler);
 

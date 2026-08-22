@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "MassifEnvironmentBake.h"
+#include "MassifEnvironmentBakeParams.h"
 #include "MassifRiverNetwork.h"
 
 class FMassifHeightmap;
@@ -47,26 +47,6 @@ struct FMassifBakeGrid
 	}
 
 	FVector2d CellCentreMeters(int32 Column, int32 Row) const;
-};
-
-/** The working buffers the stages hand to each other, before quantisation into channels. */
-struct FMassifBakeSurfaces
-{
-	/**
-	 * Altitudes are doubles rather than floats: at 2000 m a float resolves only
-	 * a tenth of a millimetre, which is coarser than the drop the depression
-	 * fill adds to keep a filled lake surface descending. In float the flat
-	 * would stay flat and no flow direction would point out of it.
-	 */
-	TArray<double> MeasuredAltitudeMeters;
-	TArray<double> FilledAltitudeMeters;
-
-	TArray<float> StandingWaterDepthMeters;
-	TArray<float> FlowAccumulationSquareMeters;
-	TArray<float> SoilDepthMeters;
-	TArray<float> Wetness;
-
-	void Allocate(int32 CellCount);
 };
 
 /** The eight neighbours of a cell, and how far away each one is in cell widths. */

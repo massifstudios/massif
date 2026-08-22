@@ -83,6 +83,12 @@ public:
 		return Heightmap.Get();
 	}
 
+	/** For anything that outlives the call, such as an elevation source built over it. */
+	TSharedRef<const FMassifHeightmap> GetHeightmapShared() const
+	{
+		return Heightmap;
+	}
+
 	/** Null on a field built without rivers, which is what the worldgen tests and the bake use. */
 	const FMassifRiverField* GetRiverField() const
 	{

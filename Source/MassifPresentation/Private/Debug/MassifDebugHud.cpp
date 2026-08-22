@@ -2,9 +2,9 @@
 
 #include "Engine/Canvas.h"
 #include "Engine/Engine.h"
-#include "Kismet/GameplayStatics.h"
 #include "MassifDebugChannelView.h"
 #include "MassifEnvironmentInspector.h"
+#include "MassifEnvironmentProbe.h"
 #include "MassifGameMode.h"
 
 namespace
@@ -17,6 +17,8 @@ namespace
 	constexpr float LabelHeight = 18.0f;
 	constexpr float SwatchSize = 13.0f;
 	constexpr float SwatchRowHeight = 18.0f;
+	constexpr float StatsRowHeight = 17.0f;
+	constexpr float HistogramHeight = 30.0f;
 
 	/** Slices the ramp is drawn in. Enough that a four-stop ramp reads as a gradient. */
 	constexpr int32 RampSliceCount = 96;
@@ -26,6 +28,7 @@ namespace
 
 	constexpr float InspectorWidth = 430.0f;
 	constexpr float InspectorRowHeight = 15.0f;
+	constexpr float ProbeWidth = 460.0f;
 
 	/** Dirt is what has not been re-solved yet, so it is the one thing worth colouring. */
 	const FLinearColor DirtyText(1.0f, 0.78f, 0.35f, 1.0f);
@@ -84,6 +87,32 @@ namespace
 		}
 		return FString::Printf(TEXT("%.2f"), Value);
 	}
+
+	float ContinuousPanelHeight()
+	{
+		return TitleHeight + RampHeight + LabelHeight + StatsRowHeight + HistogramHeight + 2.0f * PanelPadding;
+	}
+
+	/** Ground, shape and climate: two lines, because one would run off the panel. */
+	TArray<FString> HabitatRows(const FMassifHabitatSample& Sample)
+	{
+		return {
+			FString::Printf(TEXT("habitat  %s, %.0f m, %.1f deg slope, aspect %.0f deg"),
+				MassifDebugChannels::GetGroundTypeLabel(Sample.GroundType), Sample.AltitudeMeters,
+				Sample.SlopeDegrees, Sample.AspectDegrees),
+			FString::Printf(TEXT("         %.1f C, humidity %.2f, soil %.2f m, standing water %.2f m"),
+				Sample.TemperatureCelsius, Sample.Humidity, Sample.SoilDepthMeters,
+				Sample.StandingWaterDepthMeters) };
+	}
+
+	int32 ProbeHabitatRowCount(const FMassifProbeResult& Probe)
+	{
+		if (!Probe.Habitat.IsSet())
+		{
+			return 0;
+		}
+		return HabitatRows(*Probe.Habitat).Num();
+	}
 }
 
 AMassifDebugChannelView* AMassifDebugHud::FindChannelView()
@@ -92,49 +121,61 @@ AMassifDebugChannelView* AMassifDebugHud::FindChannelView()
 	{
 		return ChannelView.Get();
 	}
-	ChannelView = Cast<AMassifDebugChannelView>(
-		UGameplayStatics::GetActorOfClass(this, AMassifDebugChannelView::StaticClass()));
+	ChannelView = AMassifDebugChannelView::Find(this);
 	return ChannelView.Get();
 }
 
 void AMassifDebugHud::DrawHUD()
 {
 	Super::DrawHUD();
+	if (Canvas == nullptr)
+	{
+		return;
+	}
 
-	if (Canvas != nullptr && MassifEnvironmentInspector::IsPanelVisible())
+	if (MassifEnvironmentInspector::IsPanelVisible())
 	{
 		DrawEnvironmentInspector();
 	}
+	if (MassifEnvironmentProbe::IsPanelVisible())
+	{
+		DrawProbePanel();
+	}
+	DrawChannelLegend();
+}
 
+void AMassifDebugHud::DrawChannelLegend()
+{
 	AMassifDebugChannelView* View = FindChannelView();
-	if (View == nullptr || View->GetChannel() == EMassifDebugChannel::Off || Canvas == nullptr)
+	if (View == nullptr || View->GetChannel() == EMassifDebugChannel::Off)
 	{
 		return;
 	}
 
 	const FMassifDebugChannelLegend& Legend = View->GetLegend();
-	const int32 ChannelKey = static_cast<int32>(View->GetChannel());
+	const int32 ViewIndex = static_cast<int32>(View->GetChannel());
 	if (Legend.IsClassified())
 	{
 		const float Height = TitleHeight + Legend.ClassLabels.Num() * SwatchRowHeight + 2.0f * PanelPadding;
-		DrawPanel(Legend, ChannelKey, Height);
+		DrawPanel(Legend, ViewIndex, Height);
 		DrawClassifiedLegend(Legend, PanelLeftEdge(*Canvas), PanelMargin + PanelPadding + TitleHeight);
 		return;
 	}
 
-	const float Height = TitleHeight + RampHeight + LabelHeight + 2.0f * PanelPadding;
-	DrawPanel(Legend, ChannelKey, Height);
-	DrawContinuousLegend(Legend, PanelLeftEdge(*Canvas), PanelMargin + PanelPadding + TitleHeight);
+	const float RowTop = PanelMargin + PanelPadding + TitleHeight;
+	DrawPanel(Legend, ViewIndex, ContinuousPanelHeight());
+	DrawContinuousLegend(Legend, PanelLeftEdge(*Canvas), RowTop);
+	DrawStatistics(Legend, PanelLeftEdge(*Canvas), RowTop + RampHeight + LabelHeight);
 }
 
-void AMassifDebugHud::DrawPanel(const FMassifDebugChannelLegend& Legend, int32 ChannelKey, float PanelHeight)
+void AMassifDebugHud::DrawPanel(const FMassifDebugChannelLegend& Legend, int32 ViewIndex, float PanelHeight)
 {
 	const float Left = PanelLeftEdge(*Canvas);
 	DrawRect(PanelBackground, Left, PanelMargin, PanelWidth, PanelHeight);
 
-	// The key comes first: the legend doubles as the list of what the number
+	// The index comes first: the legend doubles as the list of what the number
 	// keys do, so it has to say which one is currently down.
-	const FString Title = FString::Printf(TEXT("%d  %s"), ChannelKey, *Legend.Name);
+	const FString Title = FString::Printf(TEXT("%d  %s"), ViewIndex, *Legend.Name);
 	DrawText(Title, PanelText, Left + PanelPadding, PanelMargin + PanelPadding, nullptr, 1.15f);
 }
 
@@ -172,6 +213,50 @@ void AMassifDebugHud::DrawClassifiedLegend(
 		DrawRect(Legend.RampStops[ClassIndex], SwatchLeft, Top, SwatchSize, SwatchSize);
 		DrawText(Legend.ClassLabels[ClassIndex], PanelText, SwatchLeft + SwatchSize + 8.0f, Top - 2.0f, nullptr, 1.0f);
 	}
+}
+
+void AMassifDebugHud::DrawStatistics(
+	const FMassifDebugChannelLegend& Legend, float PanelLeft, float RowTop)
+{
+	if (Legend.Statistics.SampleCount == 0)
+	{
+		return;
+	}
+
+	const FString Text = FString::Printf(TEXT("min %s   mean %s   max %s"),
+		*FormatValue(Legend.Statistics.Minimum), *FormatValue(Legend.Statistics.Mean),
+		*FormatValue(Legend.Statistics.Maximum));
+	DrawText(Text, PanelText, PanelLeft + PanelPadding, RowTop, nullptr, 1.0f);
+	DrawHistogram(Legend, PanelLeft, RowTop + StatsRowHeight);
+}
+
+void AMassifDebugHud::DrawHistogram(
+	const FMassifDebugChannelLegend& Legend, float PanelLeft, float RowTop)
+{
+	const int32 LargestCount = Legend.Statistics.GetLargestBucketCount();
+	if (LargestCount <= 0)
+	{
+		return;
+	}
+
+	const float BarWidth = (PanelWidth - 2.0f * PanelPadding) / MassifHistogramBucketCount;
+	for (int32 BucketIndex = 0; BucketIndex < Legend.Statistics.BucketCounts.Num(); ++BucketIndex)
+	{
+		const float BarLeft = PanelLeft + PanelPadding + BucketIndex * BarWidth;
+		DrawHistogramBar(Legend, BucketIndex, LargestCount, BarLeft, RowTop, BarWidth);
+	}
+}
+
+void AMassifDebugHud::DrawHistogramBar(
+	const FMassifDebugChannelLegend& Legend, int32 BucketIndex, int32 LargestCount, float BarLeft, float RowTop,
+	float BarWidth)
+{
+	const float Fraction = Legend.Statistics.BucketCounts[BucketIndex] / static_cast<float>(LargestCount);
+	// A bucket holding anything at all keeps a pixel, so an outlier tail stays visible.
+	const float BarHeight = FMath::Max(HistogramHeight * Fraction, 1.0f);
+	const FLinearColor Color =
+		EvaluateRamp(Legend.RampStops, (BucketIndex + 0.5f) / MassifHistogramBucketCount);
+	DrawRect(Color, BarLeft, RowTop + HistogramHeight - BarHeight, BarWidth + 1.0f, BarHeight);
 }
 
 void AMassifDebugHud::DrawEnvironmentInspector()
@@ -231,4 +316,47 @@ float AMassifDebugHud::DrawChannelRows(const FMassifInspectorSnapshot& Snapshot,
 		Top += InspectorRowHeight;
 	}
 	return Top;
+}
+
+void AMassifDebugHud::DrawProbePanel()
+{
+	const FMassifProbeResult& Probe = MassifEnvironmentProbe::GetLastProbe();
+	if (Probe.IsEmpty())
+	{
+		return;
+	}
+
+	const float Height =
+		TitleHeight + (Probe.Readings.Num() + ProbeHabitatRowCount(Probe)) * InspectorRowHeight
+		+ 2.0f * PanelPadding;
+	const float PanelTop = Canvas->SizeY - Height - PanelMargin;
+	DrawRect(PanelBackground, PanelMargin, PanelTop, ProbeWidth, Height);
+
+	const FString Title = FString::Printf(
+		TEXT("Probe  %.0f, %.0f m"), Probe.PositionMeters.X, Probe.PositionMeters.Y);
+	DrawText(Title, PanelText, PanelMargin + PanelPadding, PanelTop + PanelPadding, nullptr, 1.15f);
+	DrawProbeRows(Probe, PanelMargin + PanelPadding, PanelTop + PanelPadding + TitleHeight);
+}
+
+void AMassifDebugHud::DrawProbeRows(const FMassifProbeResult& Probe, float Left, float RowTop)
+{
+	float Top = RowTop;
+	for (const FMassifProbeReading& Reading : Probe.Readings)
+	{
+		const FString Text = FString::Printf(
+			TEXT("%-34s %s"), *Reading.Name.ToString(), *MassifEnvironmentProbe::FormatReading(Reading));
+		DrawText(Text, PanelText, Left, Top, nullptr, 1.0f);
+		Top += InspectorRowHeight;
+	}
+
+	if (!Probe.Habitat.IsSet())
+	{
+		return;
+	}
+
+	for (const FString& Row : HabitatRows(*Probe.Habitat))
+	{
+		DrawText(Row, QuietText, Left, Top, nullptr, 1.0f);
+		Top += InspectorRowHeight;
+	}
 }

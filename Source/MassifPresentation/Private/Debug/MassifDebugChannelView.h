@@ -32,10 +32,13 @@ public:
 
 	void Initialize(TSharedPtr<const FMassifHabitatField> InHabitat, AMassifTerrainManager* InTerrainManager);
 
+	/** The one in the world, for the console tools that need what it holds. Null before world gen. */
+	static AMassifDebugChannelView* Find(const UObject* WorldContext);
+
 	/**
-	 * The channel the world is currently painted with, held in the
-	 * massif.DebugChannel console variable so the number keys and the console
-	 * cannot disagree about which view is on.
+	 * The view the world is currently painted with, held in the massif.DebugChannel
+	 * console variable so the number keys and the console cannot disagree about
+	 * which view is on.
 	 */
 	static void RequestChannel(EMassifDebugChannel Channel);
 
@@ -51,9 +54,22 @@ public:
 		return Legend;
 	}
 
+	const TSharedPtr<const FMassifHabitatField>& GetHabitat() const
+	{
+		return Habitat;
+	}
+
+	/** Every selectable view, built from the channel registry once the environment is up. */
+	const TArray<FMassifDebugView>& GetViews() const
+	{
+		return Views;
+	}
+
 private:
-	/** Renders the channel and hands it to the terrain, or restores the terrain material for Off. */
+	/** Renders the view and hands it to the terrain, or restores the terrain material for Off. */
 	void ApplyChannel(EMassifDebugChannel Channel);
+
+	void EnsureViews();
 
 	TSharedPtr<const FMassifHabitatField> Habitat;
 
@@ -64,6 +80,7 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UTexture2D> ChannelTexture;
 
+	TArray<FMassifDebugView> Views;
 	EMassifDebugChannel CurrentChannel = EMassifDebugChannel::Off;
 	FMassifDebugChannelLegend Legend;
 };

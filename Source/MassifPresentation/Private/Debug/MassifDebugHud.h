@@ -6,13 +6,14 @@
 
 class AMassifDebugChannelView;
 struct FMassifDebugChannelLegend;
+struct FMassifInspectorSnapshot;
+struct FMassifProbeResult;
 
 /**
  * Draws the legend for the active debug channel view in the top-right corner,
- * and the environment process graph down the left when massif.Env.Inspector is
- * on:
- * which key is held down, what it shows, and what the colours on the ground
- * mean. Nothing at all while no view is on.
+ * the environment process graph down the left when massif.Env.Inspector is on,
+ * and the last massif.Env.Probe reading at the bottom: which view is on, what it
+ * shows, how its numbers are distributed, and what the world holds at one point.
  *
  * The legend reads its colours from the same ramp the texture was built from,
  * so it cannot drift out of step with what is painted on the terrain.
@@ -28,13 +29,24 @@ public:
 private:
 	AMassifDebugChannelView* FindChannelView();
 
-	void DrawPanel(const FMassifDebugChannelLegend& Legend, int32 ChannelKey, float PanelHeight);
+	void DrawChannelLegend();
+	void DrawPanel(const FMassifDebugChannelLegend& Legend, int32 ViewIndex, float PanelHeight);
 	void DrawContinuousLegend(const FMassifDebugChannelLegend& Legend, float PanelLeft, float RowTop);
 	void DrawClassifiedLegend(const FMassifDebugChannelLegend& Legend, float PanelLeft, float RowTop);
 
+	/** Min, mean and max, and the histogram that catches the everything-is-0.03 bug. */
+	void DrawStatistics(const FMassifDebugChannelLegend& Legend, float PanelLeft, float RowTop);
+	void DrawHistogram(const FMassifDebugChannelLegend& Legend, float PanelLeft, float RowTop);
+	void DrawHistogramBar(
+		const FMassifDebugChannelLegend& Legend, int32 BucketIndex, int32 LargestCount, float BarLeft,
+		float RowTop, float BarWidth);
+
 	void DrawEnvironmentInspector();
-	float DrawProcessRows(const struct FMassifInspectorSnapshot& Snapshot, float Left, float RowTop);
+	float DrawProcessRows(const FMassifInspectorSnapshot& Snapshot, float Left, float RowTop);
 	float DrawChannelRows(const FMassifInspectorSnapshot& Snapshot, float Left, float RowTop);
+
+	void DrawProbePanel();
+	void DrawProbeRows(const FMassifProbeResult& Probe, float Left, float RowTop);
 
 	TWeakObjectPtr<AMassifDebugChannelView> ChannelView;
 };

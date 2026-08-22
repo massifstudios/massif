@@ -2,173 +2,264 @@
 
 #include "Async/ParallelFor.h"
 #include "Engine/Texture2D.h"
-#include "MassifEnvironmentBake.h"
+#include "MassifEnvironmentState.h"
 #include "MassifHabitat.h"
-#include "MassifTerrainField.h"
 #include "TextureResource.h"
 
 namespace
 {
-	/** Spacing habitat is sampled at for a whole-world view: the bake's own cell size. */
-	constexpr double DebugViewSampleSpacingMeters = 8.0;
-
 	// Ramps run low to high. Values are what the colour looks like on screen: the
 	// texture is uploaded as sRGB, so these are the bytes written, not linear.
-	const FLinearColor StandingWaterRamp[] = {
+	const FLinearColor ViridisRamp[] = {
+		FLinearColor(0.267f, 0.005f, 0.329f), FLinearColor(0.254f, 0.265f, 0.530f),
+		FLinearColor(0.164f, 0.471f, 0.558f), FLinearColor(0.135f, 0.659f, 0.518f),
+		FLinearColor(0.478f, 0.821f, 0.318f), FLinearColor(0.993f, 0.906f, 0.144f) };
+	const FLinearColor MagmaRamp[] = {
+		FLinearColor(0.001f, 0.000f, 0.014f), FLinearColor(0.230f, 0.060f, 0.437f),
+		FLinearColor(0.535f, 0.146f, 0.532f), FLinearColor(0.828f, 0.281f, 0.430f),
+		FLinearColor(0.983f, 0.588f, 0.375f), FLinearColor(0.987f, 0.991f, 0.749f) };
+	const FLinearColor BlueWhiteRamp[] = {
 		FLinearColor(0.86f, 0.86f, 0.83f), FLinearColor(0.45f, 0.68f, 0.85f), FLinearColor(0.04f, 0.16f, 0.52f) };
-	const FLinearColor FlowRamp[] = {
-		FLinearColor(0.11f, 0.12f, 0.14f), FLinearColor(0.16f, 0.45f, 0.70f), FLinearColor(0.62f, 0.92f, 1.00f) };
-	const FLinearColor WetnessRamp[] = {
-		FLinearColor(0.74f, 0.61f, 0.37f), FLinearColor(0.57f, 0.70f, 0.35f),
-		FLinearColor(0.20f, 0.56f, 0.56f), FLinearColor(0.09f, 0.28f, 0.71f) };
-	const FLinearColor SoilRamp[] = {
-		FLinearColor(0.58f, 0.56f, 0.53f), FLinearColor(0.53f, 0.40f, 0.25f), FLinearColor(0.22f, 0.14f, 0.08f) };
-	const FLinearColor HumidityRamp[] = {
-		FLinearColor(0.79f, 0.66f, 0.41f), FLinearColor(0.36f, 0.62f, 0.55f), FLinearColor(0.10f, 0.29f, 0.73f) };
-	const FLinearColor TemperatureRamp[] = {
-		FLinearColor(0.18f, 0.34f, 0.86f), FLinearColor(0.92f, 0.93f, 0.95f), FLinearColor(0.86f, 0.33f, 0.13f) };
-	const FLinearColor AltitudeRamp[] = {
+	const FLinearColor TerrainRamp[] = {
 		FLinearColor(0.17f, 0.42f, 0.23f), FLinearColor(0.76f, 0.72f, 0.39f),
 		FLinearColor(0.55f, 0.40f, 0.27f), FLinearColor(0.96f, 0.97f, 0.99f) };
-	const FLinearColor SlopeRamp[] = {
-		FLinearColor(0.20f, 0.50f, 0.25f), FLinearColor(0.86f, 0.80f, 0.28f), FLinearColor(0.81f, 0.24f, 0.19f) };
 
-	/** One colour per EMassifGroundType, in the enum's own order. */
-	const FLinearColor GroundTypeColors[] = {
+	/**
+	 * One colour per class. The first entries are the ground types in the enum's
+	 * own order, so the habitat view keeps its reading; the rest carry a
+	 * registered classified channel, which names no colours of its own.
+	 */
+	const FLinearColor CategoricalRamp[] = {
 		FLinearColor(0.46f, 0.45f, 0.44f), FLinearColor(0.73f, 0.63f, 0.47f), FLinearColor(0.29f, 0.51f, 0.21f),
-		FLinearColor(0.19f, 0.56f, 0.56f), FLinearColor(0.96f, 0.97f, 0.99f),
-		FLinearColor(0.09f, 0.28f, 0.72f) };
+		FLinearColor(0.19f, 0.56f, 0.56f), FLinearColor(0.96f, 0.97f, 0.99f), FLinearColor(0.09f, 0.28f, 0.72f),
+		FLinearColor(0.85f, 0.37f, 0.28f), FLinearColor(0.85f, 0.72f, 0.24f), FLinearColor(0.62f, 0.35f, 0.71f),
+		FLinearColor(0.35f, 0.71f, 0.68f), FLinearColor(0.90f, 0.55f, 0.75f), FLinearColor(0.50f, 0.50f, 0.50f) };
 
-	static_assert(UE_ARRAY_COUNT(GroundTypeColors) == static_cast<int32>(EMassifGroundType::Count),
+	static_assert(UE_ARRAY_COUNT(CategoricalRamp) >= static_cast<int32>(EMassifGroundType::Count),
 		"Every ground type needs a debug colour");
 
-	/** How a channel is read off the world, and how its numbers become colour. */
-	struct FChannelDescription
+	/** Classes a legend will list. Past this the view is not a classification any more. */
+	constexpr int32 MaxLegendClassCount = static_cast<int32>(UE_ARRAY_COUNT(CategoricalRamp));
+
+	TArray<FString> GroundTypeLabels()
 	{
-		const TCHAR* Name = TEXT("");
-		const TCHAR* Unit = TEXT("");
-		TArrayView<const FLinearColor> Ramp;
-
-		/** Set where the numbers are class indices rather than a measurement. */
-		TArrayView<const FString> ClassLabels;
-
-		/**
-		 * Fixed display range. Left at zero for channels whose interesting range
-		 * depends on the world, which are normalised against what the solve
-		 * actually produced instead.
-		 */
-		double FixedMinimum = 0.0;
-		double FixedMaximum = 0.0;
-
-		/** Flow accumulation covers six orders of magnitude, so it is ramped in log space. */
-		bool bLogarithmic = false;
-
-		bool HasFixedRange() const
+		TArray<FString> Labels;
+		for (int32 TypeIndex = 0; TypeIndex < static_cast<int32>(EMassifGroundType::Count); ++TypeIndex)
 		{
-			return FixedMaximum > FixedMinimum;
+			Labels.Add(MassifDebugChannels::GetGroundTypeLabel(static_cast<EMassifGroundType>(TypeIndex)));
 		}
-
-		bool IsClassified() const
-		{
-			return !ClassLabels.IsEmpty();
-		}
-	};
-
-	const TArray<FString>& GroundTypeLabels()
-	{
-		static const TArray<FString> Labels = {
-			TEXT("Rock"), TEXT("Scree"), TEXT("Soil"), TEXT("Wetland"), TEXT("Snow") };
 		return Labels;
 	}
 
-	FChannelDescription DescribeChannel(EMassifDebugChannel Channel)
+	TArrayView<const FLinearColor> GetRamp(EMassifChannelColorMap ColorMap)
 	{
-		switch (Channel)
+		switch (ColorMap)
 		{
-			case EMassifDebugChannel::StandingWater:
-				return { TEXT("Standing water"), TEXT("m"), StandingWaterRamp };
-			case EMassifDebugChannel::FlowAccumulation:
-				return { TEXT("Flow accumulation"), TEXT("m2"), FlowRamp, {}, 0.0, 0.0, true };
-			case EMassifDebugChannel::Wetness:
-				return { TEXT("Wetness"), TEXT(""), WetnessRamp, {}, 0.0, 1.0 };
-			case EMassifDebugChannel::SoilDepth:
-				return { TEXT("Soil depth"), TEXT("m"), SoilRamp };
-			case EMassifDebugChannel::GroundType:
-				return { TEXT("Ground type"), TEXT(""), GroundTypeColors, GroundTypeLabels() };
-			case EMassifDebugChannel::Humidity:
-				return { TEXT("Humidity"), TEXT(""), HumidityRamp, {}, 0.0, 1.0 };
-			case EMassifDebugChannel::Temperature:
-				return { TEXT("Temperature"), TEXT("C"), TemperatureRamp };
-			case EMassifDebugChannel::Altitude:
-				return { TEXT("Altitude"), TEXT("m"), AltitudeRamp };
-			case EMassifDebugChannel::Slope:
-				return { TEXT("Slope"), TEXT("deg"), SlopeRamp, {}, 0.0, 70.0 };
+			case EMassifChannelColorMap::Magma:
+				return MagmaRamp;
+			case EMassifChannelColorMap::BlueWhite:
+				return BlueWhiteRamp;
+			case EMassifChannelColorMap::Terrain:
+				return TerrainRamp;
+			case EMassifChannelColorMap::Categorical:
+				return CategoricalRamp;
 			default:
-				return {};
+				return ViridisRamp;
 		}
 	}
 
-	/** Channels that come straight out of the bake, without the habitat layer over them. */
-	bool TryGetBakeChannel(EMassifDebugChannel Channel, EMassifBakeChannel& OutBakeChannel)
+	/** Classes are drawn from the categorical ramp whatever colour map a channel declared. */
+	EMassifChannelColorMap ResolveColorMap(const FMassifDebugView& View)
 	{
-		switch (Channel)
+		if (View.IsClassified())
 		{
-			case EMassifDebugChannel::StandingWater:
-				OutBakeChannel = EMassifBakeChannel::StandingWaterDepth;
-				return true;
-			case EMassifDebugChannel::FlowAccumulation:
-				OutBakeChannel = EMassifBakeChannel::FlowAccumulation;
-				return true;
-			case EMassifDebugChannel::Wetness:
-				OutBakeChannel = EMassifBakeChannel::Wetness;
-				return true;
-			case EMassifDebugChannel::SoilDepth:
-				OutBakeChannel = EMassifBakeChannel::SoilDepth;
-				return true;
-			default:
-				return false;
+			return EMassifChannelColorMap::Categorical;
 		}
+		return View.ColorMap;
 	}
 
-	double SampleHabitatChannel(
-		const FMassifHabitatField& Habitat, EMassifDebugChannel Channel, FVector2d PositionMeters)
+	/** The finest grid the graph solves on, which is what a world-wide view is sized against. */
+	const FMassifChannelGrid& FinestGrid(const FMassifEnvironmentState& Environment)
 	{
-		const FMassifHabitatSample Sample = Habitat.Sample(PositionMeters, DebugViewSampleSpacingMeters);
-		switch (Channel)
+		const TArray<FMassifChannelHandle> Channels = Environment.GetChannelsByName();
+		FMassifChannelHandle Finest = Channels[0];
+		for (FMassifChannelHandle Channel : Channels)
 		{
-			case EMassifDebugChannel::GroundType:
-				return static_cast<double>(Sample.GroundType);
-			case EMassifDebugChannel::Humidity:
-				return Sample.Humidity;
-			case EMassifDebugChannel::Temperature:
-				return Sample.TemperatureCelsius;
-			case EMassifDebugChannel::Altitude:
-				return Sample.AltitudeMeters;
-			case EMassifDebugChannel::Slope:
-				return Sample.SlopeDegrees;
-			default:
-				return 0.0;
-		}
-	}
-
-	void SampleRow(
-		const FMassifHabitatField& Habitat, EMassifDebugChannel Channel, int32 Row, TArray<float>& Values)
-	{
-		const FMassifEnvironmentBake& Bake = Habitat.GetEnvironmentBake();
-		EMassifBakeChannel BakeChannel = EMassifBakeChannel::Wetness;
-		const bool bFromBake = TryGetBakeChannel(Channel, BakeChannel);
-
-		for (int32 Column = 0; Column < Bake.GetWidth(); ++Column)
-		{
-			const int32 Index = Row * Bake.GetWidth() + Column;
-			if (bFromBake)
+			const bool bFiner =
+				Environment.GetGrid(Channel).CellSizeMeters < Environment.GetGrid(Finest).CellSizeMeters;
+			if (bFiner)
 			{
-				Values[Index] = static_cast<float>(Bake.ReadCell(BakeChannel, Column, Row));
-				continue;
+				Finest = Channel;
 			}
-			Values[Index] = static_cast<float>(
-				SampleHabitatChannel(Habitat, Channel, Bake.GetCellCentreMeters(Column, Row)));
 		}
+		return Environment.GetGrid(Finest);
+	}
+
+	/** A registered channel is drawn on its own grid; a habitat view on the finest one. */
+	const FMassifChannelGrid& ResolveViewGrid(
+		const FMassifEnvironmentState& Environment, const FMassifDebugView& View)
+	{
+		if (View.Source == EMassifDebugViewSource::Channel)
+		{
+			return Environment.GetGrid(View.Channel);
+		}
+		return FinestGrid(Environment);
+	}
+
+	/** A registered classified channel names no classes, so the legend lists its indices. */
+	TArray<FString> MakeClassLabels(const FMassifEnvironmentState& Environment, FMassifChannelHandle Channel)
+	{
+		if (Environment.GetDescriptor(Channel).Type != EMassifChannelType::Classified)
+		{
+			return {};
+		}
+
+		const int32 HighestClass = FMath::Clamp(
+			FMath::RoundToInt32(Environment.GetChannelMaximum(Channel)), 0, MaxLegendClassCount - 1);
+		TArray<FString> Labels;
+		for (int32 ClassIndex = 0; ClassIndex <= HighestClass; ++ClassIndex)
+		{
+			Labels.Add(FString::Printf(TEXT("Class %d"), ClassIndex));
+		}
+		return Labels;
+	}
+
+	FMassifDebugView MakeChannelView(const FMassifEnvironmentState& Environment, FMassifChannelHandle Channel)
+	{
+		const FMassifChannelDescriptor& Descriptor = Environment.GetDescriptor(Channel);
+
+		FMassifDebugView View;
+		View.Name = Descriptor.Name;
+		View.Unit = Descriptor.Unit;
+		View.Source = EMassifDebugViewSource::Channel;
+		View.ColorMap = Descriptor.ColorMap;
+		View.DisplayRange = Descriptor.DisplayRange;
+		View.Channel = Channel;
+		View.ChannelType = Descriptor.Type;
+		View.ClassLabels = MakeClassLabels(Environment, Channel);
+		return View;
+	}
+
+	FMassifDebugView MakeHabitatView(EMassifHabitatView HabitatView)
+	{
+		FMassifDebugView View;
+		View.Source = EMassifDebugViewSource::Habitat;
+		View.HabitatView = HabitatView;
+		switch (HabitatView)
+		{
+			case EMassifHabitatView::GroundType:
+				View.Name = TEXT("Habitat.GroundType");
+				View.ColorMap = EMassifChannelColorMap::Categorical;
+				View.ClassLabels = GroundTypeLabels();
+				return View;
+			case EMassifHabitatView::Humidity:
+				View.Name = TEXT("Habitat.Humidity");
+				View.ColorMap = EMassifChannelColorMap::BlueWhite;
+				View.DisplayRange = FVector2d(0.0, 1.0);
+				return View;
+			case EMassifHabitatView::Temperature:
+				View.Name = TEXT("Habitat.Temperature");
+				View.Unit = TEXT("C");
+				View.ColorMap = EMassifChannelColorMap::Magma;
+				return View;
+			case EMassifHabitatView::Altitude:
+				View.Name = TEXT("Habitat.Altitude");
+				View.Unit = TEXT("m");
+				View.ColorMap = EMassifChannelColorMap::Terrain;
+				return View;
+			default:
+				View.Name = TEXT("Habitat.Slope");
+				View.Unit = TEXT("deg");
+				View.ColorMap = EMassifChannelColorMap::Magma;
+				View.DisplayRange = FVector2d(0.0, 70.0);
+				return View;
+		}
+	}
+
+	double SampleHabitatView(
+		const FMassifHabitatField& Habitat, EMassifHabitatView HabitatView, FVector2d PositionMeters,
+		double SampleSpacingMeters)
+	{
+		const FMassifHabitatSample Sample = Habitat.Sample(PositionMeters, SampleSpacingMeters);
+		switch (HabitatView)
+		{
+			case EMassifHabitatView::GroundType:
+				return static_cast<double>(Sample.GroundType);
+			case EMassifHabitatView::Humidity:
+				return Sample.Humidity;
+			case EMassifHabitatView::Temperature:
+				return Sample.TemperatureCelsius;
+			case EMassifHabitatView::Altitude:
+				return Sample.AltitudeMeters;
+			default:
+				return Sample.SlopeDegrees;
+		}
+	}
+
+	/** A vector channel's scalar view is its magnitude; the arrows carry the direction. */
+	double ReadChannelCell(
+		const FMassifEnvironmentState& Environment, const FMassifDebugView& View, int32 Column, int32 Row)
+	{
+		if (View.ChannelType != EMassifChannelType::Vector2)
+		{
+			return Environment.ReadCell(View.Channel, Column, Row);
+		}
+
+		const double East = Environment.ReadCell(View.Channel, Column, Row, 0);
+		const double North = Environment.ReadCell(View.Channel, Column, Row, 1);
+		return FMath::Sqrt(East * East + North * North);
+	}
+
+	void SampleChannelRow(
+		const FMassifEnvironmentState& Environment,
+		const FMassifDebugView& View,
+		const FMassifChannelGrid& Grid,
+		int32 Row,
+		TArray<double>& Values)
+	{
+		for (int32 Column = 0; Column < Grid.Width; ++Column)
+		{
+			Values[Row * Grid.Width + Column] = ReadChannelCell(Environment, View, Column, Row);
+		}
+	}
+
+	void SampleHabitatRow(
+		const FMassifHabitatField& Habitat,
+		EMassifHabitatView HabitatView,
+		const FMassifChannelGrid& Grid,
+		int32 Row,
+		TArray<double>& Values)
+	{
+		for (int32 Column = 0; Column < Grid.Width; ++Column)
+		{
+			Values[Row * Grid.Width + Column] = SampleHabitatView(
+				Habitat, HabitatView, Grid.CellCentreMeters(Column, Row), Grid.CellSizeMeters);
+		}
+	}
+
+	/** Every cell of the view, from whichever of the two sources it reads. */
+	void SampleWorld(
+		const FMassifHabitatField& Habitat,
+		const FMassifDebugView& View,
+		const FMassifChannelGrid& Grid,
+		TArray<double>& Values)
+	{
+		Values.SetNumUninitialized(Grid.CellCount());
+		if (View.Source == EMassifDebugViewSource::Habitat)
+		{
+			const EMassifHabitatView HabitatView = View.HabitatView;
+			ParallelFor(Grid.Height, [&Habitat, HabitatView, &Grid, &Values](int32 Row)
+			{
+				SampleHabitatRow(Habitat, HabitatView, Grid, Row, Values);
+			});
+			return;
+		}
+
+		const FMassifEnvironmentState& Environment = Habitat.GetEnvironment();
+		ParallelFor(Grid.Height, [&Environment, &View, &Grid, &Values](int32 Row)
+		{
+			SampleChannelRow(Environment, View, Grid, Row, Values);
+		});
 	}
 
 	/**
@@ -184,10 +275,25 @@ namespace
 	/** Readings the range is measured from. Sorting 6 M values to place two ends is waste. */
 	constexpr int32 RangeSampleTarget = 65536;
 
-	TArray<float> SortedSample(TArrayView<const float> Values)
+	/**
+	 * How far the top of a channel has to stand above its middle before the ramp
+	 * runs in log space. Flow accumulation holds a hillside and a trunk river in
+	 * one channel, and no linear ramp can draw both.
+	 */
+	constexpr double LogarithmicRampRatio = 1000.0;
+
+	/** Where the ramp's ends sit and what space it runs in, taken from the numbers themselves. */
+	struct FMassifRampSpace
+	{
+		double Minimum = 0.0;
+		double Maximum = 0.0;
+		bool bLogarithmic = false;
+	};
+
+	TArray<double> SortedSample(TArrayView<const double> Values)
 	{
 		const int32 Stride = FMath::Max(Values.Num() / RangeSampleTarget, 1);
-		TArray<float> Sorted;
+		TArray<double> Sorted;
 		Sorted.Reserve(Values.Num() / Stride + 1);
 		for (int32 Index = 0; Index < Values.Num(); Index += Stride)
 		{
@@ -197,22 +303,29 @@ namespace
 		return Sorted;
 	}
 
-	void MeasureExtent(TArrayView<const float> Values, double& OutMinimum, double& OutMaximum)
+	bool SpansOrdersOfMagnitude(TArrayView<const double> Sorted, double Maximum)
 	{
-		OutMinimum = TNumericLimits<double>::Max();
-		OutMaximum = TNumericLimits<double>::Lowest();
-		for (float Value : Values)
+		if (Sorted.IsEmpty())
 		{
-			OutMinimum = FMath::Min(OutMinimum, static_cast<double>(Value));
-			OutMaximum = FMath::Max(OutMaximum, static_cast<double>(Value));
+			return false;
 		}
+
+		const double Median = Sorted[Sorted.Num() / 2];
+		if (Median <= 0.0)
+		{
+			return false;
+		}
+		return Maximum / Median >= LogarithmicRampRatio;
 	}
 
-	void MeasureRange(TArrayView<const float> Values, double& OutMinimum, double& OutMaximum)
+	/**
+	 * An empty percentile range means the view is flat almost everywhere and
+	 * interesting in a handful of cells — standing water, which is a few tarns in
+	 * a world of dry ground. Clipping there would draw nothing at all, so those
+	 * views keep the extent they were measured over.
+	 */
+	void ApplyPercentileEnds(TArrayView<const double> Sorted, FMassifRampSpace& Space)
 	{
-		MeasureExtent(Values, OutMinimum, OutMaximum);
-
-		const TArray<float> Sorted = SortedSample(Values);
 		if (Sorted.IsEmpty())
 		{
 			return;
@@ -221,48 +334,49 @@ namespace
 		const int32 LastIndex = Sorted.Num() - 1;
 		const double Low = Sorted[FMath::RoundToInt32(RampLowPercentile * LastIndex)];
 		const double High = Sorted[FMath::RoundToInt32(RampHighPercentile * LastIndex)];
-
-		// An empty percentile range means the channel is flat almost everywhere and
-		// interesting in a handful of cells — standing water, which is a few tarns
-		// in a world of dry ground. Clipping there would draw nothing at all, so
-		// those channels keep the full extent measured above.
 		if (High - Low > UE_DOUBLE_KINDA_SMALL_NUMBER)
 		{
-			OutMinimum = Low;
-			OutMaximum = High;
+			Space.Minimum = Low;
+			Space.Maximum = High;
 		}
 	}
 
-	FLinearColor EvaluateRamp(TArrayView<const FLinearColor> Ramp, double Fraction)
+	FMassifRampSpace MeasureRampSpace(
+		const FMassifDebugView& View, const FMassifChannelStatistics& Statistics, TArrayView<const double> Values)
 	{
-		if (Ramp.IsEmpty())
+		FMassifRampSpace Space;
+		if (View.DisplayRange.IsSet())
 		{
-			return FLinearColor::Black;
+			Space.Minimum = View.DisplayRange->X;
+			Space.Maximum = View.DisplayRange->Y;
+			return Space;
 		}
 
-		const double Scaled = FMath::Clamp(Fraction, 0.0, 1.0) * (Ramp.Num() - 1);
-		const int32 Lower = FMath::Min(FMath::FloorToInt32(Scaled), Ramp.Num() - 1);
-		const int32 Upper = FMath::Min(Lower + 1, Ramp.Num() - 1);
-		return FMath::Lerp(Ramp[Lower], Ramp[Upper], static_cast<float>(Scaled - Lower));
+		const TArray<double> Sorted = SortedSample(Values);
+		Space.Minimum = Statistics.Minimum;
+		Space.Maximum = Statistics.Maximum;
+		Space.bLogarithmic = SpansOrdersOfMagnitude(Sorted, Statistics.Maximum);
+		ApplyPercentileEnds(Sorted, Space);
+		return Space;
 	}
 
 	/** Where a value sits between the ends of the legend, in the space the ramp is drawn in. */
-	double RampFraction(const FChannelDescription& Description, double Value, double Minimum, double Maximum)
+	double RampFraction(const FMassifRampSpace& Space, double Value)
 	{
-		if (Maximum - Minimum <= UE_DOUBLE_KINDA_SMALL_NUMBER)
+		if (Space.Maximum - Space.Minimum <= UE_DOUBLE_KINDA_SMALL_NUMBER)
 		{
 			return 0.0;
 		}
-		if (!Description.bLogarithmic)
+		if (!Space.bLogarithmic)
 		{
-			return (Value - Minimum) / (Maximum - Minimum);
+			return (Value - Space.Minimum) / (Space.Maximum - Space.Minimum);
 		}
 
 		// Against the observed floor as well as the ceiling. Measuring only from
 		// zero would put a whole hillside, which spans two decades, inside the
 		// first fifth of a ramp that has to reach a river eight decades up.
-		const double CompressedMin = FMath::Loge(1.0 + FMath::Max(Minimum, 0.0));
-		const double CompressedSpan = FMath::Loge(1.0 + FMath::Max(Maximum, 0.0)) - CompressedMin;
+		const double CompressedMin = FMath::Loge(1.0 + FMath::Max(Space.Minimum, 0.0));
+		const double CompressedSpan = FMath::Loge(1.0 + FMath::Max(Space.Maximum, 0.0)) - CompressedMin;
 		if (CompressedSpan <= UE_DOUBLE_KINDA_SMALL_NUMBER)
 		{
 			return 0.0;
@@ -270,15 +384,16 @@ namespace
 		return (FMath::Loge(1.0 + FMath::Max(Value, 0.0)) - CompressedMin) / CompressedSpan;
 	}
 
-	FColor ColorForValue(
-		const FChannelDescription& Description, double Value, double Minimum, double Maximum)
+	FColor ColorForValue(const FMassifDebugView& View, const FMassifRampSpace& Space, double Value)
 	{
-		if (Description.IsClassified())
+		if (View.IsClassified())
 		{
-			const int32 ClassIndex = FMath::Clamp(FMath::RoundToInt32(Value), 0, Description.Ramp.Num() - 1);
-			return Description.Ramp[ClassIndex].ToFColor(true);
+			const TArrayView<const FLinearColor> Ramp = GetRamp(ResolveColorMap(View));
+			const int32 ClassIndex = FMath::Clamp(FMath::RoundToInt32(Value), 0, Ramp.Num() - 1);
+			return Ramp[ClassIndex].ToFColor(true);
 		}
-		return EvaluateRamp(Description.Ramp, RampFraction(Description, Value, Minimum, Maximum)).ToFColor(true);
+		return MassifDebugChannels::EvaluateColorMap(ResolveColorMap(View), RampFraction(Space, Value))
+			.ToFColor(true);
 	}
 
 	UTexture2D* EnsureTexture(TObjectPtr<UTexture2D>& Texture, int32 Width, int32 Height)
@@ -297,69 +412,120 @@ namespace
 		Texture->NeverStream = true;
 		return Texture;
 	}
+
+	void FillLegend(
+		const FMassifDebugView& View,
+		const FMassifRampSpace& Space,
+		const FMassifChannelStatistics& Statistics,
+		FMassifDebugChannelLegend& OutLegend)
+	{
+		const TArrayView<const FLinearColor> Ramp = GetRamp(ResolveColorMap(View));
+
+		OutLegend.Name = View.Name.ToString();
+		OutLegend.Unit = View.Unit;
+		OutLegend.MinValue = Space.Minimum;
+		OutLegend.MaxValue = Space.Maximum;
+		OutLegend.Statistics = Statistics;
+		OutLegend.RampStops.Reset();
+		OutLegend.RampStops.Append(Ramp.GetData(), Ramp.Num());
+		OutLegend.ClassLabels = View.ClassLabels;
+	}
+
+	void UploadPixels(
+		const FMassifDebugView& View,
+		const FMassifRampSpace& Space,
+		const FMassifChannelGrid& Grid,
+		TArrayView<const double> Values,
+		UTexture2D& Texture)
+	{
+		FTexture2DMipMap& Mip = Texture.GetPlatformData()->Mips[0];
+		FColor* Pixels = static_cast<FColor*>(Mip.BulkData.Lock(LOCK_READ_WRITE));
+		const int32 Width = Grid.Width;
+		ParallelFor(Grid.Height, [&View, &Space, &Values, Pixels, Width](int32 Row)
+		{
+			for (int32 Column = 0; Column < Width; ++Column)
+			{
+				const int32 Index = Row * Width + Column;
+				Pixels[Index] = ColorForValue(View, Space, Values[Index]);
+			}
+		});
+		Mip.BulkData.Unlock();
+		Texture.UpdateResource();
+	}
 }
 
-const TCHAR* MassifDebugChannels::GetName(EMassifDebugChannel Channel)
+TArray<FMassifDebugView> MassifDebugChannels::BuildViews(const FMassifEnvironmentState& Environment)
 {
-	if (Channel == EMassifDebugChannel::Off)
+	TArray<FMassifDebugView> Views;
+	for (FMassifChannelHandle Channel : Environment.GetChannelsByName())
 	{
-		return TEXT("Off");
+		Views.Add(MakeChannelView(Environment, Channel));
 	}
-	return DescribeChannel(Channel).Name;
+
+	for (int32 ViewIndex = 0; ViewIndex < static_cast<int32>(EMassifHabitatView::Count); ++ViewIndex)
+	{
+		Views.Add(MakeHabitatView(static_cast<EMassifHabitatView>(ViewIndex)));
+	}
+	return Views;
+}
+
+const TCHAR* MassifDebugChannels::GetGroundTypeLabel(EMassifGroundType GroundType)
+{
+	switch (GroundType)
+	{
+		case EMassifGroundType::Rock: return TEXT("Rock");
+		case EMassifGroundType::Scree: return TEXT("Scree");
+		case EMassifGroundType::Soil: return TEXT("Soil");
+		case EMassifGroundType::Wetland: return TEXT("Wetland");
+		case EMassifGroundType::PermanentSnow: return TEXT("Snow");
+		case EMassifGroundType::Water: return TEXT("Water");
+		default: return TEXT("Unknown");
+	}
+}
+
+int32 MassifDebugChannels::FindViewIndex(const TArray<FMassifDebugView>& Views, FName Name)
+{
+	return Views.IndexOfByPredicate([Name](const FMassifDebugView& View)
+	{
+		return View.Name == Name;
+	});
+}
+
+FLinearColor MassifDebugChannels::EvaluateColorMap(EMassifChannelColorMap ColorMap, double Fraction)
+{
+	const TArrayView<const FLinearColor> Ramp = GetRamp(ColorMap);
+	const double Scaled = FMath::Clamp(Fraction, 0.0, 1.0) * (Ramp.Num() - 1);
+	const int32 Lower = FMath::Min(FMath::FloorToInt32(Scaled), Ramp.Num() - 1);
+	const int32 Upper = FMath::Min(Lower + 1, Ramp.Num() - 1);
+	return FMath::Lerp(Ramp[Lower], Ramp[Upper], static_cast<float>(Scaled - Lower));
+}
+
+TextureFilter MassifDebugChannels::GetTextureFilter(const FMassifDebugView& View)
+{
+	if (View.IsClassified())
+	{
+		return TF_Nearest;
+	}
+	return TF_Bilinear;
 }
 
 void MassifDebugChannels::RenderChannel(
 	const FMassifHabitatField& Habitat,
-	EMassifDebugChannel Channel,
+	const FMassifDebugView& View,
 	TObjectPtr<UTexture2D>& Texture,
 	FMassifDebugChannelLegend& OutLegend)
 {
-	const FMassifEnvironmentBake& Bake = Habitat.GetEnvironmentBake();
-	const FChannelDescription Description = DescribeChannel(Channel);
+	const FMassifEnvironmentState& Environment = Habitat.GetEnvironment();
+	const FMassifChannelGrid& Grid = ResolveViewGrid(Environment, View);
 
-	TArray<float> Values;
-	Values.SetNumUninitialized(Bake.GetWidth() * Bake.GetHeight());
-	ParallelFor(Bake.GetHeight(), [&Habitat, Channel, &Values](int32 Row)
-	{
-		SampleRow(Habitat, Channel, Row, Values);
-	});
+	TArray<double> Values;
+	SampleWorld(Habitat, View, Grid, Values);
 
-	double Minimum = Description.FixedMinimum;
-	double Maximum = Description.FixedMaximum;
-	if (!Description.HasFixedRange())
-	{
-		MeasureRange(Values, Minimum, Maximum);
-	}
+	const FMassifChannelStatistics Statistics = MassifChannelStatistics::Measure(Values);
+	const FMassifRampSpace Space = MeasureRampSpace(View, Statistics, Values);
+	FillLegend(View, Space, Statistics, OutLegend);
 
-	OutLegend.Name = Description.Name;
-	OutLegend.Unit = Description.Unit;
-	OutLegend.MinValue = Minimum;
-	OutLegend.MaxValue = Maximum;
-	OutLegend.RampStops.Reset();
-	OutLegend.RampStops.Append(Description.Ramp.GetData(), Description.Ramp.Num());
-	OutLegend.ClassLabels.Reset();
-	OutLegend.ClassLabels.Append(Description.ClassLabels.GetData(), Description.ClassLabels.Num());
-
-	UTexture2D* ChannelTexture = EnsureTexture(Texture, Bake.GetWidth(), Bake.GetHeight());
-	// Classes must not be interpolated: a pixel halfway between rock and soil
-	// would be drawn as the scree that sits between them in the enum.
-	ChannelTexture->Filter = TF_Bilinear;
-	if (Description.IsClassified())
-	{
-		ChannelTexture->Filter = TF_Nearest;
-	}
-
-	FTexture2DMipMap& Mip = ChannelTexture->GetPlatformData()->Mips[0];
-	FColor* Pixels = static_cast<FColor*>(Mip.BulkData.Lock(LOCK_READ_WRITE));
-	const int32 Width = Bake.GetWidth();
-	ParallelFor(Bake.GetHeight(), [&Description, &Values, Pixels, Width, Minimum, Maximum](int32 Row)
-	{
-		for (int32 Column = 0; Column < Width; ++Column)
-		{
-			const int32 Index = Row * Width + Column;
-			Pixels[Index] = ColorForValue(Description, Values[Index], Minimum, Maximum);
-		}
-	});
-	Mip.BulkData.Unlock();
-	ChannelTexture->UpdateResource();
+	UTexture2D* ViewTexture = EnsureTexture(Texture, Grid.Width, Grid.Height);
+	ViewTexture->Filter = GetTextureFilter(View);
+	UploadPixels(View, Space, Grid, Values, *ViewTexture);
 }

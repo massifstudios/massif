@@ -1,7 +1,11 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "MassifEnvironmentBake.h"
+#include "MassifElevationSource.h"
+#include "MassifEnvironmentBakeParams.h"
+#include "MassifEnvironmentGraph.h"
+#include "MassifEnvironmentScheduler.h"
+#include "MassifEnvironmentState.h"
 #include "MassifHabitat.h"
 #include "MassifHeightmap.h"
 #include "MassifTerrainField.h"
@@ -22,7 +26,7 @@ namespace MassifTestTerrain
 	constexpr int32 SampleCountPerSide = 1024;
 	constexpr double SampleSpacingMeters = 10.0;
 
-	inline TSharedRef<const FMassifTerrainField> MakeField()
+	inline TSharedRef<const FMassifHeightmap> MakeHeightmap()
 	{
 		TArray<double> Altitudes;
 		Altitudes.Reserve(SampleCountPerSide * SampleCountPerSide);
@@ -40,18 +44,36 @@ namespace MassifTestTerrain
 					+ 120.0 * FMath::Sin((East + North) / 260.0));
 			}
 		}
-		return MakeShared<const FMassifTerrainField>(
-			FMassifHeightmap::FromAltitudes(Altitudes, SampleCountPerSide, SampleCountPerSide, SampleSpacingMeters));
+		return FMassifHeightmap::FromAltitudes(
+			Altitudes, SampleCountPerSide, SampleCountPerSide, SampleSpacingMeters);
 	}
 
-	/** The same terrain with its water solved, which is what habitat needs to answer at all. */
+	inline TSharedRef<const FMassifTerrainField> MakeField()
+	{
+		return MakeShared<const FMassifTerrainField>(MakeHeightmap());
+	}
+
+	/** The solved channels over that terrain, which is what habitat needs to answer at all. */
+	inline TSharedRef<const FMassifEnvironmentState> MakeEnvironment(
+		TSharedRef<const FMassifHeightmap> Heightmap, uint32 MasterSeed)
+	{
+		FString BuildError;
+		const TUniquePtr<FMassifEnvironmentScheduler> Scheduler = MassifBuildEnvironment(
+			MakeShared<const FMassifHeightmapElevationSource>(Heightmap),
+			FMassifGeoreference(),
+			MasterSeed,
+			FMassifEnvironmentBakeParams(),
+			BuildError);
+		checkf(Scheduler.IsValid(), TEXT("Test environment refused to schedule: %s"), *BuildError);
+		return Scheduler->GetSharedState();
+	}
+
 	inline TSharedRef<const FMassifHabitatField> MakeHabitat(uint32 MasterSeed)
 	{
-		const TSharedRef<const FMassifTerrainField> Field = MakeField();
+		const TSharedRef<const FMassifHeightmap> Heightmap = MakeHeightmap();
 		return MakeShared<const FMassifHabitatField>(
-			Field,
-			FMassifEnvironmentBake::BuildOnCpu(
-				Field->GetHeightmap(), MasterSeed, FMassifEnvironmentBakeParams()),
+			MakeShared<const FMassifTerrainField>(Heightmap),
+			MakeEnvironment(Heightmap, MasterSeed),
 			MasterSeed);
 	}
 }

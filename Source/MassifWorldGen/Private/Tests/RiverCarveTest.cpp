@@ -1,4 +1,5 @@
-#include "MassifEnvironmentBake.h"
+#include "MassifEnvironmentBakeParams.h"
+#include "MassifTestEnvironment.h"
 #include "MassifHeightmap.h"
 #include "MassifRiverField.h"
 #include "MassifRiverNetwork.h"
@@ -247,9 +248,11 @@ bool FRiverCarveBakeIndependenceTest::RunTest(const FString& Parameters)
 	FMassifEnvironmentBakeParams BakeParams;
 	BakeParams.CellSizeMeters = 8.0;
 	const uint64 FirstHash =
-		FMassifEnvironmentBake::BuildOnCpu(*World.Heightmap, 4711, BakeParams)->ComputeContentHash();
+		MassifSolveTestEnvironment(World.Heightmap.ToSharedRef(), 4711, BakeParams)
+			->GetState().ComputeContentHash();
 	const uint64 SecondHash =
-		FMassifEnvironmentBake::BuildOnCpu(World.Carved->GetHeightmap(), 4711, BakeParams)->ComputeContentHash();
+		MassifSolveTestEnvironment(World.Carved->GetHeightmapShared(), 4711, BakeParams)
+			->GetState().ComputeContentHash();
 
 	TestEqual(TEXT("A carved field hands the bake the same elevation model it started from"),
 		SecondHash, FirstHash);
