@@ -156,6 +156,18 @@ void AMassifDebugHud::DrawHUD()
 	{
 		DrawProbePanel();
 	}
+
+	// The picker is the only thing here that wants a pointer, so the cursor follows
+	// it whether it was toggled by the key or by the console variable.
+	if (PlayerOwner != nullptr)
+	{
+		PlayerOwner->bShowMouseCursor = MassifViewPicker::IsVisible();
+	}
+	if (MassifViewPicker::IsVisible())
+	{
+		DrawViewPicker();
+	}
+
 	DrawChannelLegend();
 }
 
@@ -376,8 +388,15 @@ void AMassifDebugHud::DrawProbeRows(const FMassifProbeResult& Probe, float Left,
 	}
 }
 
-void AMassifDebugHud::DrawViewPicker(AMassifDebugChannelView& View)
+void AMassifDebugHud::DrawViewPicker()
 {
+	AMassifDebugChannelView* ViewActor = FindChannelView();
+	if (ViewActor == nullptr)
+	{
+		return;
+	}
+
+	AMassifDebugChannelView& View = *ViewActor;
 	const FMassifViewPickerLayout Layout = MassifViewPicker::MakeLayout(
 		View.GetViews().Num(), View.GetSelectedTimeSliceCount(), Canvas->SizeY);
 

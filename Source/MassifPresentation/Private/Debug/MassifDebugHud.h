@@ -47,7 +47,7 @@ private:
 	 * The picker overlay: every view the registry offers, chosen with the mouse,
 	 * and a scrubber over the year for the views that hold one.
 	 */
-	void DrawViewPicker(AMassifDebugChannelView& View);
+	void DrawViewPicker();
 	void DrawPickerRows(AMassifDebugChannelView& View, const struct FMassifViewPickerLayout& Layout);
 	void DrawPickerRow(
 		const AMassifDebugChannelView& View, const FMassifViewPickerLayout& Layout, int32 ViewIndex,
