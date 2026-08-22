@@ -13,10 +13,17 @@ tasks:
   test:
     desc: Build, then run the Massif automation suite headless
     deps: [build]
+    vars:
+      REPORT: '{{.TASKFILE_DIR}}/Saved/AutomationReport'
     cmds:
-      # -TestExit rather than a queued Quit: Quit races the last tests and cuts
-      # their results out of the log.
-      - UnrealEditor-Cmd {{.PROJECT}} -ExecCmds="Automation RunTests Massif" -TestExit="Automation Test Queue Empty" -nullrhi -unattended -nosplash -log
+      - rm -rf {{.REPORT}}
+      # The editor exits non-zero on a clean run and terminates while the log is
+      # still flushing, so the last test or two are routinely missing from it.
+      # The exported report is written after the queue drains, and is what the
+      # pass/fail decision is actually made on.
+      - cmd: UnrealEditor-Cmd {{.PROJECT}} -ExecCmds="Automation RunTests Massif" -TestExit="Automation Test Queue Empty" -ReportExportPath={{.REPORT}} -nullrhi -unattended -nosplash -log
+        ignore_error: true
+      - python3 {{.TASKFILE_DIR}}/Tools/check_automation_report.py {{.REPORT}}/index.json
 
   run:
     desc: 'Build, then run the game windowed. Optional seed: task run SEED=42'
