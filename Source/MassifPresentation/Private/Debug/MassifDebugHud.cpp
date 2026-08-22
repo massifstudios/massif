@@ -4,6 +4,7 @@
 #include "Engine/Engine.h"
 #include "MassifDebugChannelView.h"
 #include "MassifEnvironmentInspector.h"
+#include "MassifViewPicker.h"
 #include "MassifEnvironmentProbe.h"
 #include "MassifGameMode.h"
 
@@ -33,6 +34,20 @@ namespace
 	/** Dirt is what has not been re-solved yet, so it is the one thing worth colouring. */
 	const FLinearColor DirtyText(1.0f, 0.78f, 0.35f, 1.0f);
 	const FLinearColor QuietText(0.62f, 0.65f, 0.7f, 1.0f);
+	const FLinearColor HoverHighlight(0.22f, 0.26f, 0.32f, 0.85f);
+	const FLinearColor ScrubberTick(0.30f, 0.36f, 0.44f, 1.0f);
+
+	/** The off entry sits above the views, so index -1 is a name rather than a lookup. */
+	FString PickerRowLabel(const AMassifDebugChannelView& View, int32 ViewIndex)
+	{
+		if (ViewIndex < 0)
+		{
+			return TEXT("off");
+		}
+
+		const FMassifDebugView& Entry = View.GetViews()[ViewIndex];
+		return FString::Printf(TEXT("%-34s %s"), *Entry.Name.ToString(), *Entry.Unit);
+	}
 
 	const TCHAR* FeedbackMarker(bool bInFeedbackGroup)
 	{
@@ -359,4 +374,96 @@ void AMassifDebugHud::DrawProbeRows(const FMassifProbeResult& Probe, float Left,
 		DrawText(Row, QuietText, Left, Top, nullptr, 1.0f);
 		Top += InspectorRowHeight;
 	}
+}
+
+void AMassifDebugHud::DrawViewPicker(AMassifDebugChannelView& View)
+{
+	const FMassifViewPickerLayout Layout = MassifViewPicker::MakeLayout(
+		View.GetViews().Num(), View.GetSelectedTimeSliceCount(), Canvas->SizeY);
+
+	DrawRect(PanelBackground, Layout.Left, Layout.Top, Layout.PanelWidth(), Layout.TotalHeight());
+	DrawText(TEXT("Environment views"), PanelText, Layout.Left + Layout.Padding,
+		Layout.Top + Layout.Padding, nullptr, 1.15f);
+
+	DrawPickerRows(View, Layout);
+	DrawSliceScrubber(View, Layout);
+	HandlePickerClick(View, Layout);
+}
+
+void AMassifDebugHud::DrawPickerRows(AMassifDebugChannelView& View, const FMassifViewPickerLayout& Layout)
+{
+	FVector2D MousePosition = FVector2D::ZeroVector;
+	if (PlayerOwner != nullptr)
+	{
+		PlayerOwner->GetMousePosition(MousePosition.X, MousePosition.Y);
+	}
+
+	const int32 Hovered = MassifViewPicker::ViewIndexAt(Layout, MousePosition);
+	const int32 Selected = static_cast<int32>(View.GetChannel()) - 1;
+
+	for (int32 EntryIndex = 0; EntryIndex < Layout.EntryCount; ++EntryIndex)
+	{
+		const int32 ViewIndex = EntryIndex - 1;
+		DrawPickerRow(View, Layout, ViewIndex, MassifViewPicker::EntryPosition(Layout, EntryIndex),
+			ViewIndex == Hovered, ViewIndex == Selected);
+	}
+}
+
+void AMassifDebugHud::DrawPickerRow(
+	const AMassifDebugChannelView& View, const FMassifViewPickerLayout& Layout, int32 ViewIndex,
+	FVector2D Position, bool bHovered, bool bSelected)
+{
+	if (bHovered)
+	{
+		DrawRect(HoverHighlight, Position.X, Position.Y, Layout.ColumnWidth, Layout.RowHeight);
+	}
+
+	const FString Label = PickerRowLabel(View, ViewIndex);
+	DrawText(Label, RowColor(bSelected, QuietText), Position.X + Layout.Padding, Position.Y, nullptr, 1.0f);
+}
+
+void AMassifDebugHud::DrawSliceScrubber(AMassifDebugChannelView& View, const FMassifViewPickerLayout& Layout)
+{
+	if (Layout.TimeSliceCount <= 1)
+	{
+		return;
+	}
+
+	const float Top = Layout.ScrubberTop();
+	const float TickWidth = Layout.PanelWidth() / Layout.TimeSliceCount;
+	for (int32 Slice = 0; Slice < Layout.TimeSliceCount; ++Slice)
+	{
+		const bool bCurrent = Slice == View.GetTimeSlice();
+		DrawRect(RowColor(bCurrent, ScrubberTick), Layout.Left + Slice * TickWidth + 1.0f, Top,
+			TickWidth - 2.0f, Layout.ScrubberHeight);
+	}
+
+	DrawText(FString::Printf(TEXT("slice %d of %d"), View.GetTimeSlice() + 1, Layout.TimeSliceCount),
+		PanelText, Layout.Left + Layout.Padding, Top + Layout.ScrubberHeight + 2.0f, nullptr, 1.0f);
+}
+
+bool AMassifDebugHud::HandlePickerClick(AMassifDebugChannelView& View, const FMassifViewPickerLayout& Layout)
+{
+	if (PlayerOwner == nullptr || !PlayerOwner->WasInputKeyJustPressed(EKeys::LeftMouseButton))
+	{
+		return false;
+	}
+
+	FVector2D MousePosition = FVector2D::ZeroVector;
+	PlayerOwner->GetMousePosition(MousePosition.X, MousePosition.Y);
+
+	const int32 Slice = MassifViewPicker::TimeSliceAt(Layout, MousePosition);
+	if (Slice != INDEX_NONE)
+	{
+		MassifViewPicker::SetTimeSlice(Slice);
+		return true;
+	}
+
+	const int32 ViewIndex = MassifViewPicker::ViewIndexAt(Layout, MousePosition);
+	if (ViewIndex != INDEX_NONE)
+	{
+		AMassifDebugChannelView::RequestChannel(static_cast<EMassifDebugChannel>(ViewIndex + 1));
+		return true;
+	}
+	return MassifViewPicker::ContainsPoint(Layout, MousePosition);
 }

@@ -1,6 +1,5 @@
 #include "MassifInputConfig.h"
 
-#include "Debug/MassifDebugChannels.h"
 
 #include "InputAction.h"
 #include "InputMappingContext.h"
@@ -47,17 +46,6 @@ namespace
 		Back.Modifiers.Add(MakeNegate(Outer, true, true, true));
 	}
 
-	/** Number keys, in EMassifDebugChannel order. */
-	const FKey& DebugChannelKey(int32 ChannelIndex)
-	{
-		static const FKey Keys[] = {
-			EKeys::Zero, EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four,
-			EKeys::Five, EKeys::Six, EKeys::Seven, EKeys::Eight, EKeys::Nine };
-		static_assert(UE_ARRAY_COUNT(Keys) >= static_cast<int32>(EMassifDebugChannel::Count),
-			"Every debug channel needs a number key to reach it");
-		return Keys[ChannelIndex];
-	}
-
 	/** Mouse onto yaw and pitch, with pitch negated so pushing the mouse forward looks up. */
 	void MapLookKeys(UInputMappingContext& Context, UInputAction* Action)
 	{
@@ -82,22 +70,14 @@ void UMassifInputConfig::BuildActions()
 	JumpAction = MakeAction(this, TEXT("IA_Jump"), EInputActionValueType::Boolean);
 	ToggleViewAction = MakeAction(this, TEXT("IA_ToggleView"), EInputActionValueType::Boolean);
 
-	DebugChannelActions.Reset();
-	for (int32 ChannelIndex = 0; ChannelIndex < static_cast<int32>(EMassifDebugChannel::Count); ++ChannelIndex)
-	{
-		const FString ActionName = FString::Printf(TEXT("IA_DebugChannel%d"), ChannelIndex);
-		DebugChannelActions.Add(MakeAction(this, *ActionName, EInputActionValueType::Boolean));
-	}
+	ToggleViewPickerAction = MakeAction(this, TEXT("IA_ToggleViewPicker"), EInputActionValueType::Boolean);
 }
 
 void UMassifInputConfig::BuildCommonContext()
 {
 	CommonContext = NewObject<UInputMappingContext>(this, TEXT("IMC_Common"));
 	CommonContext->MapKey(ToggleViewAction, EKeys::V);
-	for (int32 ChannelIndex = 0; ChannelIndex < DebugChannelActions.Num(); ++ChannelIndex)
-	{
-		CommonContext->MapKey(DebugChannelActions[ChannelIndex], DebugChannelKey(ChannelIndex));
-	}
+	CommonContext->MapKey(ToggleViewPickerAction, EKeys::One);
 }
 
 void UMassifInputConfig::BuildFlyContext()

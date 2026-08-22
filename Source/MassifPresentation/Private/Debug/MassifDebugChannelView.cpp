@@ -1,5 +1,7 @@
 #include "MassifDebugChannelView.h"
 
+#include "MassifViewPicker.h"
+
 #include "HAL/IConsoleManager.h"
 #include "Kismet/GameplayStatics.h"
 #include "MassifDebugVectorOverlay.h"
@@ -69,15 +71,39 @@ void AMassifDebugChannelView::Tick(float DeltaSeconds)
 
 	EnsureViews();
 	const int32 Requested = FMath::Clamp(CVarMassifDebugChannel.GetValueOnGameThread(), 0, Views.Num());
-	if (Requested != static_cast<int32>(CurrentChannel))
+	const int32 RequestedSlice = ClampRequestedSlice(Requested);
+	const bool bChanged =
+		Requested != static_cast<int32>(CurrentChannel) || RequestedSlice != CurrentTimeSlice;
+	if (bChanged)
 	{
-		ApplyChannel(static_cast<EMassifDebugChannel>(Requested));
+		ApplyChannel(static_cast<EMassifDebugChannel>(Requested), RequestedSlice);
 	}
 
 	MassifDebugVectorOverlay::Draw(GetWorld(), *Habitat, Views, ViewIndexOfChannel(CurrentChannel));
 }
 
-void AMassifDebugChannelView::ApplyChannel(EMassifDebugChannel Channel)
+int32 AMassifDebugChannelView::GetSelectedTimeSliceCount() const
+{
+	const int32 ViewIndex = ViewIndexOfChannel(CurrentChannel);
+	if (!Views.IsValidIndex(ViewIndex))
+	{
+		return 1;
+	}
+	return Views[ViewIndex].TimeSliceCount;
+}
+
+/** What the slice cvar asks for, held to what the selected view actually holds. */
+int32 AMassifDebugChannelView::ClampRequestedSlice(int32 RequestedChannel) const
+{
+	const int32 ViewIndex = RequestedChannel - 1;
+	if (!Views.IsValidIndex(ViewIndex))
+	{
+		return 0;
+	}
+	return MassifDebugChannels::ClampTimeSlice(Views[ViewIndex], MassifViewPicker::GetTimeSlice());
+}
+
+void AMassifDebugChannelView::ApplyChannel(EMassifDebugChannel Channel, int32 TimeSlice)
 {
 	if (TerrainManager == nullptr || !Habitat.IsValid())
 	{
@@ -85,6 +111,7 @@ void AMassifDebugChannelView::ApplyChannel(EMassifDebugChannel Channel)
 	}
 
 	CurrentChannel = Channel;
+	CurrentTimeSlice = TimeSlice;
 	if (!Views.IsValidIndex(ViewIndexOfChannel(Channel)))
 	{
 		Legend = FMassifDebugChannelLegend();
@@ -95,12 +122,12 @@ void AMassifDebugChannelView::ApplyChannel(EMassifDebugChannel Channel)
 
 	const FMassifDebugView& View = Views[ViewIndexOfChannel(Channel)];
 	const double StartSeconds = FPlatformTime::Seconds();
-	MassifDebugChannels::RenderChannel(*Habitat, View, ChannelTexture, Legend);
+	MassifDebugChannels::RenderChannel(*Habitat, View, TimeSlice, ChannelTexture, Legend);
 	TerrainManager->SetDebugChannel(ChannelTexture);
 
-	UE_LOG(LogTemp, Display, TEXT("Debug view %d: %s, %.3f to %.3f %s, rendered in %.2f s"),
-		static_cast<int32>(Channel), *Legend.Name, Legend.MinValue, Legend.MaxValue, *Legend.Unit,
-		FPlatformTime::Seconds() - StartSeconds);
+	UE_LOG(LogTemp, Display, TEXT("Debug view %d: %s slice %d, %.3f to %.3f %s, rendered in %.2f s"),
+		static_cast<int32>(Channel), *Legend.Name, TimeSlice, Legend.MinValue, Legend.MaxValue,
+		*Legend.Unit, FPlatformTime::Seconds() - StartSeconds);
 }
 
 namespace

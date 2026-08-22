@@ -136,6 +136,7 @@ namespace
 		View.DisplayRange = Descriptor.DisplayRange;
 		View.Channel = Channel;
 		View.ChannelType = Descriptor.Type;
+		View.TimeSliceCount = Descriptor.TimeSliceCount;
 		View.ClassLabels = MakeClassLabels(Environment, Channel);
 		return View;
 	}
@@ -198,15 +199,16 @@ namespace
 
 	/** A vector channel's scalar view is its magnitude; the arrows carry the direction. */
 	double ReadChannelCell(
-		const FMassifEnvironmentState& Environment, const FMassifDebugView& View, int32 Column, int32 Row)
+		const FMassifEnvironmentState& Environment, const FMassifDebugView& View, int32 Column, int32 Row,
+		int32 TimeSlice)
 	{
 		if (View.ChannelType != EMassifChannelType::Vector2)
 		{
-			return Environment.ReadCell(View.Channel, Column, Row);
+			return Environment.ReadCell(View.Channel, Column, Row, 0, TimeSlice);
 		}
 
-		const double East = Environment.ReadCell(View.Channel, Column, Row, 0);
-		const double North = Environment.ReadCell(View.Channel, Column, Row, 1);
+		const double East = Environment.ReadCell(View.Channel, Column, Row, 0, TimeSlice);
+		const double North = Environment.ReadCell(View.Channel, Column, Row, 1, TimeSlice);
 		return FMath::Sqrt(East * East + North * North);
 	}
 
@@ -215,11 +217,12 @@ namespace
 		const FMassifDebugView& View,
 		const FMassifChannelGrid& Grid,
 		int32 Row,
+		int32 TimeSlice,
 		TArray<double>& Values)
 	{
 		for (int32 Column = 0; Column < Grid.Width; ++Column)
 		{
-			Values[Row * Grid.Width + Column] = ReadChannelCell(Environment, View, Column, Row);
+			Values[Row * Grid.Width + Column] = ReadChannelCell(Environment, View, Column, Row, TimeSlice);
 		}
 	}
 
@@ -242,6 +245,7 @@ namespace
 		const FMassifHabitatField& Habitat,
 		const FMassifDebugView& View,
 		const FMassifChannelGrid& Grid,
+		int32 TimeSlice,
 		TArray<double>& Values)
 	{
 		Values.SetNumUninitialized(Grid.CellCount());
@@ -256,9 +260,9 @@ namespace
 		}
 
 		const FMassifEnvironmentState& Environment = Habitat.GetEnvironment();
-		ParallelFor(Grid.Height, [&Environment, &View, &Grid, &Values](int32 Row)
+		ParallelFor(Grid.Height, [&Environment, &View, &Grid, TimeSlice, &Values](int32 Row)
 		{
-			SampleChannelRow(Environment, View, Grid, Row, Values);
+			SampleChannelRow(Environment, View, Grid, Row, TimeSlice, Values);
 		});
 	}
 
@@ -509,9 +513,15 @@ TextureFilter MassifDebugChannels::GetTextureFilter(const FMassifDebugView& View
 	return TF_Bilinear;
 }
 
+int32 MassifDebugChannels::ClampTimeSlice(const FMassifDebugView& View, int32 TimeSlice)
+{
+	return FMath::Clamp(TimeSlice, 0, FMath::Max(0, View.TimeSliceCount - 1));
+}
+
 void MassifDebugChannels::RenderChannel(
 	const FMassifHabitatField& Habitat,
 	const FMassifDebugView& View,
+	int32 TimeSlice,
 	TObjectPtr<UTexture2D>& Texture,
 	FMassifDebugChannelLegend& OutLegend)
 {
@@ -519,7 +529,7 @@ void MassifDebugChannels::RenderChannel(
 	const FMassifChannelGrid& Grid = ResolveViewGrid(Environment, View);
 
 	TArray<double> Values;
-	SampleWorld(Habitat, View, Grid, Values);
+	SampleWorld(Habitat, View, Grid, ClampTimeSlice(View, TimeSlice), Values);
 
 	const FMassifChannelStatistics Statistics = MassifChannelStatistics::Measure(Values);
 	const FMassifRampSpace Space = MeasureRampSpace(View, Statistics, Values);

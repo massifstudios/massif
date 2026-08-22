@@ -69,7 +69,8 @@ private:
 	void ToggleViewMode();
 
 	/** Number key handler: switches the terrain to that channel's view, or off for 0. */
-	void SelectDebugChannel(int32 ChannelIndex);
+	/** Shows and hides the view picker, and gives the cursor back when it goes away. */
+	void ToggleViewPicker();
 	void EnterWalkMode();
 	void EnterFlyMode();
 

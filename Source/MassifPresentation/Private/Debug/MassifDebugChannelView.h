@@ -49,6 +49,15 @@ public:
 		return CurrentChannel;
 	}
 
+	/** Slice of the year the painted view is showing. Always 0 for a view holding one. */
+	int32 GetTimeSlice() const
+	{
+		return CurrentTimeSlice;
+	}
+
+	/** Slices the selected view holds, so the picker knows whether to offer a scrubber. */
+	int32 GetSelectedTimeSliceCount() const;
+
 	const FMassifDebugChannelLegend& GetLegend() const
 	{
 		return Legend;
@@ -67,9 +76,11 @@ public:
 
 private:
 	/** Renders the view and hands it to the terrain, or restores the terrain material for Off. */
-	void ApplyChannel(EMassifDebugChannel Channel);
+	void ApplyChannel(EMassifDebugChannel Channel, int32 TimeSlice);
 
 	void EnsureViews();
+
+	int32 ClampRequestedSlice(int32 RequestedChannel) const;
 
 	TSharedPtr<const FMassifHabitatField> Habitat;
 
@@ -82,5 +93,6 @@ private:
 
 	TArray<FMassifDebugView> Views;
 	EMassifDebugChannel CurrentChannel = EMassifDebugChannel::Off;
+	int32 CurrentTimeSlice = 0;
 	FMassifDebugChannelLegend Legend;
 };

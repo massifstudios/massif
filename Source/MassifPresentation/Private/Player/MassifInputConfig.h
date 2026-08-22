@@ -47,9 +47,15 @@ public:
 	UPROPERTY()
 	TObjectPtr<UInputAction> ToggleViewAction;
 
-	/** One per number key, indexed by EMassifDebugChannel: 0 turns the views off. */
+	/**
+	 * Shows and hides the view picker.
+	 *
+	 * One key rather than one per view: the registry offers more views than there
+	 * are number keys, and a channel registered later would have had no way to be
+	 * reached at all.
+	 */
 	UPROPERTY()
-	TArray<TObjectPtr<UInputAction>> DebugChannelActions;
+	TObjectPtr<UInputAction> ToggleViewPickerAction;
 
 	UPROPERTY()
 	TObjectPtr<UInputMappingContext> CommonContext;

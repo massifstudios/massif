@@ -24,7 +24,6 @@ enum class EMassifGroundType : uint8;
 enum class EMassifDebugChannel : uint8
 {
 	Off = 0,
-	Count = 10,
 };
 
 /** Where a view's numbers come from. */
@@ -62,6 +61,9 @@ struct FMassifDebugView
 	/** Valid where Source is Channel. */
 	FMassifChannelHandle Channel;
 	EMassifChannelType ChannelType = EMassifChannelType::Scalar;
+
+	/** Slices of a year the view holds. Above 1 the picker offers a scrubber over them. */
+	int32 TimeSliceCount = 1;
 
 	/** Meaningful where Source is Habitat. */
 	EMassifHabitatView HabitatView = EMassifHabitatView::GroundType;
@@ -140,6 +142,10 @@ namespace MassifDebugChannels
 	void RenderChannel(
 		const FMassifHabitatField& Habitat,
 		const FMassifDebugView& View,
+		int32 TimeSlice,
 		TObjectPtr<UTexture2D>& Texture,
 		FMassifDebugChannelLegend& OutLegend);
+
+	/** The slice a view can actually show, which is 0 for everything that holds one. */
+	int32 ClampTimeSlice(const FMassifDebugView& View, int32 TimeSlice);
 }

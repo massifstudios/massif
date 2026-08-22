@@ -42,6 +42,20 @@ private:
 		float RowTop, float BarWidth);
 
 	void DrawEnvironmentInspector();
+
+	/**
+	 * The picker overlay: every view the registry offers, chosen with the mouse,
+	 * and a scrubber over the year for the views that hold one.
+	 */
+	void DrawViewPicker(AMassifDebugChannelView& View);
+	void DrawPickerRows(AMassifDebugChannelView& View, const struct FMassifViewPickerLayout& Layout);
+	void DrawPickerRow(
+		const AMassifDebugChannelView& View, const FMassifViewPickerLayout& Layout, int32 ViewIndex,
+		FVector2D Position, bool bHovered, bool bSelected);
+	void DrawSliceScrubber(AMassifDebugChannelView& View, const FMassifViewPickerLayout& Layout);
+
+	/** Applies a click on the picker. True where the click landed on it. */
+	bool HandlePickerClick(AMassifDebugChannelView& View, const FMassifViewPickerLayout& Layout);
 	float DrawProcessRows(const FMassifInspectorSnapshot& Snapshot, float Left, float RowTop);
 	float DrawChannelRows(const FMassifInspectorSnapshot& Snapshot, float Left, float RowTop);
 
