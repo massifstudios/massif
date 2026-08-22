@@ -181,7 +181,7 @@ FMassifEnvironmentScheduler::FMassifEnvironmentScheduler(
 	: Elevation(InElevation)
 	, Georeference(InGeoreference)
 	, MasterSeed(InMasterSeed)
-	, State(MakeUnique<FMassifEnvironmentState>(InElevation->GetWorldSizeMeters()))
+	, State(MakeShared<FMassifEnvironmentState>(InElevation->GetWorldSizeMeters()))
 {
 }
 
@@ -522,14 +522,51 @@ void FMassifEnvironmentScheduler::MarkAllDirty()
 	GroupIsDirty.Init(true, Groups.Num());
 }
 
-void FMassifEnvironmentScheduler::RunProcess(const FProcessNode& Node)
+void FMassifEnvironmentScheduler::RunProcess(FProcessNode& Node)
 {
-	FMassifEnvironmentContext Context(*State, Elevation.Get(), Georeference, MasterSeed, Node.Declaration);
-	if (bGpuEnabled && Node.Process->ExecuteOnGpu(Context, Node.Fidelity))
+	const double StartedSeconds = FPlatformTime::Seconds();
+
+	FMassifEnvironmentContext Context(State.Get(), Elevation.Get(), Georeference, MasterSeed, Node.Declaration);
+	const bool bRanOnGpu = bGpuEnabled && Node.Process->ExecuteOnGpu(Context, Node.Fidelity);
+	if (!bRanOnGpu)
 	{
-		return;
+		Node.Process->Execute(Context, Node.Fidelity);
 	}
-	Node.Process->Execute(Context, Node.Fidelity);
+
+	Node.LastExecutionSeconds = FPlatformTime::Seconds() - StartedSeconds;
+}
+
+double FMassifEnvironmentScheduler::GetLastExecutionSeconds(FName ProcessName) const
+{
+	const int32 NodeIndex = FindProcessIndex(ProcessName);
+	if (NodeIndex == INDEX_NONE)
+	{
+		return 0.0;
+	}
+	return Nodes[NodeIndex].LastExecutionSeconds;
+}
+
+bool FMassifEnvironmentScheduler::IsProcessInFeedbackGroup(FName ProcessName) const
+{
+	const int32 NodeIndex = FindProcessIndex(ProcessName);
+	if (NodeIndex == INDEX_NONE || Nodes[NodeIndex].GroupIndex == INDEX_NONE)
+	{
+		return false;
+	}
+	return Groups[Nodes[NodeIndex].GroupIndex].ProcessIndices.Num() > 1;
+}
+
+TArray<EMassifFidelity> FMassifEnvironmentScheduler::GetSupportedFidelities(FName ProcessName) const
+{
+	const int32 NodeIndex = FindProcessIndex(ProcessName);
+	if (NodeIndex == INDEX_NONE)
+	{
+		return {};
+	}
+
+	TArray<EMassifFidelity> Supported = {EMassifFidelity::Off};
+	Supported.Append(Nodes[NodeIndex].Declaration.SupportedFidelities);
+	return Supported;
 }
 
 void FMassifEnvironmentScheduler::RunGroup(const FMassifRelaxationGroup& Group)

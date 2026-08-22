@@ -91,7 +91,13 @@ public:
 
 	const FMassifEnvironmentState& GetState() const
 	{
-		return *State;
+		return State.Get();
+	}
+
+	/** For handing the solved channels to anything that outlives the call. */
+	TSharedRef<const FMassifEnvironmentState> GetSharedState() const
+	{
+		return State;
 	}
 
 	const IMassifElevationSource& GetElevation() const
@@ -117,6 +123,19 @@ public:
 
 	bool IsProcessDirty(FName ProcessName) const;
 
+	/**
+	 * Wall-clock the process last spent, for the graph inspector. Diagnostic only:
+	 * it is never read by a solve and never reaches a channel, so it cannot make
+	 * one machine's world differ from another's.
+	 */
+	double GetLastExecutionSeconds(FName ProcessName) const;
+
+	/** Whether the process is one of several in a relaxation group. */
+	bool IsProcessInFeedbackGroup(FName ProcessName) const;
+
+	/** Fidelities the process implements, Off always among them. */
+	TArray<EMassifFidelity> GetSupportedFidelities(FName ProcessName) const;
+
 	int32 GetProcessCount() const
 	{
 		return Nodes.Num();
@@ -131,6 +150,9 @@ private:
 
 		/** Group the node was placed in, and the direct dependents used to spread dirt. */
 		int32 GroupIndex = INDEX_NONE;
+
+		/** Diagnostic, for the inspector. Never read by a solve. */
+		double LastExecutionSeconds = 0.0;
 	};
 
 	bool ValidateNames(FString& OutError) const;
@@ -160,13 +182,13 @@ private:
 	int32 FindProcessIndex(FName ProcessName) const;
 	TArray<FName> NamesOfGroup(const FMassifRelaxationGroup& Group) const;
 	void RunGroup(const FMassifRelaxationGroup& Group);
-	void RunProcess(const FProcessNode& Node);
+	void RunProcess(FProcessNode& Node);
 
 	TSharedRef<const IMassifElevationSource> Elevation;
 	FMassifGeoreference Georeference;
 	uint32 MasterSeed = 0;
 
-	TUniquePtr<FMassifEnvironmentState> State;
+	TSharedRef<FMassifEnvironmentState> State;
 
 	TArray<FProcessNode> Nodes;
 

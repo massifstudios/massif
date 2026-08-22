@@ -4,6 +4,8 @@
 #include "Engine/Engine.h"
 #include "Kismet/GameplayStatics.h"
 #include "MassifDebugChannelView.h"
+#include "MassifEnvironmentInspector.h"
+#include "MassifGameMode.h"
 
 namespace
 {
@@ -21,6 +23,40 @@ namespace
 
 	const FLinearColor PanelBackground(0.02f, 0.02f, 0.03f, 0.78f);
 	const FLinearColor PanelText(0.94f, 0.95f, 0.96f, 1.0f);
+
+	constexpr float InspectorWidth = 430.0f;
+	constexpr float InspectorRowHeight = 15.0f;
+
+	/** Dirt is what has not been re-solved yet, so it is the one thing worth colouring. */
+	const FLinearColor DirtyText(1.0f, 0.78f, 0.35f, 1.0f);
+	const FLinearColor QuietText(0.62f, 0.65f, 0.7f, 1.0f);
+
+	const TCHAR* FeedbackMarker(bool bInFeedbackGroup)
+	{
+		if (bInFeedbackGroup)
+		{
+			return TEXT("  loop");
+		}
+		return TEXT("");
+	}
+
+	const TCHAR* DirtyMarker(bool bDirty)
+	{
+		if (bDirty)
+		{
+			return TEXT("  dirty");
+		}
+		return TEXT("");
+	}
+
+	FLinearColor RowColor(bool bHighlighted, const FLinearColor& Quiet)
+	{
+		if (bHighlighted)
+		{
+			return DirtyText;
+		}
+		return Quiet;
+	}
 
 	float PanelLeftEdge(const UCanvas& Canvas)
 	{
@@ -64,6 +100,11 @@ AMassifDebugChannelView* AMassifDebugHud::FindChannelView()
 void AMassifDebugHud::DrawHUD()
 {
 	Super::DrawHUD();
+
+	if (Canvas != nullptr && MassifEnvironmentInspector::IsPanelVisible())
+	{
+		DrawEnvironmentInspector();
+	}
 
 	AMassifDebugChannelView* View = FindChannelView();
 	if (View == nullptr || View->GetChannel() == EMassifDebugChannel::Off || Canvas == nullptr)
@@ -131,4 +172,63 @@ void AMassifDebugHud::DrawClassifiedLegend(
 		DrawRect(Legend.RampStops[ClassIndex], SwatchLeft, Top, SwatchSize, SwatchSize);
 		DrawText(Legend.ClassLabels[ClassIndex], PanelText, SwatchLeft + SwatchSize + 8.0f, Top - 2.0f, nullptr, 1.0f);
 	}
+}
+
+void AMassifDebugHud::DrawEnvironmentInspector()
+{
+	const AMassifGameMode* GameMode = GetWorld()->GetAuthGameMode<AMassifGameMode>();
+	if (GameMode == nullptr || !GameMode->GetEnvironmentScheduler().IsValid())
+	{
+		return;
+	}
+
+	const FMassifInspectorSnapshot Snapshot =
+		MassifEnvironmentInspector::Snapshot(*GameMode->GetEnvironmentScheduler());
+	if (Snapshot.IsEmpty())
+	{
+		return;
+	}
+
+	const float Height =
+		TitleHeight + (Snapshot.Processes.Num() + Snapshot.Channels.Num() + 2) * InspectorRowHeight
+		+ 2.0f * PanelPadding;
+	DrawRect(PanelBackground, PanelMargin, PanelMargin, InspectorWidth, Height);
+
+	const FString Title = FString::Printf(TEXT("Environment  %.0f ms  %.0f MB"),
+		Snapshot.TotalSolveSeconds * 1000.0, Snapshot.ResidentByteCount / (1024.0 * 1024.0));
+	DrawText(Title, PanelText, PanelMargin + PanelPadding, PanelMargin + PanelPadding, nullptr, 1.15f);
+
+	const float RowTop = PanelMargin + PanelPadding + TitleHeight;
+	const float AfterProcesses = DrawProcessRows(Snapshot, PanelMargin + PanelPadding, RowTop);
+	DrawChannelRows(Snapshot, PanelMargin + PanelPadding, AfterProcesses + InspectorRowHeight);
+}
+
+float AMassifDebugHud::DrawProcessRows(const FMassifInspectorSnapshot& Snapshot, float Left, float RowTop)
+{
+	float Top = RowTop;
+	for (const FMassifInspectorProcessRow& Row : Snapshot.Processes)
+	{
+		// The loop marker matters: a relaxed process ran several times, so its cost
+		// is not comparable with a process that ran once.
+		const FString Text = FString::Printf(TEXT("%-28s %-10s %5.0f ms%s%s"),
+			*Row.Name.ToString(), MassifFidelityName(Row.Fidelity), Row.LastExecutionSeconds * 1000.0,
+			FeedbackMarker(Row.bInFeedbackGroup), DirtyMarker(Row.bDirty));
+		DrawText(Text, RowColor(Row.bDirty, PanelText), Left, Top, nullptr, 1.0f);
+		Top += InspectorRowHeight;
+	}
+	return Top;
+}
+
+float AMassifDebugHud::DrawChannelRows(const FMassifInspectorSnapshot& Snapshot, float Left, float RowTop)
+{
+	float Top = RowTop;
+	for (const FMassifInspectorChannelRow& Row : Snapshot.Channels)
+	{
+		const FString Text = FString::Printf(TEXT("%-34s %4.0f m  %s to %s %s"),
+			*Row.Name.ToString(), Row.CellSizeMeters, *FormatValue(Row.Minimum), *FormatValue(Row.Maximum),
+			*Row.Unit);
+		DrawText(Text, RowColor(!Row.bWritten, QuietText), Left, Top, nullptr, 1.0f);
+		Top += InspectorRowHeight;
+	}
+	return Top;
 }

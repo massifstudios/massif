@@ -8,9 +8,10 @@ class AMassifDebugChannelView;
 class AMassifFoliageManager;
 class AMassifRiverManager;
 class AMassifTerrainManager;
-class FMassifEnvironmentBake;
+class FMassifEnvironmentScheduler;
 class FMassifHeightmap;
 class FMassifRiverField;
+class FMassifRiverNetwork;
 class FMassifTerrainField;
 
 /**
@@ -28,6 +29,12 @@ public:
 
 	virtual void BeginPlay() override;
 
+	/** The solved environment, for the debug inspector and the fidelity commands. Null until it is built. */
+	TSharedPtr<FMassifEnvironmentScheduler> GetEnvironmentScheduler() const
+	{
+		return EnvironmentScheduler;
+	}
+
 	/** The loaded terrain, for the walker to stand on. Null until the elevation model is read. */
 	TSharedPtr<const FMassifTerrainField> GetTerrainField() const
 	{
@@ -37,10 +44,17 @@ public:
 private:
 	void LoadTerrainAndSpawnManagers();
 
-	/** Solves water over the whole world, which is what habitat and foliage read (ARCHITECTURE 5.6). */
-	void BuildEnvironmentBake(const FMassifHeightmap& Heightmap);
+	/**
+	 * Solves water over the whole world, which is what habitat and foliage read
+	 * (ARCHITECTURE 5.6). False where the graph refused to schedule, in which case
+	 * nothing downstream of it is built.
+	 */
+	bool BuildEnvironment(TSharedRef<const FMassifHeightmap> Heightmap);
 
-	/** The elevation model with the bake's rivers cut into it. Needs the bake to have run. */
+	void LogEnvironmentSummary(double SolveSeconds) const;
+	void LogRiverSummary(const FMassifRiverNetwork& Rivers) const;
+
+	/** The elevation model with the solved rivers cut into it. Needs the environment to have run. */
 	void BuildTerrainField(TSharedRef<const FMassifHeightmap> Heightmap);
 	void SpawnEnvironmentActors();
 	void SpawnSunAndSky();
@@ -54,9 +68,11 @@ private:
 	void SchedulePosedScreenshot(float PoseDelaySeconds, FVector LocationCentimeters, FRotator Rotation, FString ShotName);
 
 	TSharedPtr<const FMassifTerrainField> TerrainField;
-	TSharedPtr<const FMassifEnvironmentBake> EnvironmentBake;
 
-	/** The bake's rivers as a field: cut into the terrain, and drawn as water over it. */
+	/** Kept rather than only its state: fidelities are switched on it while the world is up. */
+	TSharedPtr<FMassifEnvironmentScheduler> EnvironmentScheduler;
+
+	/** The solved rivers as a field: cut into the terrain, and drawn as water over it. */
 	TSharedPtr<const FMassifRiverField> RiverField;
 
 	UPROPERTY()
