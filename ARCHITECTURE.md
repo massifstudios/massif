@@ -372,7 +372,12 @@ Current and planned channels:
 | `Wind.Exposure`, `Wind.Field` | topographic exposure index, channeling, lee separation | snow redistribution, krummholz |
 | `Precip.Rate`, `Precip.SnowFraction` | orographic gain and shadow, phase split by temperature | water balance, snowfall |
 | `Snow.Depth`, `Snow.CoverDuration` | accumulation, wind transport, melt, sublimation | snowline, season length |
-| `Vegetation.Cover`, `Vegetation.Canopy` | the channels above, relaxed against soil and wind | forests, masks, roughness |
+| `Vegetation.Cover`, `Vegetation.Canopy`, `Vegetation.Class` | the channels above, relaxed against soil and wind | forests, masks, roughness |
+| `Geology.RockHardness`, `Geology.SoilYield`, `Geology.ScreeProduction` | seeded banded noise along a strike, and frost shattering | erodibility, soil yield, scree and talus |
+| `Hydrology.Infiltration`, `SpringDischarge`, `SeasonalFlow` | soil and bedrock, permeability contrasts, the melt pulse | runoff, springs, seasonal discharge |
+| `Precip.Seasonal`, `Climate.Evapotranspiration` | the annual cycle, and what the air takes back | when water arrives, and the balance closing |
+| `Snow.Density`, `Snow.Albedo`, `Snow.AvalancheRelease`, `Snow.AvalanchePath` | settling, reflection, slope and loading | groomability, the albedo loop, avalanche tracks |
+| `Wind.KatabaticStrength`, `Wind.FoehnWarming` | drainage and trapping, descent from upwind | frost hollows, warm lee valleys |
 
 #### 5.6.3 Processes
 

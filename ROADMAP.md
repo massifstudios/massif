@@ -392,6 +392,64 @@ Built before the systems that need verifying.
 - **Verify:** tests — habitat contract suite green against channels, habitat
   and mask classification agree cell for cell on the same input.
 
+### E13 — Environment Gaps (done)
+The systems the E-series left absent, and one bug it introduced. Each is a
+registration against the framework or an extension of one process; none of them
+needed the framework itself to change, which is the thing worth noticing.
+
+- **Seasonal sun.** Insolation was one representative day and the snowpack read
+  it for the whole year. Direct and diffuse now hold 24 half-monthly slices; the
+  horizon sweep stays outside the slice loop. `Sun.AnnualInsolation` carries the
+  growing-season mean for the things that want a climatology.
+- **Seasonal precipitation and the water balance.** `Precip.Seasonal`,
+  half-monthly `Precip.SnowFraction`, and `Climate.Evapotranspiration` — the only
+  term that removes water from the massif.
+- **Lithology.** `Geology.RockHardness`, `SoilYield`, `ScreeProduction`. Scree is
+  produced by frost shattering rather than inferred from slope.
+- **Infiltration, springs, seasonal flow.** Ground that soaks water up, water
+  that comes back out at a permeability contact, and the spring melt pulse.
+- **Slope winds and foehn.** `Wind.KatabaticStrength` reads both the catchment
+  above a point and the hollow it cannot leave; `Wind.FoehnWarming` the descent
+  from upwind.
+- **Snow density, albedo and avalanches.** The albedo coupling closes the last of
+  the three feedback loops. Avalanche release and path give the forest-free
+  stripes nothing else produced.
+- **Vegetation interception, class and disturbance.** The vegetation→water half
+  of the loop, what is growing rather than only how much, and what knocks it down.
+- **Performance.** Droplet erosion moved out of the relaxation group: it depends
+  only on the filled surface and was being recomputed once per round. The bake
+  over the 20 km world went 23.9 s → 15.1 s before any of the above was added.
+- **Verify:** the whole suite, and a full-world solve reported for cost and
+  resident size.
+
+### E14 — GPU Paths (open)
+The bake is about 24 s over the 20 km world across 40 channels, and two processes
+are most of it: `Sun.Insolation` at 10.6 s and `Soil.Deposition` at 3.1 s.
+
+- **Sun first.** Per-cell, read-only terrain, no accumulation across cells, so it
+  is deterministic without any special handling. The horizon sweep is a ray march
+  per azimuth.
+- **Droplets second.** Parallel over droplets scattering into shared cells, which
+  needs the integer atomics on a fixed-point encoding the CPU path already uses —
+  the determinism contract was designed for this port before it existed.
+- **The two ordered hydrology solves last, if ever.** A priority flood and an
+  altitude-sorted routing pass would have to become fixed-count relaxations,
+  which is what `GpuDepressionFillIterations` and `GpuFlowRoutingIterations` are
+  reserved for. Together they are 2.5 s.
+- **Not the rest.** Every other process already solves in under half a second.
+- **Verify:** CPU and GPU paths agree within a tolerance, headless still runs the
+  CPU path, and the determinism hashes are unchanged.
+
+### E15 — Live Re-solving (open)
+Most of the graph is already fast enough to re-solve while the game runs, and
+what blocks it is not speed.
+
+- Double-buffer the state so a re-solve can leave the game thread: consumers
+  share the object the solve writes into, which is why it is synchronous now.
+- Refresh the painted debug view when a re-solve lands, rather than on the next
+  view change.
+- Regenerate foliage and masks when the channels driving them change.
+
 ### M5f — Geological Refinement
 Erosion over the imported surface: smooth scanner artefacts, cut detail below
 the 2 m source resolution, age the ground. Runs once at import over a finite
