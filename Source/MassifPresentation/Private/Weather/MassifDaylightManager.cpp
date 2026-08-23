@@ -1,8 +1,7 @@
 #include "Weather/MassifDaylightManager.h"
 
-#include "Components/SkyLightComponent.h"
+#include "Components/DirectionalLightComponent.h"
 #include "Engine/DirectionalLight.h"
-#include "Engine/SkyLight.h"
 #include "Weather/MassifWorldTime.h"
 
 AMassifDaylightManager::AMassifDaylightManager()
@@ -11,12 +10,15 @@ AMassifDaylightManager::AMassifDaylightManager()
 	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 }
 
-void AMassifDaylightManager::Initialize(
-	ADirectionalLight* InSunLight, ASkyLight* InSkyLight, double InLatitudeDegrees)
+void AMassifDaylightManager::Initialize(ADirectionalLight* InSunLight, double InLatitudeDegrees)
 {
 	SunLight = InSunLight;
-	SkyLight = InSkyLight;
 	LatitudeDegrees = InLatitudeDegrees;
+
+	if (SunLight != nullptr)
+	{
+		FullIntensity = SunLight->GetLightComponent()->Intensity;
+	}
 }
 
 void AMassifDaylightManager::Tick(float DeltaSeconds)
@@ -28,30 +30,21 @@ void AMassifDaylightManager::Tick(float DeltaSeconds)
 		return;
 	}
 
-	AimSun(LatitudeDegrees);
+	AimSun();
 }
 
-void AMassifDaylightManager::AimSun(double InLatitudeDegrees)
+void AMassifDaylightManager::AimSun()
 {
-	const FMassifSunPosition Sun = MassifWorldTime::GetSunPosition(GetWorld(), InLatitudeDegrees);
-	const double AltitudeDegrees = FMath::RadiansToDegrees(Sun.AltitudeRadians);
-
-	SunLight->SetActorHiddenInGame(AltitudeDegrees < MinimumSunAltitudeDegrees);
+	const FMassifSunPosition Sun = MassifWorldTime::GetSunPosition(GetWorld(), LatitudeDegrees);
 
 	// The light travels the way the sun is looked at, so the rotation points down
-	// the direction to the sun rather than along it.
+	// the direction to the sun rather than along it. The atmosphere reads the same
+	// rotation, which is what repaints the sky.
 	SunLight->SetActorRotation((-Sun.Direction).Rotation());
 
-	if (SkyLight == nullptr)
-	{
-		return;
-	}
+	const double AltitudeDegrees = FMath::RadiansToDegrees(Sun.AltitudeRadians);
+	const double NightFade = FMath::GetMappedRangeValueClamped(
+		FVector2D(FadeEndAltitudeDegrees, FadeStartAltitudeDegrees), FVector2D(0.0, 1.0), AltitudeDegrees);
 
-	if (FMath::Abs(AltitudeDegrees - LastCaptureAltitudeDegrees) < SkyRecaptureDegrees)
-	{
-		return;
-	}
-
-	LastCaptureAltitudeDegrees = AltitudeDegrees;
-	SkyLight->GetLightComponent()->RecaptureSky();
+	SunLight->GetLightComponent()->SetIntensity(FullIntensity * static_cast<float>(NightFade));
 }

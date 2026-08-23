@@ -253,7 +253,7 @@ void AMassifGameMode::LoadTerrainAndSpawnManagers()
 	FogManager->Initialize(Environment, TerrainField, FMassifGeoreference().LatitudeDegrees);
 
 	DaylightManager = GetWorld()->SpawnActor<AMassifDaylightManager>();
-	DaylightManager->Initialize(SunLight, SkyLightActor, FMassifGeoreference().LatitudeDegrees);
+	DaylightManager->Initialize(SunLight, FMassifGeoreference().LatitudeDegrees);
 }
 
 void AMassifGameMode::BuildTerrainField(TSharedRef<const FMassifHeightmap> Heightmap)
@@ -390,11 +390,17 @@ void AMassifGameMode::SpawnSunAndSky()
 	UDirectionalLightComponent* SunComponent = CastChecked<UDirectionalLightComponent>(Sun->GetLightComponent());
 	SunComponent->SetAtmosphereSunLight(true);
 
+	// The atmosphere attenuates and reddens the sunlight along its own path, so a
+	// low sun goes orange and a set one stops lighting the ground without any of it
+	// being faked from outside. It is also what makes the sky and the ground agree:
+	// both are then reading one scattering model rather than two.
+	SunComponent->bPerPixelAtmosphereTransmittance = true;
+
 	World->SpawnActor<ASkyAtmosphere>();
 
-	ASkyLight* Sky = World->SpawnActor<ASkyLight>();
-	ASkyLight* SkyLight = Sky;
-	SkyLightActor = Sky;
+	// Real-time capture, so the ambient follows the sky the atmosphere is drawing
+	// as the sun moves, rather than holding the one it was built with.
+	ASkyLight* SkyLight = World->SpawnActor<ASkyLight>();
 	SkyLight->GetLightComponent()->SetMobility(EComponentMobility::Movable);
 	SkyLight->GetLightComponent()->bRealTimeCapture = true;
 	SkyLight->GetLightComponent()->MarkRenderStateDirty();

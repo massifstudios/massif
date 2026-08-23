@@ -16,7 +16,6 @@ class FMassifRiverField;
 class FMassifRiverNetwork;
 class FMassifTerrainField;
 class ADirectionalLight;
-class ASkyLight;
 
 /**
  * New-game flow for the winter core: loads the elevation model named by
@@ -100,12 +99,9 @@ private:
 	UPROPERTY()
 	TObjectPtr<AMassifDaylightManager> DaylightManager;
 
-	/** Kept so the daylight manager can aim them at the sun the clock says. */
+	/** Kept so the daylight manager can aim it where the clock says the sun is. */
 	UPROPERTY()
 	TObjectPtr<ADirectionalLight> SunLight;
-
-	UPROPERTY()
-	TObjectPtr<ASkyLight> SkyLightActor;
 
 	float SpawnAltitudeMeters = 0.0f;
 };
