@@ -315,6 +315,34 @@ namespace
 		});
 		return Order;
 	}
+
+	/**
+	 * Hands every cell's holding to the cells below it, highest first, and reads
+	 * the totals back out.
+	 *
+	 * Accumulated in double: a valley cell gathers millions of hillside
+	 * contributions, and in float the small ones would stop registering long
+	 * before the river was drawn.
+	 */
+	void RouteDownhill(
+		const FMassifBakeGrid& Grid,
+		const FMassifEnvironmentBakeParams& Params,
+		TArrayView<const double> Filled,
+		TArray<double>& InOutAccumulation,
+		TArray<float>& OutRouted)
+	{
+		const TArray<int32> DrainageOrder = MakeDrainageOrder(Filled);
+		for (int32 CellIndex : DrainageOrder)
+		{
+			DistributeCellFlow(Grid, Params, Filled, CellIndex, InOutAccumulation);
+		}
+
+		OutRouted.SetNumUninitialized(Grid.CellCount());
+		for (int32 CellIndex = 0; CellIndex < InOutAccumulation.Num(); ++CellIndex)
+		{
+			OutRouted[CellIndex] = static_cast<float>(InOutAccumulation[CellIndex]);
+		}
+	}
 }
 
 void MassifBakeCpu::RouteFlow(
@@ -323,23 +351,21 @@ void MassifBakeCpu::RouteFlow(
 	TArrayView<const double> Filled,
 	TArray<float>& OutAccumulationSquareMeters)
 {
-	// Accumulated in double: a valley cell gathers millions of hillside
-	// contributions, and in float the small ones would stop registering long
-	// before the river was drawn.
 	TArray<double> Accumulation;
 	Accumulation.Init(Grid.CellAreaSquareMeters(), Grid.CellCount());
+	RouteDownhill(Grid, Params, Filled, Accumulation, OutAccumulationSquareMeters);
+}
 
-	const TArray<int32> DrainageOrder = MakeDrainageOrder(Filled);
-	for (int32 CellIndex : DrainageOrder)
-	{
-		DistributeCellFlow(Grid, Params, Filled, CellIndex, Accumulation);
-	}
-
-	OutAccumulationSquareMeters.SetNumUninitialized(Grid.CellCount());
-	for (int32 CellIndex = 0; CellIndex < Accumulation.Num(); ++CellIndex)
-	{
-		OutAccumulationSquareMeters[CellIndex] = static_cast<float>(Accumulation[CellIndex]);
-	}
+void MassifBakeCpu::RouteInflow(
+	const FMassifBakeGrid& Grid,
+	const FMassifEnvironmentBakeParams& Params,
+	TArrayView<const double> Filled,
+	TArrayView<const double> InflowPerCell,
+	TArray<float>& OutRouted)
+{
+	check(InflowPerCell.Num() == Grid.CellCount());
+	TArray<double> Accumulation(InflowPerCell.GetData(), InflowPerCell.Num());
+	RouteDownhill(Grid, Params, Filled, Accumulation, OutRouted);
 }
 
 // ---------------------------------------------------------------------------

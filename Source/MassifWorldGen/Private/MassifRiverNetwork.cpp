@@ -410,6 +410,7 @@ namespace
 		TArrayView<const double> Measured;
 		TArrayView<const double> Filled;
 		TArrayView<const float> AccumulationSquareMeters;
+		TArrayView<const float> DischargeCubicMetersPerSecond;
 
 		/** Steepest downhill neighbour of every cell in the world, or INDEX_NONE where water leaves. */
 		TArray<int32> ReceiverOfCell;
@@ -705,8 +706,7 @@ namespace
 			Node.PositionMeters = Grid.CellCentreMeters(CellIndex % Grid.Width, CellIndex / Grid.Width);
 			Node.GroundAltitudeMeters = Measured[CellIndex];
 			Node.WaterSurfaceMeters = WaterSurfaceMeters[RiverIndex];
-			Node.DischargeCubicMetersPerSecond =
-				AccumulationSquareMeters[CellIndex] * Params.SpecificRunoffMetersPerSecond;
+			Node.DischargeCubicMetersPerSecond = DischargeCubicMetersPerSecond[CellIndex];
 			ShapeChannel(Params, Node);
 			return Node;
 		}
@@ -718,8 +718,10 @@ TSharedRef<const FMassifRiverNetwork> MassifBakeCpu::ExtractRivers(
 	const FMassifRiverParams& Params,
 	TArrayView<const double> Measured,
 	TArrayView<const double> Filled,
-	TArrayView<const float> AccumulationSquareMeters)
+	TArrayView<const float> AccumulationSquareMeters,
+	TArrayView<const float> DischargeCubicMetersPerSecond)
 {
-	FRiverExtraction Extraction{ Grid, Params, Measured, Filled, AccumulationSquareMeters };
+	FRiverExtraction Extraction{
+		Grid, Params, Measured, Filled, AccumulationSquareMeters, DischargeCubicMetersPerSecond };
 	return FMassifRiverNetwork::Create(Extraction.Run());
 }

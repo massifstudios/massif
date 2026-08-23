@@ -3,6 +3,9 @@
 #include "CoreMinimal.h"
 #include "MassifRiverNetwork.h"
 
+/** Seconds in a Julian year: what a figure per year anywhere in the water solve is a figure over. */
+inline constexpr double MassifSecondsPerYear = 31557600.0;
+
 /**
  * Everything the water solve is tuned by. Iteration limits are counts, never
  * convergence tests: a solve that stops once it has converged stops at a
@@ -145,6 +148,18 @@ struct FMassifEnvironmentBakeParams
 
 	/** Floor on the slope the wetness index divides by, so flat ground is not infinitely wet. */
 	double MinimumSlopeTangent = 0.005;
+
+	/**
+	 * Runoff a year yields where the graph carries no precipitation to read.
+	 *
+	 * Over `MassifSecondsPerYear`.
+	 *
+	 * The water solve has to stand on its own in a graph with no weather in it, and
+	 * a massif nothing is known about sheds an even depth everywhere. A metre a
+	 * year is the Ötztal's own figure: the Ötztaler Ache carries about 26 m3/s off
+	 * 800 km2, which is what an unsolved world reproduces.
+	 */
+	double FallbackRunoffMillimetersPerYear = 1010.0;
 
 	/** Iterations the GPU relaxations run for; the CPU path solves exactly and ignores these. */
 	int32 GpuDepressionFillIterations = 2048;

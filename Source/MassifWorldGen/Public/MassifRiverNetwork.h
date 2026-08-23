@@ -18,14 +18,6 @@ struct FMassifRiverParams
 	double ChannelInitiationAreaSquareMeters = 1.0e6;
 
 	/**
-	 * Metres per second of runoff each square metre of catchment yields, averaged
-	 * over the year. The Ötztaler Ache carries about 26 m3/s off 800 km2, which is
-	 * this figure; it stands in for precipitation, evaporation and glacier melt
-	 * together, none of which the bake models separately.
-	 */
-	double SpecificRunoffMetersPerSecond = 3.2e-8;
-
-	/**
 	 * Downstream hydraulic geometry (Leopold & Maddock 1953): width, depth and
 	 * speed are each a power of discharge. The exponents sum to one and the
 	 * coefficients multiply to one, which is continuity — width times depth times
@@ -127,8 +119,8 @@ struct FMassifRiverReach
  * channel heads where enough catchment has gathered, then the path water takes
  * from each of them down to the world border.
  *
- * Discharge comes from the catchment draining through a point, and width, depth
- * and speed from discharge by hydraulic geometry — so the network is a
+ * Discharge comes from the water balance routed through a point, and width,
+ * depth and speed from discharge by hydraulic geometry — so the network is a
  * consequence of the water solve rather than a second guess at it.
  *
  * Never serialized: like the bake it is a pure function of the elevation model

@@ -117,22 +117,35 @@ bake's cost for a second-order correction.
 
 ### F0 — Discharge from the water balance
 
-Extraction is currently a free function, `MassifExtractRivers`
-(`MassifEnvironmentGraph.cpp:1208`), called by the game mode against a finished
-state. E3 recorded it as registered against the framework; it is not. Making it a
-process is what lets it declare `Hydrology.SeasonalFlow` as an input rather than
-guessing at runoff.
+`Hydrology.SeasonalFlow` is not the channel this needs, despite the name. It is
+an effective *area* in m², and it normalises the precipitation by the year's own
+total (`ShareOfYear`), so it carries when the water moves and not how much of it
+there is. Two catchments of one size on the wet and dry flanks of a range read
+identically through it.
 
-- `Hydrology.RiverExtraction` as a registered process. Declares `Altitude`,
-  `FilledAltitude`, `FlowAccumulation`, `SeasonalFlow`.
-- Discharge becomes the accumulated water balance rather than area × constant.
-  `SpecificRunoffMetersPerSecond` is deleted.
+River extraction stays a free function — a process writes channels and a river
+network is a set of polylines, which `MassifEnvironmentGraph.h:116` already
+records. What it reads changes.
+
+- `Hydrology.Discharge`, m³/s, Float32 at the hydrology's own 8 m: the year's
+  runoff routed downhill. `MassifBakeCpu::RouteInflow` is `RouteFlow` over a
+  per-cell contribution instead of a per-cell area; the catchment channel is
+  untouched, because a catchment is ground and does not become something else
+  because the rain over it is uneven.
+- Runoff per cell is `Precip.Annual − Climate.Evapotranspiration`, floored at
+  zero, both optional so the water solve still stands alone in a graph with no
+  weather in it. Infiltration is deliberately not subtracted: over a year what
+  soaks in returns at a spring, so it moves timing rather than volume, and
+  `SeasonalFlow` is where that already lives.
+- `Off` sheds `FallbackRunoffMillimetersPerYear` evenly, which reproduces the
+  deleted `SpecificRunoffMetersPerSecond` exactly. So `Off` is today's rivers,
+  and the fidelity switch is a real before-and-after.
 - Hydraulic geometry stays as it is — this milestone changes how big rivers are,
   not what shape they are.
-- **Verify:** tests — a wet catchment and a dry catchment of equal area produce
-  different discharge; total discharge at the world border matches the water
-  balance's own inflow minus evapotranspiration within tolerance; determinism
-  hash. Manual — the trunk and its tributaries are in a plausible ratio.
+- **Verify:** tests — everything a plane yields crosses its downhill border,
+  `Off` is the catchment times one depth at every probe, and the windward flank
+  of a ridge carries more than the lee flank it mirrors while draining the same
+  catchment. Manual — the trunk and its tributaries are in a plausible ratio.
 
 ### F1 — Corridor channels
 

@@ -4,6 +4,7 @@
 #include "MassifHeightmap.h"
 #include "MassifRiverNetwork.h"
 #include "MassifSeed.h"
+#include "MassifTestEnvironment.h"
 #include "Misc/AutomationTest.h"
 
 namespace
@@ -218,7 +219,7 @@ bool FEnvironmentGraphRiverTest::RunTest(const FString& Parameters)
 	const FMassifEnvironmentBakeParams Params = MakePortTestParams();
 
 	FString Error;
-	const TUniquePtr<FMassifEnvironmentScheduler> Scheduler = MassifBuildEnvironment(
+	const TUniquePtr<FMassifEnvironmentScheduler> Scheduler = MassifPrepareEnvironment(
 		MakeShared<FMassifHeightmapElevationSource>(Heightmap), FMassifGeoreference(), PortTestSeed, Params,
 		Error);
 	if (!TestNotNull(TEXT("The environment graph schedules and runs"), Scheduler.Get()))
@@ -226,14 +227,22 @@ bool FEnvironmentGraphRiverTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
+	// The subject is the trace, not the weather that filled the channels, so the
+	// discharge is held at the even year both sides can produce.
+	Scheduler->SetFidelity(MassifEnvironmentProcesses::Discharge(), EMassifFidelity::Off);
+	Scheduler->Execute();
+
 	const FReferenceSolve Reference = SolveReference(*Heightmap, Params, PortTestDropletSeed());
 	const FMassifBakeGrid Grid = FMassifBakeGrid::FromHeightmap(*Heightmap, Params.CellSizeMeters);
+
+	TArray<float> ReferenceDischarge;
+	MassifRouteEvenRunoff(Grid, Params, Reference.FilledAltitudeMeters, ReferenceDischarge);
 
 	const TSharedRef<const FMassifRiverNetwork> FromGraph =
 		MassifExtractRivers(Scheduler->GetState(), Params.Rivers);
 	const TSharedRef<const FMassifRiverNetwork> FromReference = MassifBakeCpu::ExtractRivers(
 		Grid, Params.Rivers, Reference.MeasuredAltitudeMeters, Reference.FilledAltitudeMeters,
-		Reference.FlowAccumulationSquareMeters);
+		Reference.FlowAccumulationSquareMeters, ReferenceDischarge);
 
 	TestEqual(
 		TEXT("The graph traces the same reaches"), FromGraph->GetReaches().Num(),

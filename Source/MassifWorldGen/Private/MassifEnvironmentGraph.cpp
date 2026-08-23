@@ -71,6 +71,12 @@ namespace MassifEnvironmentChannels
 		static const FName Name(TEXT("Hydrology.SeasonalFlow"));
 		return Name;
 	}
+
+	const FName& Discharge()
+	{
+		static const FName Name(TEXT("Hydrology.Discharge"));
+		return Name;
+	}
 }
 
 namespace MassifEnvironmentProcesses
@@ -132,6 +138,12 @@ namespace MassifEnvironmentProcesses
 	const FName& SeasonalFlow()
 	{
 		static const FName Name(TEXT("Hydrology.SeasonalFlow"));
+		return Name;
+	}
+
+	const FName& Discharge()
+	{
+		static const FName Name(TEXT("Hydrology.Discharge"));
 		return Name;
 	}
 }
@@ -1125,6 +1137,113 @@ namespace
 			Scope->Commit();
 		}
 	};
+
+	/**
+	 * What is running in the channels, in cubic metres a second.
+	 *
+	 * The routed catchment measures ground and this measures water, and the two are
+	 * only proportional where the rain is even. Where the graph carries a
+	 * precipitation solve they part company: an orographic gain of a factor of three
+	 * across a range is ordinary, and evapotranspiration takes back more of it off
+	 * warm low ground than off cold high ground. A catchment on the wet flank and one
+	 * of the same size on the dry flank then carry rivers of different sizes, which
+	 * is the whole reason this channel is separate from the accumulation.
+	 *
+	 * Infiltration is deliberately not taken off. Over a year what soaks in comes
+	 * back out at a spring rather than leaving the massif, so it moves when the water
+	 * arrives rather than how much of it there is. `Hydrology.SeasonalFlow` is where
+	 * that timing lives, and taking the same loss off here would count it twice.
+	 */
+	class FDischargeProcess final : public FBakeProcess
+	{
+	public:
+		using FBakeProcess::FBakeProcess;
+
+		FMassifProcessDeclaration Declare() const override
+		{
+			FMassifProcessDeclaration Declaration;
+			Declaration.Name = MassifEnvironmentProcesses::Discharge();
+			Declaration.DisplayName = TEXT("River Discharge");
+			Declaration.InputChannels = {MassifEnvironmentChannels::FilledAltitude()};
+			Declaration.OptionalInputChannels = {
+				MassifEnvironmentChannels::AnnualPrecipitation(),
+				MassifEnvironmentChannels::Evapotranspiration()};
+			Declaration.SupportedFidelities = {EMassifFidelity::Standard};
+			Declaration.OutputChannels.Add(MakeChannel(
+				MassifEnvironmentChannels::Discharge(), EMassifChannelEncoding::Float32,
+				Params.CellSizeMeters, TEXT("m3/s"), EMassifChannelColorMap::Viridis));
+			return Declaration;
+		}
+
+		void Execute(FMassifEnvironmentContext& Context, EMassifFidelity Fidelity) const override
+		{
+			const TUniquePtr<FMassifChannelWriteScope> Scope =
+				Context.OpenOutput(MassifEnvironmentChannels::Discharge());
+			const FMassifBakeGrid Grid = MakeBakeGrid(Scope->GetGrid());
+
+			TArray<double> Filled;
+			ReadCells(Context.GetState(), Context.GetInput(MassifEnvironmentChannels::FilledAltitude()), Filled);
+
+			TArray<double> InflowCubicMetersPerSecond;
+			GatherInflow(Context, Fidelity, Grid, InflowCubicMetersPerSecond);
+
+			TArray<float> DischargeCubicMetersPerSecond;
+			MassifBakeCpu::RouteInflow(
+				Grid, Params, Filled, InflowCubicMetersPerSecond, DischargeCubicMetersPerSecond);
+			WriteCells(*Scope, DischargeCubicMetersPerSecond);
+		}
+
+	private:
+		/**
+		 * Water landing on each cell and staying above ground, before any of it has
+		 * moved. `Off` sheds the fallback depth everywhere, which is the massif
+		 * nothing is known about rather than a massif with no water on it.
+		 */
+		void GatherInflow(
+			const FMassifEnvironmentContext& Context, EMassifFidelity Fidelity, const FMassifBakeGrid& Grid,
+			TArray<double>& OutCubicMetersPerSecond) const
+		{
+			const double FallbackMetersPerYear = 0.001 * Params.FallbackRunoffMillimetersPerYear;
+			const double FallbackCubicMetersPerSecond =
+				FallbackMetersPerYear * Grid.CellAreaSquareMeters() / MassifSecondsPerYear;
+			OutCubicMetersPerSecond.Init(FallbackCubicMetersPerSecond, Grid.CellCount());
+
+			const FMassifChannelHandle Precipitation =
+				Context.FindOptionalInput(MassifEnvironmentChannels::AnnualPrecipitation());
+			if (Fidelity == EMassifFidelity::Off || !Precipitation.IsValid())
+			{
+				return;
+			}
+
+			const FMassifChannelHandle Evaporated =
+				Context.FindOptionalInput(MassifEnvironmentChannels::Evapotranspiration());
+			for (int32 CellIndex = 0; CellIndex < OutCubicMetersPerSecond.Num(); ++CellIndex)
+			{
+				OutCubicMetersPerSecond[CellIndex] =
+					CellInflow(Context, Grid, Precipitation, Evaporated, CellIndex);
+			}
+		}
+
+		/**
+		 * Rain less what the ground and its plants return to the air. Never negative:
+		 * ground that evaporates more than it receives yields nothing, and cannot take
+		 * water off the cells below it.
+		 */
+		static double CellInflow(
+			const FMassifEnvironmentContext& Context, const FMassifBakeGrid& Grid,
+			FMassifChannelHandle Precipitation, FMassifChannelHandle Evaporated, int32 CellIndex)
+		{
+			const FVector2d PositionMeters =
+				Grid.CellCentreMeters(CellIndex % Grid.Width, CellIndex / Grid.Width);
+			const double FallMillimeters =
+				Context.GetState().SampleScalar(Precipitation, PositionMeters);
+			const double LostMillimeters =
+				MassifSampleOptional(Context.GetState(), Evaporated, PositionMeters);
+
+			const double RunoffMetersPerYear = 0.001 * FMath::Max(FallMillimeters - LostMillimeters, 0.0);
+			return RunoffMetersPerYear * Grid.CellAreaSquareMeters() / MassifSecondsPerYear;
+		}
+	};
 }
 
 void MassifRegisterAltitudeProcess(
@@ -1148,6 +1267,7 @@ void MassifRegisterEnvironmentProcesses(
 	Scheduler.RegisterProcess(MakeShared<FDepressionFillProcess>(Params.Water));
 	Scheduler.RegisterProcess(MakeShared<FStandingWaterProcess>(Params.Water));
 	Scheduler.RegisterProcess(MakeShared<FFlowRoutingProcess>(Params.Water));
+	Scheduler.RegisterProcess(MakeShared<FDischargeProcess>(Params.Water));
 	Scheduler.RegisterProcess(MakeShared<FSoilDepositionProcess>(Params.Water));
 	Scheduler.RegisterProcess(MakeShared<FSoilDepthProcess>(Params.Water));
 	Scheduler.RegisterProcess(MakeShared<FWetnessProcess>(Params.Water));
@@ -1211,7 +1331,9 @@ TSharedRef<const FMassifRiverNetwork> MassifExtractRivers(
 	const FMassifChannelHandle MeasuredChannel = State.FindChannel(MassifEnvironmentChannels::Altitude());
 	const FMassifChannelHandle FilledChannel = State.FindChannel(MassifEnvironmentChannels::FilledAltitude());
 	const FMassifChannelHandle FlowChannel = State.FindChannel(MassifEnvironmentChannels::FlowAccumulation());
-	if (!MeasuredChannel.IsValid() || !FilledChannel.IsValid() || !FlowChannel.IsValid())
+	const FMassifChannelHandle DischargeChannel = State.FindChannel(MassifEnvironmentChannels::Discharge());
+	if (!MeasuredChannel.IsValid() || !FilledChannel.IsValid() || !FlowChannel.IsValid()
+		|| !DischargeChannel.IsValid())
 	{
 		return FMassifRiverNetwork::Create({});
 	}
@@ -1219,10 +1341,12 @@ TSharedRef<const FMassifRiverNetwork> MassifExtractRivers(
 	TArray<double> Measured;
 	TArray<double> Filled;
 	TArray<float> Accumulation;
+	TArray<float> Discharge;
 	ReadCells(State, MeasuredChannel, Measured);
 	ReadCells(State, FilledChannel, Filled);
 	ReadCellsAsFloats(State, FlowChannel, Accumulation);
+	ReadCellsAsFloats(State, DischargeChannel, Discharge);
 
 	return MassifBakeCpu::ExtractRivers(
-		MakeBakeGrid(State.GetGrid(FilledChannel)), Params, Measured, Filled, Accumulation);
+		MakeBakeGrid(State.GetGrid(FilledChannel)), Params, Measured, Filled, Accumulation, Discharge);
 }

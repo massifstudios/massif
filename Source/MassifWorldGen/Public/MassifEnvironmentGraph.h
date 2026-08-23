@@ -45,6 +45,17 @@ namespace MassifEnvironmentChannels
 	 */
 	MASSIFWORLDGEN_API const FName& SeasonalFlow();
 
+	/**
+	 * Water running through a point, in cubic metres per second, averaged over a year.
+	 *
+	 * The routed catchment says how much ground drains through a point; this says
+	 * how much water that ground yields, which is the same figure only where the
+	 * rain is even. Two catchments of one size on the wet and dry flanks of the
+	 * same range carry rivers of different sizes, and this is the channel that
+	 * knows it.
+	 */
+	MASSIFWORLDGEN_API const FName& Discharge();
+
 	/** What the droplets left, before roots hold any of it in place. */
 	MASSIFWORLDGEN_API const FName& SoilDeposition();
 }
@@ -62,6 +73,7 @@ namespace MassifEnvironmentProcesses
 	MASSIFWORLDGEN_API const FName& Infiltration();
 	MASSIFWORLDGEN_API const FName& Springs();
 	MASSIFWORLDGEN_API const FName& SeasonalFlow();
+	MASSIFWORLDGEN_API const FName& Discharge();
 }
 
 /** Adds every standard process to a scheduler. The scheduler orders them; this does not. */

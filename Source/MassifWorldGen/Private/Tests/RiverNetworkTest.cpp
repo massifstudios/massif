@@ -1,6 +1,7 @@
 #include "MassifEnvironmentBakeGrid.h"
 #include "MassifHeightmap.h"
 #include "MassifRiverNetwork.h"
+#include "MassifTestEnvironment.h"
 #include "Misc/AutomationTest.h"
 
 namespace
@@ -64,28 +65,38 @@ namespace
 	{
 		FMassifRiverParams Params;
 		// The test world is one square kilometre, against four hundred for the real
-		// one. At the shipping threshold it would hold no channel at all, and at the
-		// shipping runoff the channel it does hold would be a trickle pinned to the
-		// minimum width, which is not a case the hydraulic geometry can be read off.
+		// one. At the shipping threshold it would hold no channel at all.
 		Params.ChannelInitiationAreaSquareMeters = 1.0e4;
-		Params.SpecificRunoffMetersPerSecond = 3.2e-5;
+		return Params;
+	}
+
+	FMassifEnvironmentBakeParams MakeTestBakeParams()
+	{
+		FMassifEnvironmentBakeParams Params;
+		Params.CellSizeMeters = RiverTestSpacingMeters;
+		// A thousand times the real depth, for the same reason the threshold is a
+		// hundredth of the real one: at a metre a year the channel this world holds
+		// would be a trickle pinned to the minimum width, which is not a case the
+		// hydraulic geometry can be read off.
+		Params.FallbackRunoffMillimetersPerYear = 1.01e6;
 		return Params;
 	}
 
 	TSharedRef<const FMassifRiverNetwork> ExtractFrom(
 		const FMassifHeightmap& Heightmap, const FMassifRiverParams& RiverParams)
 	{
-		FMassifEnvironmentBakeParams Params;
-		Params.CellSizeMeters = RiverTestSpacingMeters;
+		const FMassifEnvironmentBakeParams Params = MakeTestBakeParams();
 		const FMassifBakeGrid Grid = FMassifBakeGrid::FromHeightmap(Heightmap, Params.CellSizeMeters);
 
 		TArray<double> Measured;
 		TArray<double> Filled;
 		TArray<float> Accumulation;
+		TArray<float> Discharge;
 		MassifBakeCpu::SampleAltitudes(Heightmap, Grid, Measured);
 		MassifBakeCpu::FillDepressions(Grid, Params, Measured, Filled);
 		MassifBakeCpu::RouteFlow(Grid, Params, Filled, Accumulation);
-		return MassifBakeCpu::ExtractRivers(Grid, RiverParams, Measured, Filled, Accumulation);
+		MassifRouteEvenRunoff(Grid, Params, Filled, Discharge);
+		return MassifBakeCpu::ExtractRivers(Grid, RiverParams, Measured, Filled, Accumulation, Discharge);
 	}
 
 	bool IsOnWorldBorder(FVector2d PositionMeters)

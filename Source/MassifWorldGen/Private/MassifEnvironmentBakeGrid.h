@@ -100,6 +100,24 @@ namespace MassifBakeCpu
 		TArray<float>& OutAccumulationSquareMeters);
 
 	/**
+	 * The same routing, over what each cell contributes rather than over its area:
+	 * a cell hands downstream the water that landed on it, so what comes out is
+	 * discharge and not catchment. Whatever unit the contributions are in is the
+	 * unit of the result.
+	 *
+	 * Splitting this out of RouteFlow rather than weighting it is deliberate. The
+	 * catchment area a cell drains is a property of the terrain that the wetness
+	 * index and the channel-initiation threshold both read as an area, and it does
+	 * not become something else because the rain over it is uneven.
+	 */
+	void RouteInflow(
+		const FMassifBakeGrid& Grid,
+		const FMassifEnvironmentBakeParams& Params,
+		TArrayView<const double> Filled,
+		TArrayView<const double> InflowPerCell,
+		TArray<float>& OutRouted);
+
+	/**
 	 * Runs water down the surface as particles and records where each one dropped
 	 * what it was carrying. The surface is never modified — this measures the
 	 * soil an already-shaped massif would have, and shaping the ground is a
@@ -144,5 +162,6 @@ namespace MassifBakeCpu
 		const FMassifRiverParams& Params,
 		TArrayView<const double> Measured,
 		TArrayView<const double> Filled,
-		TArrayView<const float> AccumulationSquareMeters);
+		TArrayView<const float> AccumulationSquareMeters,
+		TArrayView<const float> DischargeCubicMetersPerSecond);
 }
