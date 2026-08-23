@@ -5,6 +5,7 @@
 #include "MassifRiverNetwork.h"
 
 class FMassifHeightmap;
+class IMassifElevationSource;
 
 /**
  * The raster the bake solves on: column 0 west, row 0 north, cell centres in
@@ -159,6 +160,7 @@ namespace MassifBakeCpu
 	 */
 	TSharedRef<const FMassifRiverNetwork> ExtractRivers(
 		const FMassifBakeGrid& Grid,
+		const IMassifElevationSource& Elevation,
 		const FMassifRiverParams& Params,
 		TArrayView<const double> Measured,
 		TArrayView<const double> Filled,

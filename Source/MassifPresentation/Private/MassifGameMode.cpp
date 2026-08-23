@@ -260,7 +260,9 @@ void AMassifGameMode::LoadTerrainAndSpawnManagers()
 void AMassifGameMode::BuildTerrainField(TSharedRef<const FMassifHeightmap> Heightmap)
 {
 	const TSharedRef<const FMassifRiverNetwork> Rivers =
-		MassifExtractRivers(EnvironmentScheduler->GetState(), GetEnvironmentParams().Rivers);
+		MassifExtractRivers(
+			EnvironmentScheduler->GetState(), EnvironmentScheduler->GetElevation(),
+			GetEnvironmentParams().Rivers);
 	LogRiverSummary(Rivers.Get());
 
 	const FMassifRiverCarveParams CarveParams;

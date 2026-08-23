@@ -715,6 +715,7 @@ namespace
 
 TSharedRef<const FMassifRiverNetwork> MassifBakeCpu::ExtractRivers(
 	const FMassifBakeGrid& Grid,
+	const IMassifElevationSource& Elevation,
 	const FMassifRiverParams& Params,
 	TArrayView<const double> Measured,
 	TArrayView<const double> Filled,
@@ -723,5 +724,11 @@ TSharedRef<const FMassifRiverNetwork> MassifBakeCpu::ExtractRivers(
 {
 	FRiverExtraction Extraction{
 		Grid, Params, Measured, Filled, AccumulationSquareMeters, DischargeCubicMetersPerSecond };
-	return FMassifRiverNetwork::Create(Extraction.Run());
+	TArray<FMassifRiverReach> Reaches = Extraction.Run();
+
+	// After the polylines are traced and resampled, so a section is taken across
+	// the line the water is actually drawn along rather than across the staircase
+	// the routing produced.
+	MassifSolveChannelProfiles(Elevation, Params.Channels, Reaches);
+	return FMassifRiverNetwork::Create(MoveTemp(Reaches));
 }

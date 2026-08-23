@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "MassifChannelProfile.h"
 
 /**
  * Everything the river extraction is tuned by. Rivers are read out of the water
@@ -70,6 +71,9 @@ struct FMassifRiverParams
 	 * than as a run of fenceposts.
 	 */
 	double SmoothingSpacingMeters = 6.0;
+
+	/** How the ground across each station is read, and how the discharge is fitted into it. */
+	FMassifChannelSolveParams Channels;
 };
 
 /** One point along a channel, with the channel's shape where it stands. */
@@ -91,9 +95,20 @@ struct FMassifRiverNode
 	double WaterSurfaceMeters = 0.0;
 
 	double DischargeCubicMetersPerSecond = 0.0;
+
+	/**
+	 * What the discharge alone predicts, by downstream hydraulic geometry.
+	 *
+	 * The first guess and the fallback: the section below refines all three
+	 * against the ground actually here, and stands in for them where a station has
+	 * no section to read.
+	 */
 	double WidthMeters = 0.0;
 	double DepthMeters = 0.0;
 	double SpeedMetersPerSecond = 0.0;
+
+	/** The ground across the flow here, and how the discharge fits into it. */
+	FMassifChannelProfile Profile;
 };
 
 /**

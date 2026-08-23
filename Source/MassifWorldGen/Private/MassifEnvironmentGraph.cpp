@@ -1326,7 +1326,9 @@ TUniquePtr<FMassifEnvironmentScheduler> MassifBuildEnvironment(
 }
 
 TSharedRef<const FMassifRiverNetwork> MassifExtractRivers(
-	const FMassifEnvironmentState& State, const FMassifRiverParams& Params)
+	const FMassifEnvironmentState& State,
+	const IMassifElevationSource& Elevation,
+	const FMassifRiverParams& Params)
 {
 	const FMassifChannelHandle MeasuredChannel = State.FindChannel(MassifEnvironmentChannels::Altitude());
 	const FMassifChannelHandle FilledChannel = State.FindChannel(MassifEnvironmentChannels::FilledAltitude());
@@ -1348,5 +1350,6 @@ TSharedRef<const FMassifRiverNetwork> MassifExtractRivers(
 	ReadCellsAsFloats(State, DischargeChannel, Discharge);
 
 	return MassifBakeCpu::ExtractRivers(
-		MakeBakeGrid(State.GetGrid(FilledChannel)), Params, Measured, Filled, Accumulation, Discharge);
+		MakeBakeGrid(State.GetGrid(FilledChannel)), Elevation, Params, Measured, Filled, Accumulation,
+		Discharge);
 }

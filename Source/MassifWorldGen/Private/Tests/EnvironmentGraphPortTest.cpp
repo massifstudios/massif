@@ -238,10 +238,11 @@ bool FEnvironmentGraphRiverTest::RunTest(const FString& Parameters)
 	TArray<float> ReferenceDischarge;
 	MassifRouteEvenRunoff(Grid, Params, Reference.FilledAltitudeMeters, ReferenceDischarge);
 
+	const FMassifHeightmapElevationSource Elevation(Heightmap);
 	const TSharedRef<const FMassifRiverNetwork> FromGraph =
-		MassifExtractRivers(Scheduler->GetState(), Params.Rivers);
+		MassifExtractRivers(Scheduler->GetState(), Elevation, Params.Rivers);
 	const TSharedRef<const FMassifRiverNetwork> FromReference = MassifBakeCpu::ExtractRivers(
-		Grid, Params.Rivers, Reference.MeasuredAltitudeMeters, Reference.FilledAltitudeMeters,
+		Grid, Elevation, Params.Rivers, Reference.MeasuredAltitudeMeters, Reference.FilledAltitudeMeters,
 		Reference.FlowAccumulationSquareMeters, ReferenceDischarge);
 
 	TestEqual(

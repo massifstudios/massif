@@ -1,4 +1,5 @@
 #include "MassifEnvironmentBakeGrid.h"
+#include "MassifElevationSource.h"
 #include "MassifHeightmap.h"
 #include "MassifRiverNetwork.h"
 #include "MassifTestEnvironment.h"
@@ -83,20 +84,23 @@ namespace
 	}
 
 	TSharedRef<const FMassifRiverNetwork> ExtractFrom(
-		const FMassifHeightmap& Heightmap, const FMassifRiverParams& RiverParams)
+		TSharedRef<const FMassifHeightmap> Heightmap, const FMassifRiverParams& RiverParams)
 	{
 		const FMassifEnvironmentBakeParams Params = MakeTestBakeParams();
-		const FMassifBakeGrid Grid = FMassifBakeGrid::FromHeightmap(Heightmap, Params.CellSizeMeters);
+		const FMassifBakeGrid Grid = FMassifBakeGrid::FromHeightmap(*Heightmap, Params.CellSizeMeters);
 
 		TArray<double> Measured;
 		TArray<double> Filled;
 		TArray<float> Accumulation;
 		TArray<float> Discharge;
-		MassifBakeCpu::SampleAltitudes(Heightmap, Grid, Measured);
+		MassifBakeCpu::SampleAltitudes(*Heightmap, Grid, Measured);
 		MassifBakeCpu::FillDepressions(Grid, Params, Measured, Filled);
 		MassifBakeCpu::RouteFlow(Grid, Params, Filled, Accumulation);
 		MassifRouteEvenRunoff(Grid, Params, Filled, Discharge);
-		return MassifBakeCpu::ExtractRivers(Grid, RiverParams, Measured, Filled, Accumulation, Discharge);
+
+		const FMassifHeightmapElevationSource Elevation(MoveTemp(Heightmap));
+		return MassifBakeCpu::ExtractRivers(
+			Grid, Elevation, RiverParams, Measured, Filled, Accumulation, Discharge);
 	}
 
 	bool IsOnWorldBorder(FVector2d PositionMeters)
@@ -115,14 +119,14 @@ bool FRiverNetworkDeterminismTest::RunTest(const FString& Parameters)
 	const TSharedRef<const FMassifHeightmap> Heightmap = MakeConfluence();
 	const FMassifRiverParams Params = MakeTestRiverParams();
 
-	const uint64 FirstHash = ExtractFrom(*Heightmap, Params)->ComputeContentHash();
-	const uint64 SecondHash = ExtractFrom(*Heightmap, Params)->ComputeContentHash();
+	const uint64 FirstHash = ExtractFrom(Heightmap, Params)->ComputeContentHash();
+	const uint64 SecondHash = ExtractFrom(Heightmap, Params)->ComputeContentHash();
 	TestEqual(TEXT("The same terrain traces the same rivers"), FirstHash, SecondHash);
 
 	FMassifRiverParams WiderChannels = Params;
 	WiderChannels.ChannelInitiationAreaSquareMeters = Params.ChannelInitiationAreaSquareMeters * 4.0;
 	TestNotEqual(TEXT("A different threshold traces different rivers"),
-		ExtractFrom(*Heightmap, WiderChannels)->ComputeContentHash(), FirstHash);
+		ExtractFrom(Heightmap, WiderChannels)->ComputeContentHash(), FirstHash);
 	return true;
 }
 
@@ -132,7 +136,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRiverNetworkConnectivityTest,
 
 bool FRiverNetworkConnectivityTest::RunTest(const FString& Parameters)
 {
-	const TSharedRef<const FMassifRiverNetwork> Rivers = ExtractFrom(*MakeConfluence(), MakeTestRiverParams());
+	const TSharedRef<const FMassifRiverNetwork> Rivers = ExtractFrom(MakeConfluence(), MakeTestRiverParams());
 	if (!TestTrue(TEXT("The confluence world carries rivers"), Rivers->GetReaches().Num() >= 2))
 	{
 		return false;
@@ -167,7 +171,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRiverNetworkWaterSurfaceTest,
 bool FRiverNetworkWaterSurfaceTest::RunTest(const FString& Parameters)
 {
 	const FMassifRiverParams Params = MakeTestRiverParams();
-	const TSharedRef<const FMassifRiverNetwork> Rivers = ExtractFrom(*MakeConfluence(), Params);
+	const TSharedRef<const FMassifRiverNetwork> Rivers = ExtractFrom(MakeConfluence(), Params);
 
 	int32 NodesFlowingUphill = 0;
 	int32 NodesWithoutAColumn = 0;
@@ -202,7 +206,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRiverNetworkSmoothingTest,
 
 bool FRiverNetworkSmoothingTest::RunTest(const FString& Parameters)
 {
-	const TSharedRef<const FMassifRiverNetwork> Rivers = ExtractFrom(*MakeConfluence(), MakeTestRiverParams());
+	const TSharedRef<const FMassifRiverNetwork> Rivers = ExtractFrom(MakeConfluence(), MakeTestRiverParams());
 
 	// Catchment only grows downstream, so a resampled node between two traced
 	// ones cannot carry less water than the one above it or more than the one
@@ -243,7 +247,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRiverNetworkChannelShapeTest,
 bool FRiverNetworkChannelShapeTest::RunTest(const FString& Parameters)
 {
 	const FMassifRiverParams Params = MakeTestRiverParams();
-	const TSharedRef<const FMassifRiverNetwork> Rivers = ExtractFrom(*MakeSingleValley(), Params);
+	const TSharedRef<const FMassifRiverNetwork> Rivers = ExtractFrom(MakeSingleValley(), Params);
 	if (!TestTrue(TEXT("The valley carries a river"), Rivers->GetReaches().Num() > 0))
 	{
 		return false;
@@ -296,15 +300,15 @@ bool FRiverNetworkThresholdTest::RunTest(const FString& Parameters)
 	FMassifRiverParams Coarse = MakeTestRiverParams();
 	Coarse.ChannelInitiationAreaSquareMeters = 1.0e9;
 	TestEqual(TEXT("No catchment in the world reaches the threshold, so there are no rivers"),
-		ExtractFrom(*Heightmap, Coarse)->GetReaches().Num(), 0);
+		ExtractFrom(Heightmap, Coarse)->GetReaches().Num(), 0);
 
 	// Halving the catchment a channel needs adds the smaller tributaries above
 	// the ones already drawn, so the network can only get longer.
 	FMassifRiverParams Fine = MakeTestRiverParams();
-	const double CoarseLengthMeters = ExtractFrom(*Heightmap, Fine)->GetTotalLengthMeters();
+	const double CoarseLengthMeters = ExtractFrom(Heightmap, Fine)->GetTotalLengthMeters();
 	Fine.ChannelInitiationAreaSquareMeters *= 0.5;
 	TestTrue(TEXT("A lower threshold traces more channel"),
-		ExtractFrom(*Heightmap, Fine)->GetTotalLengthMeters() > CoarseLengthMeters);
+		ExtractFrom(Heightmap, Fine)->GetTotalLengthMeters() > CoarseLengthMeters);
 	return true;
 }
 
@@ -315,7 +319,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRiverNetworkStrahlerTest,
 bool FRiverNetworkStrahlerTest::RunTest(const FString& Parameters)
 {
 	const TSharedRef<const FMassifRiverNetwork> Confluence =
-		ExtractFrom(*MakeConfluence(), MakeTestRiverParams());
+		ExtractFrom(MakeConfluence(), MakeTestRiverParams());
 	TestTrue(TEXT("Two channels meeting make the order above them"), Confluence->GetMaxStrahlerOrder() >= 2);
 
 	int32 ReachesOutOfOrder = 0;

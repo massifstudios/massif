@@ -134,6 +134,12 @@ MASSIFWORLDGEN_API TUniquePtr<FMassifEnvironmentScheduler> MassifBuildEnvironmen
  * adds to keep a flat descending is far below what a float or a quantised
  * channel would keep, and a river traced against a coarser surface would lose
  * its way across every lake bed in the world.
+ *
+ * The elevation source is read directly for the cross-section at each station: a
+ * channel five metres wide is one cell of the hydrology grid, and a section
+ * across it there would be three samples of the valley it sits in.
  */
 MASSIFWORLDGEN_API TSharedRef<const FMassifRiverNetwork> MassifExtractRivers(
-	const FMassifEnvironmentState& State, const FMassifRiverParams& Params);
+	const FMassifEnvironmentState& State,
+	const IMassifElevationSource& Elevation,
+	const FMassifRiverParams& Params);
