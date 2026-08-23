@@ -35,7 +35,11 @@ commit.
   seed → different hash, height/slope queries sane; manual — fly over a
   plausible massif, seed change gives a different mountain.
 
-### M2 — Deterministic Sim Core
+### M2 — Deterministic Sim Core — **still open**
+Skipped at the time and never returned to: `MassifSim` is an empty module, one
+`IMPLEMENT_MODULE` line and a smoke test. Everything from W1 on is blocked on it,
+as are M7–M11. Easy to miss given how far the worldgen side has run ahead.
+
 - `MassifSim`: `UMassifSimSubsystem`, `FMassifSimState`, fixed 10 Hz tick
   with accumulator, game-speed control (pause/1x/4x), `FSimCommand` queue
   with one dummy command.
@@ -437,8 +441,14 @@ are most of it: `Sun.Insolation` at 10.6 s and `Soil.Deposition` at 3.1 s.
   which is what `GpuDepressionFillIterations` and `GpuFlowRoutingIterations` are
   reserved for. Together they are 2.5 s.
 - **Not the rest.** Every other process already solves in under half a second.
+- **Wind and precipitation become candidates once W2 lands.** Binning their
+  response over 16 bearings multiplies their upwind sweeps, which is the same
+  per-cell read-only shape that makes the sun portable. Cheap now, not after.
 - **Verify:** CPU and GPU paths agree within a tolerance, headless still runs the
   CPU path, and the determinism hashes are unchanged.
+
+Nothing here is blocked by the sim any more: the response table (W1) is pinned to
+the CPU path, so what the GPU produces is never gameplay truth.
 
 ### E15 — Live Re-solving (open)
 Most of the graph is already fast enough to re-solve while the game runs, and
@@ -449,6 +459,84 @@ what blocks it is not speed.
 - Refresh the painted debug view when a re-solve lands, rather than on the next
   view change.
 - Regenerate foliage and masks when the channels driving them change.
+
+## Weather (W-series)
+
+The bake holds the average year. Weather is this year, and it is sim state —
+fixed tick, serialized, hashed (ARCHITECTURE §6.1). It factors into a global
+synoptic state times a static terrain response, so nothing here is a runtime grid
+solve.
+
+W0 stands alone against the bake. Everything from W1 on is blocked on M2.
+
+### W0 — Sun.Horizon and Time of Day (open)
+The bake already sweeps the horizon per cell and throws it away, reducing it to
+a sky view factor. Keeping it is what lets anything ask whether the sun is up
+*here*, now — the question `Sun.DirectInsolation` cannot answer, because it is a
+half-monthly *daily total*. Morning refreeze, afternoon shade on a north slope
+and the spring corn cycle are all downstream of it.
+
+- `Sun.Horizon`: horizon elevation per azimuth, 16 azimuths on the slice axis,
+  `Uint16`, 32 m cells. No new sweep — the existing one stops being discarded.
+- A sun-position function shared by the bake and the runtime clock.
+- **Verify:** tests — a cone shades its own polar flank and a tilted plane never
+  shades itself; the swept angles bracket the sky view factor the same cell
+  already reports; the channel is unchanged by fidelity where the sweep is.
+
+### W1 — The Response Table (blocked on M2)
+`FMassifSimEnvironmentTable` in `MassifCore` (ARCHITECTURE §5.6.6): the pinned,
+CPU-only, content-hashed snapshot the sim reads instead of bake channels.
+
+- Built by `MassifWorldGen` at world load, injected into the sim subsystem by
+  presentation, so no `MassifSim` → `MassifWorldGen` edge appears.
+- Solved at one fidelity named in code, never the machine's setting.
+- **Verify:** tests — the table is byte-identical across bake fidelity settings;
+  its hash changes when the elevation model does; `MassifSim.Build.cs` still does
+  not reference `MassifWorldGen`.
+
+### W2 — Direction-Binned Terrain Response (blocked on M2)
+Unit-forcing responses per bearing, 16 bearings, as a separate process outside
+the wind/vegetation relaxation group so the iteration count does not multiply it.
+
+- `Wind.Response.<bearing>`: exposure, channeling weight, lee separation
+  strength, foehn descent — scalars only. The vector is rebuilt at runtime from
+  the actual flow, because the valley axis carries a sign that flips across the
+  perpendicular and blending finished vectors would collapse and reverse a valley
+  wind.
+- `Precip.LiftResponse.<bearing>`: the unit-speed lift integral, so the runtime
+  can exponentiate the shadow at the actual wind speed. A baked finished field is
+  correct at one speed only, and the shadow is exponential in speed.
+- Bin nothing direction-free: katabatic strength and snow fraction are not.
+- **Verify:** tests — response × speed reproduces the direct solve at that speed
+  to tolerance, for several speeds and bearings; bearing interpolation is
+  continuous across a valley axis; added bake time is measured and recorded.
+
+### W3 — Weather State and Generator (blocked on M2)
+- `FMassifWeatherState` in `FMassifSimState`: air-mass temperature at datum,
+  freezing level, wind bearing and speed aloft, cloud cover and base, precip
+  intensity, humidity, front bearing and position, gust factor — plus the
+  integrated ones a formula cannot express: inversion strength, season snowfall
+  anomaly.
+- Seeded Markov generator over weather types, conditioned on the bake's 24
+  half-monthly slices, on the `Sim.Weather` channel.
+- `MassifGameMinutesPerSimTick`, and weather advancing every fixed *N* ticks.
+- Point sampling: temperature, wind, precipitation and phase at a position.
+- Do not build runtime temperature on `Climate.SeasonalTemperature` — it already
+  has climatological snow-albedo cooling inside it, which would double-count
+  against a runtime snowpack that disagrees with it.
+- **Verify:** tests — same seed gives an identical weather hash after N ticks;
+  the generator's long-run means match the bake climatology within tolerance;
+  cadence is invariant to game speed; wet-bulb derivation for snowmaking.
+
+### W4 — Weather into Snow (folds into M7)
+- `FSnowGrid` driven by W3's point functions, `ParallelFor` over disjoint
+  resident tiles inside the tick.
+- Non-resident ground reads baked depth × season anomaly, so the residency
+  boundary stays invisible, with the 64 m → 4 m reconciliation explicit.
+- Save format bump (`FMassifCustomVersion`): **dev reset, not migration**.
+- **Verify:** tests — snow hash stable across runs; a grooming command inside the
+  same tick as a snow pass survives it; resident and non-resident depth agree
+  across the boundary; bake and sim snowpack agree on a season within tolerance.
 
 ### M5f — Geological Refinement
 Erosion over the imported surface: smooth scanner artefacts, cut detail below
