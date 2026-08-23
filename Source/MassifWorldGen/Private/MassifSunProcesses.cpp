@@ -1,6 +1,7 @@
 #include "MassifSunProcesses.h"
 
 #include "MassifEnvironmentGraph.h"
+#include "MassifSunGeometry.h"
 
 namespace MassifEnvironmentChannels
 {
@@ -46,69 +47,10 @@ namespace MassifEnvironmentProcesses
 
 namespace
 {
-	/** Where the sun stands, in the frame the terrain is in: X east, Y north, Z up. */
-	struct FSunPosition
-	{
-		double AltitudeRadians = 0.0;
-
-		/** Unit vector towards the sun. Meaningless where the altitude is negative. */
-		FVector3d Direction = FVector3d::ZAxisVector;
-	};
-
-	/** Tilt of the earth's axis against its orbit, which is what gives the year a summer. */
-	constexpr double AxialTiltDegrees = 23.44;
-
 	/** Middle of a half-month, which is the day that half-month's sun path is taken on. */
 	double SliceMidDayOfYear(int32 TimeSlice)
 	{
 		return (TimeSlice + 0.5) * 365.0 / MassifSeasonalSliceCount;
-	}
-
-	double SolarDeclinationRadians(double DayOfYear)
-	{
-		const double OrbitFraction = UE_DOUBLE_TWO_PI * (284.0 + DayOfYear) / 365.0;
-		return FMath::DegreesToRadians(AxialTiltDegrees) * FMath::Sin(OrbitFraction);
-	}
-
-	FSunPosition SunAt(double LatitudeRadians, double DeclinationRadians, double HourAngleRadians)
-	{
-		const double SinAltitude = FMath::Sin(LatitudeRadians) * FMath::Sin(DeclinationRadians)
-			+ FMath::Cos(LatitudeRadians) * FMath::Cos(DeclinationRadians) * FMath::Cos(HourAngleRadians);
-
-		FSunPosition Sun;
-		Sun.AltitudeRadians = FMath::Asin(FMath::Clamp(SinAltitude, -1.0, 1.0));
-
-		// Azimuth clockwise from north, so the horizontal part is (sin, cos) east-north.
-		const double CosAltitude = FMath::Max(FMath::Cos(Sun.AltitudeRadians), UE_DOUBLE_KINDA_SMALL_NUMBER);
-		const double CosAzimuth = (FMath::Sin(DeclinationRadians) * FMath::Cos(LatitudeRadians)
-			- FMath::Cos(DeclinationRadians) * FMath::Sin(LatitudeRadians) * FMath::Cos(HourAngleRadians))
-			/ CosAltitude;
-
-		double AzimuthRadians = FMath::Acos(FMath::Clamp(CosAzimuth, -1.0, 1.0));
-		if (HourAngleRadians > 0.0)
-		{
-			AzimuthRadians = UE_DOUBLE_TWO_PI - AzimuthRadians;
-		}
-
-		Sun.Direction = FVector3d(
-			CosAltitude * FMath::Sin(AzimuthRadians), CosAltitude * FMath::Cos(AzimuthRadians), SinAltitude);
-		return Sun;
-	}
-
-	/** Hour angle the sun crosses the horizon at, which is what bounds the day being integrated. */
-	double SunsetHourAngleRadians(double LatitudeRadians, double DeclinationRadians)
-	{
-		const double CosHourAngle = -FMath::Tan(LatitudeRadians) * FMath::Tan(DeclinationRadians);
-		if (CosHourAngle <= -1.0)
-		{
-			// Midnight sun: the whole rotation is daylight.
-			return UE_DOUBLE_PI;
-		}
-		if (CosHourAngle >= 1.0)
-		{
-			return 0.0;
-		}
-		return FMath::Acos(CosHourAngle);
 	}
 
 	/**
@@ -120,7 +62,7 @@ namespace
 	 */
 	struct FSunDay
 	{
-		TArray<FSunPosition> Path;
+		TArray<FMassifSunPosition> Path;
 
 		/** Hour angle one step covers, scaled so that a day's total comes out as a channel value. */
 		double StepWeightRadians = 0.0;
@@ -149,7 +91,7 @@ namespace
 		return Range;
 	}
 
-	bool IsSunAboveHorizon(const FSunPosition& Sun, TArrayView<const double> HorizonRadians)
+	bool IsSunAboveHorizon(const FMassifSunPosition& Sun, TArrayView<const double> HorizonRadians)
 	{
 		if (HorizonRadians.IsEmpty())
 		{
@@ -157,8 +99,7 @@ namespace
 		}
 
 		// Azimuth back out of the direction, to pick the sweep it falls in.
-		const double AzimuthRadians = FMath::Atan2(Sun.Direction.X, Sun.Direction.Y);
-		const double Wrapped = FMath::Fmod(AzimuthRadians + UE_DOUBLE_TWO_PI, UE_DOUBLE_TWO_PI);
+		const double Wrapped = Sun.GetAzimuthRadians();
 		const int32 Index = FMath::Clamp(
 			FMath::RoundToInt32(Wrapped / UE_DOUBLE_TWO_PI * HorizonRadians.Num()), 0, HorizonRadians.Num() - 1)
 			% HorizonRadians.Num();
@@ -166,7 +107,7 @@ namespace
 	}
 
 	/** What one step of the day puts on a surface, before the day's step weight scales it. */
-	double StepEnergy(const FSunPosition& Sun, FVector3d Normal, TArrayView<const double> HorizonRadians)
+	double StepEnergy(const FMassifSunPosition& Sun, FVector3d Normal, TArrayView<const double> HorizonRadians)
 	{
 		if (Sun.AltitudeRadians <= 0.0)
 		{
@@ -183,7 +124,7 @@ namespace
 	double ReceivedDayEnergy(const FSunDay& Day, FVector3d Normal, TArrayView<const double> HorizonRadians)
 	{
 		double Energy = 0.0;
-		for (const FSunPosition& Sun : Day.Path)
+		for (const FMassifSunPosition& Sun : Day.Path)
 		{
 			Energy += StepEnergy(Sun, Normal, HorizonRadians);
 		}
@@ -198,8 +139,8 @@ namespace
 
 	FSunDay SampleSunDay(double LatitudeRadians, double DayOfYear, const FMassifSunParams& Params)
 	{
-		const double DeclinationRadians = SolarDeclinationRadians(DayOfYear);
-		const double SunsetRadians = SunsetHourAngleRadians(LatitudeRadians, DeclinationRadians);
+		const double DeclinationRadians = MassifSolarDeclinationRadians(DayOfYear);
+		const double SunsetRadians = MassifSunsetHourAngleRadians(LatitudeRadians, DeclinationRadians);
 		const int32 StepCount = FMath::Max(2, Params.SunPathStepCount);
 
 		FSunDay Day;
@@ -210,7 +151,7 @@ namespace
 			// Midpoints of equal slices of the day, so neither end is counted twice.
 			const double Fraction = (Step + 0.5) / StepCount;
 			const double HourAngleRadians = FMath::Lerp(-SunsetRadians, SunsetRadians, Fraction);
-			Day.Path.Add(SunAt(LatitudeRadians, DeclinationRadians, HourAngleRadians));
+			Day.Path.Add(MassifSunAt(LatitudeRadians, DeclinationRadians, HourAngleRadians));
 		}
 
 		Day.LevelEnergy = LevelDayEnergy(Day);
