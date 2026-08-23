@@ -124,7 +124,7 @@ namespace
 	}
 
 	/** One step of a channel's own quantisation, which is what any reading off it is good to. */
-	double QuantisationStep(const FMassifEnvironmentScheduler& Scheduler, const FName& ChannelName)
+	double LithologyQuantisationStep(const FMassifEnvironmentScheduler& Scheduler, const FName& ChannelName)
 	{
 		const FMassifEnvironmentState& State = Scheduler.GetState();
 		const FMassifChannelHandle Channel = State.FindChannel(ChannelName);
@@ -190,7 +190,7 @@ namespace
 	}
 
 	/** Direction of a compass bearing in the world frame: 0 north, 90 east. */
-	FVector2d BearingDirection(double BearingDegrees)
+	FVector2d LithologyTestBearingDirection(double BearingDegrees)
 	{
 		const double BearingRadians = FMath::DegreesToRadians(BearingDegrees);
 		return FVector2d(FMath::Sin(BearingRadians), FMath::Cos(BearingRadians));
@@ -227,7 +227,7 @@ namespace
 	/** How well the hardness at a point predicts the hardness one band width along a bearing. */
 	double HardnessCorrelationAlong(const FMassifEnvironmentScheduler& Scheduler, double BearingDegrees)
 	{
-		const FVector2d Step = BearingDirection(BearingDegrees) * StrikeLagMeters;
+		const FVector2d Step = LithologyTestBearingDirection(BearingDegrees) * StrikeLagMeters;
 
 		TArray<double> AtPoint;
 		TArray<double> AtLag;
@@ -535,9 +535,9 @@ bool FLithologyWithoutOptionalInputsTest::RunTest(const FString& Parameters)
 
 	// A cell carries a step of the scree channel's own rounding and a step of the
 	// hardness channel's, the second through the slope of the model against it.
-	const double Tolerance = QuantisationStep(*Solved, MassifEnvironmentChannels::ScreeProduction())
+	const double Tolerance = LithologyQuantisationStep(*Solved, MassifEnvironmentChannels::ScreeProduction())
 		+ Params.MaxScreeMetresPerMillennium * Params.BaselineShatteringFraction * Params.HardnessResistance
-			* QuantisationStep(*Solved, MassifEnvironmentChannels::RockHardness());
+			* LithologyQuantisationStep(*Solved, MassifEnvironmentChannels::RockHardness());
 	TestTrue(
 		FString::Printf(TEXT("And the scree is the baseline rate over that rock (worst cell off by %.8f)"),
 			LargestDeviation),

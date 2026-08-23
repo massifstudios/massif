@@ -255,7 +255,7 @@ namespace
 	}
 
 	/** What one step of a channel's uint16 encoding is worth, over the range it committed. */
-	double QuantisationStep(const FMassifEnvironmentScheduler& Scheduler, const FName& ChannelName)
+	double WindQuantisationStep(const FMassifEnvironmentScheduler& Scheduler, const FName& ChannelName)
 	{
 		const FMassifEnvironmentState& State = Scheduler.GetState();
 		const FMassifChannelHandle Channel = State.FindChannel(ChannelName);
@@ -411,7 +411,7 @@ bool FWindRotationTest::RunTest(const FString& Parameters)
 	const double TurnedExposure = SampleExposure(*Turned, QuarterTurn(SamplePosition));
 
 	// One step for the quantisation, one for a value sitting on a step boundary.
-	const double Tolerance = 2.0 * QuantisationStep(*Upright, MassifEnvironmentChannels::WindExposure());
+	const double Tolerance = 2.0 * WindQuantisationStep(*Upright, MassifEnvironmentChannels::WindExposure());
 	TestTrue(
 		FString::Printf(TEXT("Exposure survives the turn (%.6f against %.6f, tolerance %.6f)"),
 			UprightExposure, TurnedExposure, Tolerance),
@@ -685,7 +685,7 @@ bool FWindFoehnLeeTest::RunTest(const FString& Parameters)
 		TEXT("Windward ground is not in a foehn at all"), WindwardWarming, 0.0, UE_DOUBLE_KINDA_SMALL_NUMBER);
 	TestTrue(
 		FString::Printf(TEXT("The lee flank warms (%.4f C)"), LeeWarming),
-		LeeWarming > QuantisationStep(*Ridge, MassifEnvironmentChannels::FoehnWarming()));
+		LeeWarming > WindQuantisationStep(*Ridge, MassifEnvironmentChannels::FoehnWarming()));
 	return true;
 }
 
@@ -725,8 +725,8 @@ bool FWindFoehnDescentTest::RunTest(const FString& Parameters)
 	// One step for the warming's own encoding and one for a value sitting on a step
 	// boundary, plus what a step of the exposure encoding is worth once the shelter
 	// has carried it into the answer.
-	const double Tolerance = 2.0 * QuantisationStep(*Ridge, MassifEnvironmentChannels::FoehnWarming())
-		+ DryWarmingCelsius * QuantisationStep(*Ridge, MassifEnvironmentChannels::WindExposure());
+	const double Tolerance = 2.0 * WindQuantisationStep(*Ridge, MassifEnvironmentChannels::FoehnWarming())
+		+ DryWarmingCelsius * WindQuantisationStep(*Ridge, MassifEnvironmentChannels::WindExposure());
 
 	TestTrue(
 		FString::Printf(TEXT("The warming is the descent at the dry lapse rate (%.5f against %.5f C over %.1f m, "

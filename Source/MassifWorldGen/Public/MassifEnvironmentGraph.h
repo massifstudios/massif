@@ -26,6 +26,25 @@ namespace MassifEnvironmentChannels
 	MASSIFWORLDGEN_API const FName& Wetness();
 	MASSIFWORLDGEN_API const FName& SoilDepth();
 
+	/** Share of the water arriving at a point that soaks in rather than running off, 0 to 1. */
+	MASSIFWORLDGEN_API const FName& Infiltration();
+
+	/**
+	 * Catchment area's worth of water coming back to the surface, in square metres.
+	 *
+	 * What soaked in upslope re-emerges where the rock under it stops taking water,
+	 * which is why a stream can start mid-slope with no catchment above it.
+	 */
+	MASSIFWORLDGEN_API const FName& SpringDischarge();
+
+	/**
+	 * Catchment area's worth of water moving through a point in one half-month.
+	 *
+	 * The catchment is a fixed figure; what runs through it is not. An alpine
+	 * valley in May carries nothing like what it carries in February.
+	 */
+	MASSIFWORLDGEN_API const FName& SeasonalFlow();
+
 	/** What the droplets left, before roots hold any of it in place. */
 	MASSIFWORLDGEN_API const FName& SoilDeposition();
 }
@@ -40,6 +59,9 @@ namespace MassifEnvironmentProcesses
 	MASSIFWORLDGEN_API const FName& SoilDepth();
 	MASSIFWORLDGEN_API const FName& SoilDeposition();
 	MASSIFWORLDGEN_API const FName& Wetness();
+	MASSIFWORLDGEN_API const FName& Infiltration();
+	MASSIFWORLDGEN_API const FName& Springs();
+	MASSIFWORLDGEN_API const FName& SeasonalFlow();
 }
 
 /** Adds every standard process to a scheduler. The scheduler orders them; this does not. */
@@ -56,6 +78,17 @@ MASSIFWORLDGEN_API void MassifRegisterEnvironmentProcesses(
  * still needs it.
  */
 MASSIFWORLDGEN_API void MassifRegisterAltitudeProcess(
+	FMassifEnvironmentScheduler& Scheduler, const FMassifEnvironmentBakeParams& Params);
+
+/**
+ * Adds what becomes of the routed water: the share that soaks in, the springs it
+ * returns through, and what moves through a point in a given half-month.
+ *
+ * Separable from the drainage itself because every input beyond the routed
+ * catchment is optional. A graph with no soil, no rock and no weather in it
+ * still solves these, which is what makes them testable without the rest.
+ */
+MASSIFWORLDGEN_API void MassifRegisterWaterBalanceProcesses(
 	FMassifEnvironmentScheduler& Scheduler, const FMassifEnvironmentBakeParams& Params);
 
 /** Registers the standard processes, schedules them and runs them. Null if the schedule was refused. */

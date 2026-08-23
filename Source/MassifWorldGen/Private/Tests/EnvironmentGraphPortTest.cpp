@@ -134,7 +134,7 @@ namespace
 	}
 
 	/** One step of a channel's quantisation, which is all a uint16 channel can be asked to hold. */
-	double QuantisationStep(const FMassifEnvironmentState& State, const FName& ChannelName)
+	double PortQuantisationStep(const FMassifEnvironmentState& State, const FName& ChannelName)
 	{
 		const FMassifChannelHandle Channel = State.FindChannel(ChannelName);
 		const double Span = State.GetChannelMaximum(Channel) - State.GetChannelMinimum(Channel);
@@ -190,7 +190,7 @@ bool FEnvironmentGraphPortTest::RunTest(const FString& Parameters)
 		LargestDifference(
 			State, MassifEnvironmentChannels::StandingWaterDepth(),
 			AsDoubles(Reference.StandingWaterDepthMeters))
-			<= QuantisationStep(State, MassifEnvironmentChannels::StandingWaterDepth()));
+			<= PortQuantisationStep(State, MassifEnvironmentChannels::StandingWaterDepth()));
 	// Against the deposition rather than the depth: the droplets are the stage that
 	// was ported, and the depth is a later channel that reads this one back and
 	// quantises it a second time.
@@ -198,11 +198,11 @@ bool FEnvironmentGraphPortTest::RunTest(const FString& Parameters)
 		TEXT("Deposited soil is within its quantisation"),
 		LargestDifference(
 			State, MassifEnvironmentChannels::SoilDeposition(), AsDoubles(Reference.SoilDepthMeters))
-			<= QuantisationStep(State, MassifEnvironmentChannels::SoilDeposition()));
+			<= PortQuantisationStep(State, MassifEnvironmentChannels::SoilDeposition()));
 	TestTrue(
 		TEXT("Wetness is within its quantisation"),
 		LargestDifference(State, MassifEnvironmentChannels::Wetness(), AsDoubles(Reference.Wetness))
-			<= QuantisationStep(State, MassifEnvironmentChannels::Wetness()));
+			<= PortQuantisationStep(State, MassifEnvironmentChannels::Wetness()));
 	return true;
 }
 

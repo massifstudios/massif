@@ -11,7 +11,7 @@ namespace
 	constexpr double SunTestLatitudeDegrees = 47.2;
 
 	/** Half-monthly slices of a representative year, which is what the sun channels hold. */
-	constexpr int32 SeasonalSliceCount = 24;
+	constexpr int32 SunTestSliceCount = 24;
 
 	/** The half-months the solstices fall in: slice 11 ends in late June, slice 23 in late December. */
 	constexpr int32 SummerSlice = 11;
@@ -69,9 +69,9 @@ namespace
 	}
 
 	/** Middle of a half-month, which is the day the solve takes that slice's sun path on. */
-	double SliceMidDayOfYear(int32 TimeSlice)
+	double SunTestSliceMidDayOfYear(int32 TimeSlice)
 	{
-		return (TimeSlice + 0.5) * 365.0 / SeasonalSliceCount;
+		return (TimeSlice + 0.5) * 365.0 / SunTestSliceCount;
 	}
 
 	/**
@@ -167,7 +167,7 @@ bool FSunSeasonTest::RunTest(const FString& Parameters)
 
 	TestEqual(
 		TEXT("The direct beam is held half-monthly"),
-		SunSliceCount(*Flat, MassifEnvironmentChannels::DirectInsolation()), SeasonalSliceCount);
+		SunSliceCount(*Flat, MassifEnvironmentChannels::DirectInsolation()), SunTestSliceCount);
 
 	const double Summer = SampleSunChannel(
 		*Flat, MassifEnvironmentChannels::DirectInsolation(), FVector2d::ZeroVector, SummerSlice);
@@ -178,8 +178,8 @@ bool FSunSeasonTest::RunTest(const FString& Parameters)
 		FString::Printf(TEXT("Midwinter is darker than midsummer (%.4f against %.4f)"), Winter, Summer),
 		Winter < Summer);
 
-	const double ExpectedRatio = LevelDayBeam(SunTestLatitudeDegrees, SliceMidDayOfYear(SummerSlice))
-		/ LevelDayBeam(SunTestLatitudeDegrees, SliceMidDayOfYear(WinterSlice));
+	const double ExpectedRatio = LevelDayBeam(SunTestLatitudeDegrees, SunTestSliceMidDayOfYear(SummerSlice))
+		/ LevelDayBeam(SunTestLatitudeDegrees, SunTestSliceMidDayOfYear(WinterSlice));
 	const double SolvedRatio = Summer / Winter;
 
 	// One per cent covers the finite number of steps the day is integrated at; the
@@ -335,7 +335,7 @@ bool FSunHorizonSweptOnceTest::RunTest(const FString& Parameters)
 		SunSliceCount(*Coarse, MassifEnvironmentChannels::SkyViewFactor()), 1);
 	TestEqual(
 		TEXT("While the beam it feeds is half-monthly"),
-		SunSliceCount(*Coarse, MassifEnvironmentChannels::DirectInsolation()), SeasonalSliceCount);
+		SunSliceCount(*Coarse, MassifEnvironmentChannels::DirectInsolation()), SunTestSliceCount);
 
 	// And what comes out of the sweep does not move when the sun path is integrated
 	// eight times as finely, because the sweep never saw the sun path.

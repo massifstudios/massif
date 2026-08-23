@@ -80,6 +80,62 @@ struct FMassifEnvironmentBakeParams
 	 */
 	double VegetationSoilRetention = 0.5;
 
+	/**
+	 * Share of arriving water that soaks into bare ground over tight rock.
+	 *
+	 * Nothing sheds all of what lands on it: even a scoured slab takes water into
+	 * its joints. This is the floor everything else is added to.
+	 */
+	double BaselineInfiltration = 0.2;
+
+	/**
+	 * Soil this deep takes all the water the soil column can hold. Deeper soil
+	 * soaks up no more, because what is below the wetting front never sees the
+	 * storm that made it.
+	 */
+	double FullInfiltrationSoilDepthMeters = 0.5;
+
+	/** Extra share soaking away where the soil is that deep. */
+	double SoilInfiltrationGain = 0.5;
+
+	/**
+	 * Extra share the bedrock takes where it weathers most readily.
+	 *
+	 * Not gated on the soil above being full: porous rock keeps taking the water a
+	 * saturated soil passes down to it, which is why a limestone catchment runs
+	 * lower and steadier than a granite one under the same rain.
+	 */
+	double BedrockInfiltrationGain = 0.25;
+
+	/** Ceiling on the share that soaks in, so no ground swallows a storm whole. */
+	double MaxInfiltration = 0.9;
+
+	/**
+	 * How far upslope a point's rock is compared against its own, in metres.
+	 *
+	 * A spring sits at a contact, and the contact has a width: comparing against
+	 * the cell next door finds only the sharpest of them.
+	 */
+	double SpringComparisonRadiusMeters = 24.0;
+
+	/**
+	 * Fall in soil yield across that reach before any water comes back out, and
+	 * the further fall that returns all of what soaked in above.
+	 */
+	double SpringYieldDropThreshold = 0.05;
+	double SpringYieldDropSpan = 0.25;
+
+	/**
+	 * Cells the seasonal discharge is solved at, coarser than the rest of the water.
+	 *
+	 * It holds a whole year rather than one figure, so it costs twenty-four times
+	 * what a static channel does: at the hydrology's own 8 m that is 300 MB over the
+	 * 20 km world for one channel. The drainage network it scales is already
+	 * resolved by the static accumulation, and what this adds over it — when in the
+	 * year the water moves — does not turn over within a few metres.
+	 */
+	double SeasonalFlowCellSizeMeters = 32.0;
+
 	/** Wetness index readings that count as parched and as saturated. */
 	double DryWetnessIndex = 4.0;
 	double SaturatedWetnessIndex = 11.0;
