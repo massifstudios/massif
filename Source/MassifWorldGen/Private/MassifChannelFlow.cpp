@@ -184,3 +184,115 @@ void MassifSolveChannelFlow(
 		SolveReachFlow(InOutReaches[ReachIndex], Params);
 	});
 }
+
+namespace
+{
+	/**
+	 * What one station carries and where its water stands, as the annual solve
+	 * left it.
+	 *
+	 * Kept and put back rather than re-solved. The surface solve is a fixed point
+	 * reached from wherever the surface already is — two passes, each measuring the
+	 * slope over what the one before produced — so running it again from its own
+	 * answer lands somewhere slightly else. Every slice therefore starts from the
+	 * same state, and which order the year was walked in cannot reach the result.
+	 */
+	struct FStationAnnual
+	{
+		double DischargeCubicMetersPerSecond = 0.0;
+		double WaterSurfaceMeters = 0.0;
+		double EnergySlope = 0.0;
+	};
+
+	void KeepAnnualAnswer(
+		const TArray<FMassifRiverReach>& Reaches, TArray<TArray<FStationAnnual>>& OutAnnual)
+	{
+		OutAnnual.SetNum(Reaches.Num());
+		for (int32 ReachIndex = 0; ReachIndex < Reaches.Num(); ++ReachIndex)
+		{
+			TArray<FStationAnnual>& ReachAnnual = OutAnnual[ReachIndex];
+			ReachAnnual.Reset(Reaches[ReachIndex].Nodes.Num());
+			for (const FMassifRiverNode& Node : Reaches[ReachIndex].Nodes)
+			{
+				ReachAnnual.Add(FStationAnnual{
+					Node.DischargeCubicMetersPerSecond, Node.WaterSurfaceMeters, Node.Profile.EnergySlope});
+			}
+		}
+	}
+
+	/**
+	 * Only the three figures a solve is not a function of. Everything else a
+	 * station reports — its width, its depth, the area the flow crosses, the speed
+	 * that fits through it — is read back off the section under the restored
+	 * surface, so the annual answer cannot be put back half applied.
+	 */
+	void RestoreAnnualAnswer(
+		FMassifRiverReach& InOutReach, TArrayView<const FStationAnnual> Annual, double MinDepthMeters)
+	{
+		for (int32 NodeIndex = 0; NodeIndex < InOutReach.Nodes.Num(); ++NodeIndex)
+		{
+			FMassifRiverNode& Node = InOutReach.Nodes[NodeIndex];
+			Node.DischargeCubicMetersPerSecond = Annual[NodeIndex].DischargeCubicMetersPerSecond;
+			Node.WaterSurfaceMeters = Annual[NodeIndex].WaterSurfaceMeters;
+			Node.Profile.EnergySlope = Annual[NodeIndex].EnergySlope;
+			MassifChannelHydraulics::ApplySectionToNode(Node, MinDepthMeters);
+		}
+	}
+
+	void SetSliceDischarge(
+		FMassifRiverReach& InOutReach, TArrayView<const FStationAnnual> Annual,
+		TFunctionRef<double(FVector2d PositionMeters, int32 TimeSlice)> SliceDischargeScale,
+		int32 TimeSlice)
+	{
+		for (int32 NodeIndex = 0; NodeIndex < InOutReach.Nodes.Num(); ++NodeIndex)
+		{
+			FMassifRiverNode& Node = InOutReach.Nodes[NodeIndex];
+			const double Scale = SliceDischargeScale(Node.PositionMeters, TimeSlice);
+			Node.DischargeCubicMetersPerSecond =
+				Annual[NodeIndex].DischargeCubicMetersPerSecond * FMath::Max(Scale, 0.0);
+		}
+	}
+
+	void KeepSliceAnswer(FMassifRiverReach& InOutReach, int32 TimeSlice)
+	{
+		for (FMassifRiverNode& Node : InOutReach.Nodes)
+		{
+			Node.Season.WaterSurfaceMeters[TimeSlice] = Node.WaterSurfaceMeters;
+			Node.Season.DepthMeters[TimeSlice] = static_cast<float>(Node.DepthMeters);
+			Node.Season.HalfWidthMeters[TimeSlice] = static_cast<float>(0.5 * Node.WidthMeters);
+			Node.Season.SpeedMetersPerSecond[TimeSlice] = static_cast<float>(Node.SpeedMetersPerSecond);
+		}
+	}
+}
+
+void MassifSolveSeasonalFlow(
+	const FMassifChannelFlowParams& Params,
+	TFunctionRef<double(FVector2d PositionMeters, int32 TimeSlice)> SliceDischargeScale,
+	TArray<FMassifRiverReach>& InOutReaches)
+{
+	TArray<TArray<FStationAnnual>> Annual;
+	KeepAnnualAnswer(InOutReaches, Annual);
+
+	for (int32 TimeSlice = 0; TimeSlice < MassifSeasonalSliceCount; ++TimeSlice)
+	{
+		ParallelFor(InOutReaches.Num(), [&](int32 ReachIndex)
+		{
+			RestoreAnnualAnswer(InOutReaches[ReachIndex], Annual[ReachIndex], Params.MinDepthMeters);
+			SetSliceDischarge(
+				InOutReaches[ReachIndex], Annual[ReachIndex], SliceDischargeScale, TimeSlice);
+		});
+
+		MassifSolveChannelFlow(Params, InOutReaches);
+		ParallelFor(InOutReaches.Num(), [&InOutReaches, TimeSlice](int32 ReachIndex)
+		{
+			KeepSliceAnswer(InOutReaches[ReachIndex], TimeSlice);
+		});
+	}
+
+	// The annual answer is what everything not asking about a season reads, and
+	// the last slice solved left the reaches standing at its own discharge.
+	ParallelFor(InOutReaches.Num(), [&InOutReaches, &Annual, &Params](int32 ReachIndex)
+	{
+		RestoreAnnualAnswer(InOutReaches[ReachIndex], Annual[ReachIndex], Params.MinDepthMeters);
+	});
+}

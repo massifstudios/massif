@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "MassifChannelFlow.h"
 #include "MassifChannelProfile.h"
 
 class FMassifRiverNetwork;
@@ -16,6 +17,12 @@ struct FMassifRiverReach;
  * two is wider.
  */
 inline constexpr double MassifDefaultBankReachMeters = 24.0;
+
+/**
+ * The annual answer rather than any half-month of the year: what the regime
+ * does on average, which is what everything but the drawn water surface wants.
+ */
+inline constexpr int32 MassifAnnualTimeSlice = INDEX_NONE;
 
 /** What the river network says about one point of ground. */
 struct FMassifRiverSample
@@ -118,20 +125,31 @@ public:
 	FMassifRiverField(const FMassifRiverField&) = delete;
 	FMassifRiverField& operator=(const FMassifRiverField&) = delete;
 
-	FMassifRiverSample Sample(FVector2d PositionMeters) const;
+	/**
+	 * TimeSlice picks a half-month of the representative year the network was
+	 * solved over, or the annual answer. Everything that is not drawing the water
+	 * as it stands today wants the annual one: what a riparian species may stand
+	 * on is a property of the regime, not of the day it is being asked about.
+	 */
+	FMassifRiverSample Sample(
+		FVector2d PositionMeters, int32 TimeSlice = MassifAnnualTimeSlice) const;
 
 	/**
 	 * Only how far the point is from the nearest wetted edge, without working out
 	 * the rest of the channel there. A mask or a mesh boundary sweeps a lattice
 	 * asking nothing else, and most of what it asks about is dry ground.
 	 */
-	double SampleSignedDistanceMeters(FVector2d PositionMeters) const;
+	double SampleSignedDistanceMeters(
+		FVector2d PositionMeters, int32 TimeSlice = MassifAnnualTimeSlice) const;
 
 	/**
 	 * Only the trench, without working out which channel cut it or what the water
 	 * in it is doing. The terrain asks this and nothing else, once per vertex of
 	 * every tile it builds, and it is the deepest cut of every channel reaching
 	 * the point rather than the nearest one's.
+	 *
+	 * No slice: the bed is the work of every year the channel has seen and is the
+	 * same in February as in June. What the year moves is the water in it.
 	 */
 	double SampleCutDepthMeters(FVector2d PositionMeters) const;
 
@@ -187,7 +205,35 @@ private:
 		void SetFromChannel(double WidthMeters, double CutMeters);
 	};
 
-	/** One span between two nodes, with both ends' attributes so a query interpolates without the network. */
+	/** What the water is doing at one station, in whichever slice was asked for. */
+	struct FStationWater
+	{
+		double WaterSurfaceMeters = 0.0;
+		double HalfWidthMeters = 0.0;
+		double DepthMeters = 0.0;
+		double SpeedMetersPerSecond = 0.0;
+	};
+
+	/**
+	 * One station of one reach: the trench under it, the water the annual regime
+	 * puts in it, and the same water half-month by half-month.
+	 *
+	 * Held per station and referenced by the two segments meeting there, rather
+	 * than copied into both. A year of four figures and a section of thirty-three
+	 * is most of what the field weighs.
+	 */
+	struct FStation
+	{
+		FStationWater Annual;
+
+		/** The invert: the deepest point of the section, which the year does not move. */
+		double BedAltitudeMeters = 0.0;
+
+		FSectionCut Cut;
+		FMassifStationSeason Season;
+	};
+
+	/** One span between two stations, and where it sits along its own reach. */
 	struct FSegment
 	{
 		FVector2d StartMeters = FVector2d::ZeroVector;
@@ -196,21 +242,10 @@ private:
 
 		double StartAlongMeters = 0.0;
 
-		/** Both ends' sections, and how far from the centreline either of them reaches. */
-		int32 StartCutIndex = INDEX_NONE;
-		int32 EndCutIndex = INDEX_NONE;
+		/** Both ends' stations, and how far from the centreline either of them reaches. */
+		int32 StartStationIndex = INDEX_NONE;
+		int32 EndStationIndex = INDEX_NONE;
 		double InfluenceMeters = 0.0;
-
-		double StartWaterSurfaceMeters = 0.0;
-		double EndWaterSurfaceMeters = 0.0;
-		double StartBedAltitudeMeters = 0.0;
-		double EndBedAltitudeMeters = 0.0;
-		double StartHalfWidthMeters = 0.0;
-		double EndHalfWidthMeters = 0.0;
-		double StartDepthMeters = 0.0;
-		double EndDepthMeters = 0.0;
-		double StartSpeedMetersPerSecond = 0.0;
-		double EndSpeedMetersPerSecond = 0.0;
 
 		/** Measured over a window along the reach, so one noisy span cannot make a waterfall. */
 		double GradientAlongFlow = 0.0;
@@ -227,10 +262,16 @@ private:
 
 	void CollectSegments(const FMassifRiverNetwork& Network);
 	void AppendReachSegments(const FMassifRiverReach& Reach);
-	void AppendSectionCut(const FMassifRiverNode& Node);
+	void AppendStation(const FMassifRiverNode& Node);
 	FSegment MakeSpanSegment(
 		const FMassifRiverReach& Reach, TArrayView<const double> AlongMeters, int32 SpanIndex,
-		int32 FirstCutIndex) const;
+		int32 FirstStationIndex) const;
+
+	/** One station's water in the slice asked for, or its annual answer. */
+	FStationWater StationWaterAt(int32 StationIndex, int32 TimeSlice) const;
+
+	/** The same, interpolated to a point along one span. */
+	FStationWater WaterOnSegment(const FSegment& Segment, double Fraction, int32 TimeSlice) const;
 	void MeasureGrid();
 	void IndexSegments();
 
@@ -246,9 +287,12 @@ private:
 	void FillCellSegments();
 	void PlaceSegmentInCells(int32 SegmentIndex, TArray<int32>& InOutCursor);
 
-	FNearestSegment FindNearestSegment(FVector2d PositionMeters) const;
-	void ConsiderSegment(int32 SegmentIndex, FVector2d PositionMeters, FNearestSegment& InOutNearest) const;
-	FMassifRiverSample MakeSample(const FNearestSegment& Nearest, FVector2d PositionMeters) const;
+	FNearestSegment FindNearestSegment(FVector2d PositionMeters, int32 TimeSlice) const;
+	void ConsiderSegment(
+		int32 SegmentIndex, FVector2d PositionMeters, int32 TimeSlice,
+		FNearestSegment& InOutNearest) const;
+	FMassifRiverSample MakeSample(
+		const FNearestSegment& Nearest, FVector2d PositionMeters, int32 TimeSlice) const;
 	bool RowHasSegments(int32 Row, int32 MinColumn, int32 MaxColumn) const;
 
 	bool Contains(int32 Column, int32 Row) const
@@ -260,7 +304,7 @@ private:
 	int32 RowAt(double PositionYMeters) const;
 
 	TArray<FSegment> Segments;
-	TArray<FSectionCut> SectionCuts;
+	TArray<FStation> Stations;
 
 	/** Compressed rows: the segments of cell N are CellSegments over [Start[N], Start[N + 1]). */
 	TArray<int32> CellSegmentStart;

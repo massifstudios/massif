@@ -1375,6 +1375,30 @@ TSharedRef<const IMassifBedMaterialSource> MassifMakeBedMaterial(const FMassifEn
 	return MakeShared<FMassifRasterBedMaterial>(State.GetGrid(HardnessChannel), MoveTemp(Hardness));
 }
 
+double MassifSeasonalDischargeScale(
+	const FMassifEnvironmentState& State, FVector2d PositionMeters, int32 TimeSlice)
+{
+	const FMassifChannelHandle SeasonalFlow =
+		State.FindChannel(MassifEnvironmentChannels::SeasonalFlow());
+	if (!SeasonalFlow.IsValid())
+	{
+		return 1.0;
+	}
+
+	double YearTotal = 0.0;
+	for (int32 Slice = 0; Slice < MassifSeasonalSliceCount; ++Slice)
+	{
+		YearTotal += State.SampleScalar(SeasonalFlow, PositionMeters, Slice);
+	}
+	if (YearTotal <= UE_DOUBLE_SMALL_NUMBER)
+	{
+		return 1.0;
+	}
+
+	return State.SampleScalar(SeasonalFlow, PositionMeters, TimeSlice)
+		* MassifSeasonalSliceCount / YearTotal;
+}
+
 TSharedRef<const FMassifRiverNetwork> MassifExtractRivers(
 	const FMassifEnvironmentState& State,
 	const IMassifElevationSource& Elevation,
@@ -1399,7 +1423,12 @@ TSharedRef<const FMassifRiverNetwork> MassifExtractRivers(
 	ReadCellsAsFloats(State, FlowChannel, Accumulation);
 	ReadCellsAsFloats(State, DischargeChannel, Discharge);
 
+	const auto SliceDischargeScale = [&State](FVector2d PositionMeters, int32 TimeSlice)
+	{
+		return MassifSeasonalDischargeScale(State, PositionMeters, TimeSlice);
+	};
+
 	return MassifBakeCpu::ExtractRivers(
 		MakeBakeGrid(State.GetGrid(FilledChannel)), Elevation, *MassifMakeBedMaterial(State), Params, Measured,
-		Filled, Accumulation, Discharge);
+		Filled, Accumulation, Discharge, SliceDischargeScale);
 }

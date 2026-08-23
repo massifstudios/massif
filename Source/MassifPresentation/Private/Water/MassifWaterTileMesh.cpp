@@ -57,7 +57,8 @@ namespace
 		}
 	};
 
-	FWaterLattice SampleLattice(const FMassifRiverField& RiverField, FVector2d OriginMeters)
+	FWaterLattice SampleLattice(
+		const FMassifRiverField& RiverField, FVector2d OriginMeters, int32 TimeSlice)
 	{
 		FWaterLattice Lattice;
 		Lattice.OriginMeters = OriginMeters;
@@ -65,7 +66,7 @@ namespace
 		for (int32 LatticeIndex = 0; LatticeIndex < Lattice.SignedDistanceMeters.Num(); ++LatticeIndex)
 		{
 			Lattice.SignedDistanceMeters[LatticeIndex] =
-				RiverField.SampleSignedDistanceMeters(Lattice.PositionMeters(LatticeIndex));
+				RiverField.SampleSignedDistanceMeters(Lattice.PositionMeters(LatticeIndex), TimeSlice);
 		}
 		return Lattice;
 	}
@@ -94,6 +95,7 @@ namespace
 		const FMassifRiverField& RiverField;
 		const FWaterLattice& Lattice;
 		FDynamicMesh3& Mesh;
+		int32 TimeSlice = 0;
 
 		FDynamicMeshUVOverlay* UVs = nullptr;
 		FDynamicMeshUVOverlay* FlowUVs = nullptr;
@@ -300,7 +302,7 @@ namespace
 
 		int32 AppendWaterVertex(FVector2d PositionMeters)
 		{
-			const FMassifRiverSample River = RiverField.Sample(PositionMeters);
+			const FMassifRiverSample River = RiverField.Sample(PositionMeters, TimeSlice);
 			const FVector2d LocalMeters = PositionMeters - Lattice.OriginMeters;
 
 			const int32 VertexId = Mesh.AppendVertex(FVector3d(
@@ -325,7 +327,7 @@ FVector2d MassifWaterTileMesh::TileOriginMeters(int32 TileX, int32 TileY)
 }
 
 TSharedPtr<FDynamicMesh3> MassifWaterTileMesh::BuildWaterTileMesh(
-	const FMassifRiverField& RiverField, int32 TileX, int32 TileY)
+	const FMassifRiverField& RiverField, int32 TileX, int32 TileY, int32 TimeSlice)
 {
 	TSharedPtr<FDynamicMesh3> Mesh = MakeShared<FDynamicMesh3>();
 
@@ -335,8 +337,8 @@ TSharedPtr<FDynamicMesh3> MassifWaterTileMesh::BuildWaterTileMesh(
 		return Mesh;
 	}
 
-	const FWaterLattice Lattice = SampleLattice(RiverField, OriginMeters);
-	FWaterTileBuilder Builder{ RiverField, Lattice, *Mesh };
+	const FWaterLattice Lattice = SampleLattice(RiverField, OriginMeters, TimeSlice);
+	FWaterTileBuilder Builder{ RiverField, Lattice, *Mesh, TimeSlice };
 	Builder.Prepare();
 	Builder.Run();
 	return Mesh;

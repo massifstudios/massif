@@ -58,7 +58,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWaterTileMeshCoverageTest,
 bool FWaterTileMeshCoverageTest::RunTest(const FString& Parameters)
 {
 	const TSharedRef<const FMassifRiverField> RiverField = MakeRiverField(96.0);
-	const TSharedPtr<FDynamicMesh3> Mesh = MassifWaterTileMesh::BuildWaterTileMesh(*RiverField, 0, 1);
+	const TSharedPtr<FDynamicMesh3> Mesh = MassifWaterTileMesh::BuildWaterTileMesh(*RiverField, 0, 1, MassifAnnualTimeSlice);
 
 	if (!TestTrue(TEXT("A tile the channel crosses is meshed"), Mesh->TriangleCount() > 0))
 	{
@@ -106,8 +106,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWaterTileMeshSeamTest,
 bool FWaterTileMeshSeamTest::RunTest(const FString& Parameters)
 {
 	const TSharedRef<const FMassifRiverField> RiverField = MakeRiverField(96.0);
-	const TSharedPtr<FDynamicMesh3> Left = MassifWaterTileMesh::BuildWaterTileMesh(*RiverField, 0, 1);
-	const TSharedPtr<FDynamicMesh3> Right = MassifWaterTileMesh::BuildWaterTileMesh(*RiverField, 1, 1);
+	const TSharedPtr<FDynamicMesh3> Left = MassifWaterTileMesh::BuildWaterTileMesh(*RiverField, 0, 1, MassifAnnualTimeSlice);
+	const TSharedPtr<FDynamicMesh3> Right = MassifWaterTileMesh::BuildWaterTileMesh(*RiverField, 1, 1, MassifAnnualTimeSlice);
 
 	// Two tiles meet on a line of the lattice they share, so whatever either of
 	// them puts on that line the other has to put in the same place. Anything else
@@ -159,7 +159,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWaterTileMeshAttributeTest,
 bool FWaterTileMeshAttributeTest::RunTest(const FString& Parameters)
 {
 	const TSharedRef<const FMassifRiverField> RiverField = MakeRiverField(96.0);
-	const TSharedPtr<FDynamicMesh3> Mesh = MassifWaterTileMesh::BuildWaterTileMesh(*RiverField, 0, 1);
+	const TSharedPtr<FDynamicMesh3> Mesh = MassifWaterTileMesh::BuildWaterTileMesh(*RiverField, 0, 1, MassifAnnualTimeSlice);
 
 	// The material reads all of these and has no other way to know what channel it
 	// is drawing, so a missing one is a silently wrong river.
@@ -202,12 +202,12 @@ bool FWaterTileMeshDryGroundTest::RunTest(const FString& Parameters)
 
 	// Most of the world has no river in it. A tile that meshes dry ground anyway
 	// is both water where there is none and the whole cost of a tile for it.
-	const TSharedPtr<FDynamicMesh3> Hillside = MassifWaterTileMesh::BuildWaterTileMesh(*RiverField, 40, 40);
+	const TSharedPtr<FDynamicMesh3> Hillside = MassifWaterTileMesh::BuildWaterTileMesh(*RiverField, 40, 40, MassifAnnualTimeSlice);
 	TestEqual(TEXT("A tile with no channel in it is not meshed"), Hillside->TriangleCount(), 0);
 
 	// The channel is six metres wide on a tile sixty-four across, so a tile it
 	// crosses is nearly all dry too and only the wet strip should be built.
-	const TSharedPtr<FDynamicMesh3> Crossed = MassifWaterTileMesh::BuildWaterTileMesh(*RiverField, 0, 1);
+	const TSharedPtr<FDynamicMesh3> Crossed = MassifWaterTileMesh::BuildWaterTileMesh(*RiverField, 0, 1, MassifAnnualTimeSlice);
 	const int32 WholeTileTriangles = 2 * MassifWaterTileMesh::QuadsPerSide * MassifWaterTileMesh::QuadsPerSide;
 	TestTrue(TEXT("Only the wet strip of a crossed tile is built"),
 		Crossed->TriangleCount() < WholeTileTriangles / 8);

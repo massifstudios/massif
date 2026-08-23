@@ -115,6 +115,9 @@ struct FMassifRiverNode
 
 	/** The ground across the flow here, and how the discharge fits into it. */
 	FMassifChannelProfile Profile;
+
+	/** The same water, half-month by half-month. Flat where nothing is known about the year. */
+	FMassifStationSeason Season;
 };
 
 /**

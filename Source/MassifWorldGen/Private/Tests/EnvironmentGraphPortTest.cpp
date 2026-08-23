@@ -241,10 +241,14 @@ bool FEnvironmentGraphRiverTest::RunTest(const FString& Parameters)
 	const FMassifHeightmapElevationSource Elevation(Heightmap);
 	const TSharedRef<const FMassifRiverNetwork> FromGraph =
 		MassifExtractRivers(Scheduler->GetState(), Elevation, Params.Rivers);
+	const auto SliceDischargeScale = [&Scheduler](FVector2d PositionMeters, int32 TimeSlice)
+	{
+		return MassifSeasonalDischargeScale(Scheduler->GetState(), PositionMeters, TimeSlice);
+	};
 	const TSharedRef<const FMassifRiverNetwork> FromReference = MassifBakeCpu::ExtractRivers(
 		Grid, Elevation, *MassifMakeBedMaterial(Scheduler->GetState()), Params.Rivers,
 		Reference.MeasuredAltitudeMeters, Reference.FilledAltitudeMeters,
-		Reference.FlowAccumulationSquareMeters, ReferenceDischarge);
+		Reference.FlowAccumulationSquareMeters, ReferenceDischarge, SliceDischargeScale);
 
 	TestEqual(
 		TEXT("The graph traces the same reaches"), FromGraph->GetReaches().Num(),

@@ -21,6 +21,13 @@ namespace
 	const FLinearColor ControlsPanelBackground(0.02f, 0.03f, 0.05f, 0.82f);
 	const FLinearColor ControlsSectionColour(0.55f, 0.72f, 0.95f, 1.0f);
 
+	/** Days before the first of each month, so a day number reads back as a date. */
+	constexpr int32 DaysBeforeMonth[12] = { 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334 };
+
+	const TCHAR* MonthNames[12] = {
+		TEXT("Jan"), TEXT("Feb"), TEXT("Mar"), TEXT("Apr"), TEXT("May"), TEXT("Jun"),
+		TEXT("Jul"), TEXT("Aug"), TEXT("Sep"), TEXT("Oct"), TEXT("Nov"), TEXT("Dec") };
+
 	UMassifSimSubsystem* FindControlsSim(const TWeakObjectPtr<UWorld>& World)
 	{
 		if (!World.IsValid())
@@ -88,6 +95,80 @@ FText SMassifWorldControls::GetClockText() const
 
 	const FMassifWallClock Clock = Sim->GetWallClock();
 	return FText::FromString(FString::Printf(TEXT("%02d:%02d"), Clock.GetHour(), Clock.GetMinute()));
+}
+
+float SMassifWorldControls::GetDayOfYear()
+{
+	const IConsoleVariable* Variable =
+		IConsoleManager::Get().FindConsoleVariable(TEXT("massif.Water.DayOfYear"));
+	if (Variable == nullptr)
+	{
+		return 1.0f;
+	}
+	return static_cast<float>(Variable->GetInt());
+}
+
+void SMassifWorldControls::SetDayOfYear(float Day)
+{
+	IConsoleVariable* Variable =
+		IConsoleManager::Get().FindConsoleVariable(TEXT("massif.Water.DayOfYear"));
+	if (Variable == nullptr)
+	{
+		return;
+	}
+	Variable->Set(FMath::RoundToInt32(Day), ECVF_SetByConsole);
+}
+
+FText SMassifWorldControls::GetDateText()
+{
+	const int32 DayOfYear = FMath::Clamp(FMath::RoundToInt32(GetDayOfYear()), 1, 365);
+	int32 MonthIndex = 11;
+	while (MonthIndex > 0 && DaysBeforeMonth[MonthIndex] >= DayOfYear)
+	{
+		MonthIndex -= 1;
+	}
+	return FText::FromString(
+		FString::Printf(TEXT("%d %s"), DayOfYear - DaysBeforeMonth[MonthIndex], MonthNames[MonthIndex]));
+}
+
+TSharedRef<SWidget> SMassifWorldControls::MakeDayOfYearRow()
+{
+	return SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		.VAlign(VAlign_Center)
+		[
+			SNew(SBox)
+			.WidthOverride(ControlsLabelWidth)
+			[
+				SNew(STextBlock)
+				.Text(FText::FromString(TEXT("Day of year")))
+				.Font(FCoreStyle::GetDefaultFontStyle("Regular", 9))
+			]
+		]
+		+ SHorizontalBox::Slot()
+		.FillWidth(1.0f)
+		.VAlign(VAlign_Center)
+		[
+			SNew(SSlider)
+			.MinValue(1.0f)
+			.MaxValue(365.0f)
+			.Value_Static(&SMassifWorldControls::GetDayOfYear)
+			.OnValueChanged_Static(&SMassifWorldControls::SetDayOfYear)
+		]
+		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		.VAlign(VAlign_Center)
+		.Padding(6.0f, 0.0f, 0.0f, 0.0f)
+		[
+			SNew(SBox)
+			.WidthOverride(ControlsValueWidth)
+			[
+				SNew(STextBlock)
+				.Text_Static(&SMassifWorldControls::GetDateText)
+				.Font(FCoreStyle::GetDefaultFontStyle("Mono", 9))
+			]
+		];
 }
 
 TSharedRef<SWidget> SMassifWorldControls::MakeSectionLabel(const TCHAR* Label) const
@@ -203,6 +284,10 @@ void SMassifWorldControls::Construct(const FArguments& InArgs)
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, ControlsRowPadding)
 				[
 					MakeTimeRow()
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, ControlsRowPadding)
+				[
+					MakeDayOfYearRow()
 				]
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 10.0f, 0.0f, ControlsRowPadding)
 				[

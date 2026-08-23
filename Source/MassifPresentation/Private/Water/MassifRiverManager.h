@@ -98,6 +98,19 @@ private:
 	/** Once the water around the camera has settled, so what it costs is visible at all. */
 	void LogWaterSummaryOnce();
 
+	/**
+	 * Takes every tile down when the day of the year moves.
+	 *
+	 * The whole mesh changes, not just its altitude: a lower river is a narrower
+	 * one, so the boundary the tile was cut along has moved and there is nothing
+	 * in the old geometry worth keeping. Tiles still building are left to finish
+	 * and land on a key nothing is holding, which drops them.
+	 */
+	void RebuildOnSeasonChange();
+
+	/** Half-month of the year the water is drawn at, from massif.Water.DayOfYear. */
+	int32 DrawnTimeSlice = 0;
+
 	TSharedPtr<const FMassifRiverField> RiverField;
 	TSharedPtr<FFinishedBuildQueue> FinishedBuilds;
 

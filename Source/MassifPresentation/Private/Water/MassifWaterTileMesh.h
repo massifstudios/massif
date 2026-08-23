@@ -48,6 +48,11 @@ namespace MassifWaterTileMesh
 	 * answers the same altitude at a point however finely it is being asked, so a
 	 * tile built now and the same tile built at any other time agree exactly.
 	 *
+	 * TimeSlice is the half-month of the year the water is drawn at. It moves the
+	 * surface and the wetted edge together — a river withdrawn into its own
+	 * thalweg in February is a narrower mesh, not the same mesh lowered through
+	 * its banks.
+	 *
 	 * UV0 runs 0 to 1 across the channel and in metres along it, UV1 is the flow
 	 * direction, and vertex colour carries speed, depth and width as fractions of
 	 * the references above. Alpha is what the material multiplies the water's
@@ -61,7 +66,7 @@ namespace MassifWaterTileMesh
 	 * headless.
 	 */
 	TSharedPtr<UE::Geometry::FDynamicMesh3> BuildWaterTileMesh(
-		const FMassifRiverField& RiverField, int32 TileX, int32 TileY);
+		const FMassifRiverField& RiverField, int32 TileX, int32 TileY, int32 TimeSlice);
 
 	/** Low corner of the tile, which is what its component is placed at. */
 	FVector2d TileOriginMeters(int32 TileX, int32 TileY);

@@ -3,6 +3,7 @@
 #include "Async/Async.h"
 #include "Components/DynamicMeshComponent.h"
 #include "DynamicMesh/DynamicMesh3.h"
+#include "HAL/IConsoleManager.h"
 #include "Kismet/GameplayStatics.h"
 #include "MassifRiverField.h"
 #include "MassifUnits.h"
@@ -15,6 +16,26 @@ namespace
 {
 	/** Half the key space each axis gets, so a signed tile coordinate packs unsigned. */
 	constexpr int64 TileCoordinateBias = 1 << 20;
+
+	/**
+	 * Which day of the year the water is drawn at.
+	 *
+	 * A console variable rather than simulation state. Nothing in the sim depends
+	 * on it: the year was solved at world gen and this chooses which half-month of
+	 * it to look at, the way the fog rows choose how the fog is drawn.
+	 */
+	TAutoConsoleVariable<int32> GWaterDayOfYear(
+		TEXT("massif.Water.DayOfYear"),
+		196,
+		TEXT("Day of the year the rivers are drawn at, 1 to 365. Sets how much water they carry."),
+		ECVF_Default);
+
+	/** The half-month a day falls in. Slice 0 is the first half of January. */
+	int32 TimeSliceOfDay(int32 DayOfYear)
+	{
+		const int32 Day = FMath::Clamp(DayOfYear, 1, 365);
+		return FMath::Clamp((Day - 1) * MassifSeasonalSliceCount / 365, 0, MassifSeasonalSliceCount - 1);
+	}
 }
 
 AMassifRiverManager::AMassifRiverManager()
@@ -43,6 +64,24 @@ void AMassifRiverManager::Initialize(
 	RiverField = InRiverField;
 	RiverMaterial = InRiverMaterial;
 	FinishedBuilds = MakeShared<FFinishedBuildQueue>();
+	DrawnTimeSlice = TimeSliceOfDay(GWaterDayOfYear.GetValueOnGameThread());
+}
+
+void AMassifRiverManager::RebuildOnSeasonChange()
+{
+	const int32 TimeSlice = TimeSliceOfDay(GWaterDayOfYear.GetValueOnGameThread());
+	if (TimeSlice == DrawnTimeSlice)
+	{
+		return;
+	}
+
+	DrawnTimeSlice = TimeSlice;
+	for (TPair<uint64, FWaterTile>& Resident : ResidentTiles)
+	{
+		ReleaseComponent(Resident.Value);
+	}
+	ResidentTiles.Reset();
+	bLoggedWaterSummary = false;
 }
 
 void AMassifRiverManager::Tick(float DeltaSeconds)
@@ -52,6 +91,8 @@ void AMassifRiverManager::Tick(float DeltaSeconds)
 	{
 		return;
 	}
+
+	RebuildOnSeasonChange();
 
 	const FVector ViewMeters = GetViewLocationMeters();
 	ApplyFinishedBuilds();
@@ -159,11 +200,12 @@ void AMassifRiverManager::LaunchBuilds()
 		TSharedPtr<FFinishedBuildQueue> QueueRef = FinishedBuilds;
 		const int32 TileX = Request.TileX;
 		const int32 TileY = Request.TileY;
-		Async(EAsyncExecution::ThreadPool, [FieldRef, QueueRef, TileKey, TileX, TileY]()
+		const int32 TimeSlice = DrawnTimeSlice;
+		Async(EAsyncExecution::ThreadPool, [FieldRef, QueueRef, TileKey, TileX, TileY, TimeSlice]()
 		{
 			FFinishedBuild Finished;
 			Finished.TileKey = TileKey;
-			Finished.Mesh = MassifWaterTileMesh::BuildWaterTileMesh(*FieldRef, TileX, TileY);
+			Finished.Mesh = MassifWaterTileMesh::BuildWaterTileMesh(*FieldRef, TileX, TileY, TimeSlice);
 			QueueRef->Enqueue(MoveTemp(Finished));
 		});
 	}

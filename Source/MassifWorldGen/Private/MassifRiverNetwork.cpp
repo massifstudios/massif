@@ -763,7 +763,8 @@ TSharedRef<const FMassifRiverNetwork> MassifBakeCpu::ExtractRivers(
 	TArrayView<const double> Measured,
 	TArrayView<const double> Filled,
 	TArrayView<const float> AccumulationSquareMeters,
-	TArrayView<const float> DischargeCubicMetersPerSecond)
+	TArrayView<const float> DischargeCubicMetersPerSecond,
+	TFunctionRef<double(FVector2d PositionMeters, int32 TimeSlice)> SliceDischargeScale)
 {
 	FRiverExtraction Extraction{
 		Grid, Params, Measured, Filled, AccumulationSquareMeters, DischargeCubicMetersPerSecond };
@@ -776,5 +777,9 @@ TSharedRef<const FMassifRiverNetwork> MassifBakeCpu::ExtractRivers(
 	MassifSolveChannelProfiles(Elevation, Params.Channels, Reaches);
 	MassifCarveChannels(BedMaterial, Params.Carve, Reaches);
 	MassifSolveChannelFlow(Params.Flow, Reaches);
+
+	// After the annual answer and over the top of it: the year is a variation on
+	// the bed the annual regime cut, not a second guess at the channel.
+	MassifSolveSeasonalFlow(Params.Flow, SliceDischargeScale, Reaches);
 	return FMassifRiverNetwork::Create(MoveTemp(Reaches));
 }

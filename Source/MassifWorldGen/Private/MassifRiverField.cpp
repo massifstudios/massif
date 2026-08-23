@@ -180,54 +180,91 @@ void FMassifRiverField::FSectionCut::SetFromChannel(double WidthMeters, double C
 	}
 }
 
-void FMassifRiverField::AppendSectionCut(const FMassifRiverNode& Node)
+void FMassifRiverField::AppendStation(const FMassifRiverNode& Node)
 {
-	FSectionCut Cut;
+	FStation Station;
+	Station.Annual.WaterSurfaceMeters = Node.WaterSurfaceMeters;
+	Station.Annual.HalfWidthMeters = 0.5 * Node.WidthMeters;
+	Station.Annual.DepthMeters = Node.DepthMeters;
+	Station.Annual.SpeedMetersPerSecond = Node.SpeedMetersPerSecond;
+	Station.BedAltitudeMeters = Node.BedAltitudeMeters;
+	Station.Season = Node.Season;
+
 	if (Node.Profile.HalfSpanMeters > 0.0)
 	{
-		Cut.SetFromProfile(Node.Profile);
-		SectionCuts.Add(Cut);
+		Station.Cut.SetFromProfile(Node.Profile);
+		Stations.Add(Station);
 		return;
 	}
 
-	Cut.SetFromChannel(Node.WidthMeters, Node.GroundAltitudeMeters - Node.BedAltitudeMeters);
-	SectionCuts.Add(Cut);
+	Station.Cut.SetFromChannel(Node.WidthMeters, Node.GroundAltitudeMeters - Node.BedAltitudeMeters);
+	Stations.Add(Station);
+}
+
+/**
+ * A slice outside the year, or a station whose year was never solved, falls back
+ * to the annual answer. A flat year is a year; no year at all is a channel with
+ * nothing in it.
+ */
+FMassifRiverField::FStationWater FMassifRiverField::StationWaterAt(
+	int32 StationIndex, int32 TimeSlice) const
+{
+	const FStation& Station = Stations[StationIndex];
+	if (TimeSlice < 0 || TimeSlice >= MassifSeasonalSliceCount
+		|| Station.Season.HalfWidthMeters[TimeSlice] <= 0.0f)
+	{
+		return Station.Annual;
+	}
+
+	FStationWater Water;
+	Water.WaterSurfaceMeters = Station.Season.WaterSurfaceMeters[TimeSlice];
+	Water.HalfWidthMeters = Station.Season.HalfWidthMeters[TimeSlice];
+	Water.DepthMeters = Station.Season.DepthMeters[TimeSlice];
+	Water.SpeedMetersPerSecond = Station.Season.SpeedMetersPerSecond[TimeSlice];
+	return Water;
+}
+
+FMassifRiverField::FStationWater FMassifRiverField::WaterOnSegment(
+	const FSegment& Segment, double Fraction, int32 TimeSlice) const
+{
+	const FStationWater StartWater = StationWaterAt(Segment.StartStationIndex, TimeSlice);
+	const FStationWater EndWater = StationWaterAt(Segment.EndStationIndex, TimeSlice);
+
+	FStationWater Water;
+	Water.WaterSurfaceMeters =
+		FMath::Lerp(StartWater.WaterSurfaceMeters, EndWater.WaterSurfaceMeters, Fraction);
+	Water.HalfWidthMeters = FMath::Lerp(StartWater.HalfWidthMeters, EndWater.HalfWidthMeters, Fraction);
+	Water.DepthMeters = FMath::Lerp(StartWater.DepthMeters, EndWater.DepthMeters, Fraction);
+	Water.SpeedMetersPerSecond =
+		FMath::Lerp(StartWater.SpeedMetersPerSecond, EndWater.SpeedMetersPerSecond, Fraction);
+	return Water;
 }
 
 FMassifRiverField::FSegment FMassifRiverField::MakeSpanSegment(
 	const FMassifRiverReach& Reach, TArrayView<const double> AlongMeters, int32 SpanIndex,
-	int32 FirstCutIndex) const
+	int32 FirstStationIndex) const
 {
-	const FMassifRiverNode& Start = Reach.Nodes[SpanIndex];
-	const FMassifRiverNode& End = Reach.Nodes[SpanIndex + 1];
-
 	FSegment Segment;
-	Segment.StartMeters = Start.PositionMeters;
-	Segment.EndMeters = End.PositionMeters;
+	Segment.StartMeters = Reach.Nodes[SpanIndex].PositionMeters;
+	Segment.EndMeters = Reach.Nodes[SpanIndex + 1].PositionMeters;
 	Segment.LengthMeters = AlongMeters[SpanIndex + 1] - AlongMeters[SpanIndex];
 	Segment.StartAlongMeters = AlongMeters[SpanIndex];
-	Segment.StartCutIndex = FirstCutIndex + SpanIndex;
-	Segment.EndCutIndex = FirstCutIndex + SpanIndex + 1;
-	Segment.StartWaterSurfaceMeters = Start.WaterSurfaceMeters;
-	Segment.EndWaterSurfaceMeters = End.WaterSurfaceMeters;
-	Segment.StartBedAltitudeMeters = Start.BedAltitudeMeters;
-	Segment.EndBedAltitudeMeters = End.BedAltitudeMeters;
-	Segment.StartHalfWidthMeters = 0.5 * Start.WidthMeters;
-	Segment.EndHalfWidthMeters = 0.5 * End.WidthMeters;
-	Segment.StartDepthMeters = Start.DepthMeters;
-	Segment.EndDepthMeters = End.DepthMeters;
-	Segment.StartSpeedMetersPerSecond = Start.SpeedMetersPerSecond;
-	Segment.EndSpeedMetersPerSecond = End.SpeedMetersPerSecond;
+	Segment.StartStationIndex = FirstStationIndex + SpanIndex;
+	Segment.EndStationIndex = FirstStationIndex + SpanIndex + 1;
 	Segment.GradientAlongFlow = MeasureGradient(Reach, AlongMeters, SpanIndex);
 
 	// Far enough out that a point the segment can answer for always finds it in
 	// its own cell: the bank the field reports over, or the section the carve
-	// cut, whichever reaches further.
+	// cut, whichever reaches further. The annual width, because it is the widest
+	// the year gets and the index has to cover every slice of it.
+	const FStation& StartStation = Stations[Segment.StartStationIndex];
+	const FStation& EndStation = Stations[Segment.EndStationIndex];
 	Segment.InfluenceMeters = FMath::Max(
-		FMath::Max(Segment.StartHalfWidthMeters, Segment.EndHalfWidthMeters) + BankReachMeters,
+		FMath::Max(StartStation.Annual.HalfWidthMeters, EndStation.Annual.HalfWidthMeters)
+			+ BankReachMeters,
 		FMath::Max(
-			static_cast<double>(SectionCuts[Segment.StartCutIndex].HalfSpanMeters),
-			static_cast<double>(SectionCuts[Segment.EndCutIndex].HalfSpanMeters)));
+			static_cast<double>(StartStation.Cut.HalfSpanMeters),
+			static_cast<double>(EndStation.Cut.HalfSpanMeters)));
 	return Segment;
 }
 
@@ -241,17 +278,17 @@ void FMassifRiverField::AppendReachSegments(const FMassifRiverReach& Reach)
 	TArray<double> AlongMeters;
 	MeasureReachArclength(Reach, AlongMeters);
 
-	// Every station's section first, so both segments meeting at one share it
-	// rather than each carrying a copy.
-	const int32 FirstCutIndex = SectionCuts.Num();
+	// Every station first, so both segments meeting at one share its section and
+	// its year rather than each carrying a copy.
+	const int32 FirstStationIndex = Stations.Num();
 	for (const FMassifRiverNode& Node : Reach.Nodes)
 	{
-		AppendSectionCut(Node);
+		AppendStation(Node);
 	}
 
 	for (int32 SpanIndex = 0; SpanIndex + 1 < Reach.Nodes.Num(); ++SpanIndex)
 	{
-		Segments.Add(MakeSpanSegment(Reach, AlongMeters, SpanIndex, FirstCutIndex));
+		Segments.Add(MakeSpanSegment(Reach, AlongMeters, SpanIndex, FirstStationIndex));
 	}
 }
 
@@ -401,7 +438,8 @@ void FMassifRiverField::IndexSegments()
 // ---------------------------------------------------------------------------
 
 void FMassifRiverField::ConsiderSegment(
-	int32 SegmentIndex, FVector2d PositionMeters, FNearestSegment& InOutNearest) const
+	int32 SegmentIndex, FVector2d PositionMeters, int32 TimeSlice,
+	FNearestSegment& InOutNearest) const
 {
 	const FSegment& Segment = Segments[SegmentIndex];
 	const FVector2d Along = Segment.EndMeters - Segment.StartMeters;
@@ -414,9 +452,8 @@ void FMassifRiverField::ConsiderSegment(
 	}
 
 	const double DistanceMeters = (PositionMeters - (Segment.StartMeters + Fraction * Along)).Length();
-	const double HalfWidthMeters =
-		FMath::Lerp(Segment.StartHalfWidthMeters, Segment.EndHalfWidthMeters, Fraction);
-	const double SignedDistanceMeters = DistanceMeters - HalfWidthMeters;
+	const double SignedDistanceMeters =
+		DistanceMeters - WaterOnSegment(Segment, Fraction, TimeSlice).HalfWidthMeters;
 
 	// Measured from the bank rather than from the centreline, so the trunk keeps
 	// the surface where a tributary happens to run alongside it. Strictly less, so
@@ -449,8 +486,8 @@ double FMassifRiverField::CutDepthOfSegment(int32 SegmentIndex, FVector2d Positi
 		PositionMeters - (Segment.StartMeters + Fraction * Along), AcrossFlow(Along.GetSafeNormal()));
 
 	return FMath::Lerp(
-		SectionCuts[Segment.StartCutIndex].DepthAt(AcrossMeters),
-		SectionCuts[Segment.EndCutIndex].DepthAt(AcrossMeters),
+		Stations[Segment.StartStationIndex].Cut.DepthAt(AcrossMeters),
+		Stations[Segment.EndStationIndex].Cut.DepthAt(AcrossMeters),
 		Fraction);
 }
 
@@ -478,7 +515,8 @@ double FMassifRiverField::SampleCutDepthMeters(FVector2d PositionMeters) const
 	return DeepestMeters;
 }
 
-FMassifRiverField::FNearestSegment FMassifRiverField::FindNearestSegment(FVector2d PositionMeters) const
+FMassifRiverField::FNearestSegment FMassifRiverField::FindNearestSegment(
+	FVector2d PositionMeters, int32 TimeSlice) const
 {
 	FNearestSegment Nearest;
 	if (Segments.IsEmpty())
@@ -496,28 +534,28 @@ FMassifRiverField::FNearestSegment FMassifRiverField::FindNearestSegment(FVector
 	const int32 CellIndex = Row * Width + Column;
 	for (int32 Slot = CellSegmentStart[CellIndex]; Slot < CellSegmentStart[CellIndex + 1]; ++Slot)
 	{
-		ConsiderSegment(CellSegments[Slot], PositionMeters, Nearest);
+		ConsiderSegment(CellSegments[Slot], PositionMeters, TimeSlice, Nearest);
 	}
 	return Nearest;
 }
 
 FMassifRiverSample FMassifRiverField::MakeSample(
-	const FNearestSegment& Nearest, FVector2d PositionMeters) const
+	const FNearestSegment& Nearest, FVector2d PositionMeters, int32 TimeSlice) const
 {
 	const FSegment& Segment = Segments[Nearest.SegmentIndex];
 	const double Fraction = Nearest.Fraction;
+	const FStationWater Water = WaterOnSegment(Segment, Fraction, TimeSlice);
 
 	FMassifRiverSample Sample;
 	Sample.SignedDistanceMeters = Nearest.SignedDistanceMeters;
-	Sample.WaterSurfaceMeters =
-		FMath::Lerp(Segment.StartWaterSurfaceMeters, Segment.EndWaterSurfaceMeters, Fraction);
-	Sample.BedAltitudeMeters =
-		FMath::Lerp(Segment.StartBedAltitudeMeters, Segment.EndBedAltitudeMeters, Fraction);
-	Sample.WidthMeters =
-		2.0 * FMath::Lerp(Segment.StartHalfWidthMeters, Segment.EndHalfWidthMeters, Fraction);
-	Sample.DepthMeters = FMath::Lerp(Segment.StartDepthMeters, Segment.EndDepthMeters, Fraction);
-	Sample.SpeedMetersPerSecond =
-		FMath::Lerp(Segment.StartSpeedMetersPerSecond, Segment.EndSpeedMetersPerSecond, Fraction);
+	Sample.WaterSurfaceMeters = Water.WaterSurfaceMeters;
+	Sample.BedAltitudeMeters = FMath::Lerp(
+		Stations[Segment.StartStationIndex].BedAltitudeMeters,
+		Stations[Segment.EndStationIndex].BedAltitudeMeters,
+		Fraction);
+	Sample.WidthMeters = 2.0 * Water.HalfWidthMeters;
+	Sample.DepthMeters = Water.DepthMeters;
+	Sample.SpeedMetersPerSecond = Water.SpeedMetersPerSecond;
 	Sample.FlowDirection = (Segment.EndMeters - Segment.StartMeters).GetSafeNormal();
 	if (Sample.FlowDirection.IsNearlyZero())
 	{
@@ -535,19 +573,19 @@ FMassifRiverSample FMassifRiverField::MakeSample(
 	return Sample;
 }
 
-FMassifRiverSample FMassifRiverField::Sample(FVector2d PositionMeters) const
+FMassifRiverSample FMassifRiverField::Sample(FVector2d PositionMeters, int32 TimeSlice) const
 {
-	const FNearestSegment Nearest = FindNearestSegment(PositionMeters);
+	const FNearestSegment Nearest = FindNearestSegment(PositionMeters, TimeSlice);
 	if (Nearest.SegmentIndex == INDEX_NONE || Nearest.SignedDistanceMeters > BankReachMeters)
 	{
 		return FMassifRiverSample();
 	}
-	return MakeSample(Nearest, PositionMeters);
+	return MakeSample(Nearest, PositionMeters, TimeSlice);
 }
 
-double FMassifRiverField::SampleSignedDistanceMeters(FVector2d PositionMeters) const
+double FMassifRiverField::SampleSignedDistanceMeters(FVector2d PositionMeters, int32 TimeSlice) const
 {
-	const FNearestSegment Nearest = FindNearestSegment(PositionMeters);
+	const FNearestSegment Nearest = FindNearestSegment(PositionMeters, TimeSlice);
 	if (Nearest.SegmentIndex == INDEX_NONE || Nearest.SignedDistanceMeters > BankReachMeters)
 	{
 		return FMassifRiverSample().SignedDistanceMeters;

@@ -166,5 +166,6 @@ namespace MassifBakeCpu
 		TArrayView<const double> Measured,
 		TArrayView<const double> Filled,
 		TArrayView<const float> AccumulationSquareMeters,
-		TArrayView<const float> DischargeCubicMetersPerSecond);
+		TArrayView<const float> DischargeCubicMetersPerSecond,
+		TFunctionRef<double(FVector2d PositionMeters, int32 TimeSlice)> SliceDischargeScale);
 }

@@ -140,6 +140,19 @@ MASSIFWORLDGEN_API TUniquePtr<FMassifEnvironmentScheduler> MassifBuildEnvironmen
  * channel five metres wide is one cell of the hydrology grid, and a section
  * across it there would be three samples of the valley it sits in.
  */
+/**
+ * A point's share of its own annual discharge in one half-month of the year,
+ * from the seasonal flow the water balance routed.
+ *
+ * Against that point's own annual mean rather than against the world's, so what
+ * this carries is the shape of the year — snowmelt in May on a high catchment,
+ * rain in August on a low one — and not how big the river is. A graph with no
+ * seasonal flow solved in it answers one everywhere, which is a flat year
+ * rather than no year at all.
+ */
+MASSIFWORLDGEN_API double MassifSeasonalDischargeScale(
+	const FMassifEnvironmentState& State, FVector2d PositionMeters, int32 TimeSlice);
+
 MASSIFWORLDGEN_API TSharedRef<const FMassifRiverNetwork> MassifExtractRivers(
 	const FMassifEnvironmentState& State,
 	const IMassifElevationSource& Elevation,

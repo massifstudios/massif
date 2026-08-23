@@ -100,8 +100,11 @@ namespace
 
 		const FMassifHeightmapElevationSource Elevation(MoveTemp(Heightmap));
 		const FMassifUniformBedMaterial BedMaterial;
+		// A flat year: this is about where the channels go, not about the season.
+		const auto EvenYear = [](FVector2d, int32) { return 1.0; };
 		return MassifBakeCpu::ExtractRivers(
-			Grid, Elevation, BedMaterial, RiverParams, Measured, Filled, Accumulation, Discharge);
+			Grid, Elevation, BedMaterial, RiverParams, Measured, Filled, Accumulation, Discharge,
+			EvenYear);
 	}
 
 	bool IsOnWorldBorder(FVector2d PositionMeters)
