@@ -53,6 +53,14 @@ namespace MassifWaterTileMesh
 	 * thalweg in February is a narrower mesh, not the same mesh lowered through
 	 * its banks.
 	 *
+	 * SolvedPatchMeters is a box some other surface is already drawing, which is
+	 * cut out of this one. A river drawn a level per station and a patch solved
+	 * over the same bed are two sheets in the same place, and two sheets in the
+	 * same place is what a hall of mirrors looks like. Cut as part of the distance
+	 * rather than by dropping whole tiles, so the seam lands on the box's own edge
+	 * — where the patch is held at the level this surface draws, and the two meet
+	 * without a lip.
+	 *
 	 * UV0 runs 0 to 1 across the channel and in metres along it, UV1 is the flow
 	 * direction, and vertex colour carries speed, depth and width as fractions of
 	 * the references above. Alpha is what the material multiplies the water's
@@ -66,7 +74,8 @@ namespace MassifWaterTileMesh
 	 * headless.
 	 */
 	TSharedPtr<UE::Geometry::FDynamicMesh3> BuildWaterTileMesh(
-		const FMassifRiverField& RiverField, int32 TileX, int32 TileY, int32 TimeSlice);
+		const FMassifRiverField& RiverField, int32 TileX, int32 TileY, int32 TimeSlice,
+		const FBox2d& SolvedPatchMeters);
 
 	/** Low corner of the tile, which is what its component is placed at. */
 	FVector2d TileOriginMeters(int32 TileX, int32 TileY);

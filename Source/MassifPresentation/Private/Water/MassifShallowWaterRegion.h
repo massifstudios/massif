@@ -42,7 +42,18 @@ public:
 		FVector2d CentreMeters,
 		UMaterialInterface* InWaterMaterial);
 
+	/**
+	 * The patch this drew, for the tiled surface to leave alone. Invalid until it
+	 * has drawn something, so a solve that came back dry takes nothing away.
+	 */
+	const FBox2d& GetPatchMeters() const
+	{
+		return PatchMeters;
+	}
+
 private:
+	FBox2d PatchMeters = FBox2d(ForceInit);
+
 	UPROPERTY()
 	TObjectPtr<UDynamicMeshComponent> SurfaceComponent;
 };

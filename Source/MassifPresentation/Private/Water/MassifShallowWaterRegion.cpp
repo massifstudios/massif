@@ -156,4 +156,6 @@ void AMassifShallowWaterRegion::Initialize(
 	SurfaceComponent->SetWorldLocation(
 		FVector(Region.OriginMeters.X, Region.OriginMeters.Y, 0.0) * MetersToCentimeters);
 	SurfaceComponent->SetMesh(BuildDynamicMesh(Surface, Region.OriginMeters));
+
+	PatchMeters = FBox2d(Region.OriginMeters, Region.OriginMeters + Region.ExtentMeters);
 }

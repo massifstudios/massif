@@ -458,6 +458,13 @@ void AMassifGameMode::SpawnShallowWaterRegion(const FMassifRiverNetwork& Rivers)
 	ShallowWaterRegion = GetWorld()->SpawnActor<AMassifShallowWaterRegion>();
 	ShallowWaterRegion->Initialize(
 		TerrainField, RiverField, Node->PositionMeters, LoadRiverMaterial());
+
+	// So the tiled surface stops drawing a level per station over the same bed the
+	// patch has just solved, rather than the two fighting each other there.
+	if (RiverManager != nullptr)
+	{
+		RiverManager->SetSolvedPatchMeters(ShallowWaterRegion->GetPatchMeters());
+	}
 }
 
 bool AMassifGameMode::BuildEnvironment(TSharedRef<const FMassifHeightmap> Heightmap)

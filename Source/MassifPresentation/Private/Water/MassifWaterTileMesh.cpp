@@ -34,6 +34,38 @@ namespace
 	 */
 	constexpr double CrossingSnapFraction = 1.0e-3;
 
+	/** Metres out of a box, negative inside it. */
+	double DistanceOutOfBoxMeters(const FBox2d& BoxMeters, FVector2d PositionMeters)
+	{
+		const FVector2d OutwardMeters = FVector2d(
+			FMath::Abs(PositionMeters.X - BoxMeters.GetCenter().X),
+			FMath::Abs(PositionMeters.Y - BoxMeters.GetCenter().Y)) - BoxMeters.GetExtent();
+		const double OutsideMeters =
+			FVector2d(FMath::Max(OutwardMeters.X, 0.0), FMath::Max(OutwardMeters.Y, 0.0)).Length();
+		return OutsideMeters + FMath::Min(FMath::Max(OutwardMeters.X, OutwardMeters.Y), 0.0);
+	}
+
+	/**
+	 * How far the point is from water this surface may draw: outside the nearest
+	 * channel, or inside a box some other surface is drawing.
+	 *
+	 * The larger of the two, which is the intersection of the two regions and
+	 * still a distance — so the crossing solve interpolates onto the box's edge
+	 * the same way it interpolates onto a bank.
+	 */
+	double DrawableDistanceMeters(
+		const FMassifRiverField& RiverField, FVector2d PositionMeters, int32 TimeSlice,
+		const FBox2d& SolvedPatchMeters)
+	{
+		const double ChannelMeters =
+			RiverField.SampleSignedDistanceMeters(PositionMeters, TimeSlice);
+		if (!SolvedPatchMeters.bIsValid)
+		{
+			return ChannelMeters;
+		}
+		return FMath::Max(ChannelMeters, -DistanceOutOfBoxMeters(SolvedPatchMeters, PositionMeters));
+	}
+
 	/** Signed distance to the water's edge over the tile's own lattice. */
 	struct FWaterLattice
 	{
@@ -58,15 +90,16 @@ namespace
 	};
 
 	FWaterLattice SampleLattice(
-		const FMassifRiverField& RiverField, FVector2d OriginMeters, int32 TimeSlice)
+		const FMassifRiverField& RiverField, FVector2d OriginMeters, int32 TimeSlice,
+		const FBox2d& SolvedPatchMeters)
 	{
 		FWaterLattice Lattice;
 		Lattice.OriginMeters = OriginMeters;
 		Lattice.SignedDistanceMeters.SetNumUninitialized(VerticesPerSide * VerticesPerSide);
 		for (int32 LatticeIndex = 0; LatticeIndex < Lattice.SignedDistanceMeters.Num(); ++LatticeIndex)
 		{
-			Lattice.SignedDistanceMeters[LatticeIndex] =
-				RiverField.SampleSignedDistanceMeters(Lattice.PositionMeters(LatticeIndex), TimeSlice);
+			Lattice.SignedDistanceMeters[LatticeIndex] = DrawableDistanceMeters(
+				RiverField, Lattice.PositionMeters(LatticeIndex), TimeSlice, SolvedPatchMeters);
 		}
 		return Lattice;
 	}
@@ -327,7 +360,8 @@ FVector2d MassifWaterTileMesh::TileOriginMeters(int32 TileX, int32 TileY)
 }
 
 TSharedPtr<FDynamicMesh3> MassifWaterTileMesh::BuildWaterTileMesh(
-	const FMassifRiverField& RiverField, int32 TileX, int32 TileY, int32 TimeSlice)
+	const FMassifRiverField& RiverField, int32 TileX, int32 TileY, int32 TimeSlice,
+	const FBox2d& SolvedPatchMeters)
 {
 	TSharedPtr<FDynamicMesh3> Mesh = MakeShared<FDynamicMesh3>();
 
@@ -337,7 +371,7 @@ TSharedPtr<FDynamicMesh3> MassifWaterTileMesh::BuildWaterTileMesh(
 		return Mesh;
 	}
 
-	const FWaterLattice Lattice = SampleLattice(RiverField, OriginMeters, TimeSlice);
+	const FWaterLattice Lattice = SampleLattice(RiverField, OriginMeters, TimeSlice, SolvedPatchMeters);
 	FWaterTileBuilder Builder{ RiverField, Lattice, *Mesh, TimeSlice };
 	Builder.Prepare();
 	Builder.Run();

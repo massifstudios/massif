@@ -42,6 +42,12 @@ public:
 
 	void Initialize(TSharedPtr<const FMassifRiverField> InRiverField, UMaterialInterface* InRiverMaterial);
 
+	/**
+	 * A box another surface is already drawing the water over, which this one
+	 * leaves alone. Takes down any tile already standing in it.
+	 */
+	void SetSolvedPatchMeters(const FBox2d& InSolvedPatchMeters);
+
 	virtual void Tick(float DeltaSeconds) override;
 
 private:
@@ -108,8 +114,14 @@ private:
 	 */
 	void RebuildOnSeasonChange();
 
+	/** Every tile down, so the next tick builds them all again. */
+	void ReleaseAllTiles();
+
 	/** Half-month of the year the water is drawn at, from massif.Water.DayOfYear. */
 	int32 DrawnTimeSlice = 0;
+
+	/** Where some other surface is drawing the water, cut out of every tile. */
+	FBox2d SolvedPatchMeters = FBox2d(ForceInit);
 
 	TSharedPtr<const FMassifRiverField> RiverField;
 	TSharedPtr<FFinishedBuildQueue> FinishedBuilds;

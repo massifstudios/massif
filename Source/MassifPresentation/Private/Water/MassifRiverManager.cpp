@@ -67,6 +67,22 @@ void AMassifRiverManager::Initialize(
 	DrawnTimeSlice = TimeSliceOfDay(GWaterDayOfYear.GetValueOnGameThread());
 }
 
+void AMassifRiverManager::SetSolvedPatchMeters(const FBox2d& InSolvedPatchMeters)
+{
+	SolvedPatchMeters = InSolvedPatchMeters;
+	ReleaseAllTiles();
+}
+
+void AMassifRiverManager::ReleaseAllTiles()
+{
+	for (TPair<uint64, FWaterTile>& Resident : ResidentTiles)
+	{
+		ReleaseComponent(Resident.Value);
+	}
+	ResidentTiles.Reset();
+	bLoggedWaterSummary = false;
+}
+
 void AMassifRiverManager::RebuildOnSeasonChange()
 {
 	const int32 TimeSlice = TimeSliceOfDay(GWaterDayOfYear.GetValueOnGameThread());
@@ -76,12 +92,7 @@ void AMassifRiverManager::RebuildOnSeasonChange()
 	}
 
 	DrawnTimeSlice = TimeSlice;
-	for (TPair<uint64, FWaterTile>& Resident : ResidentTiles)
-	{
-		ReleaseComponent(Resident.Value);
-	}
-	ResidentTiles.Reset();
-	bLoggedWaterSummary = false;
+	ReleaseAllTiles();
 }
 
 void AMassifRiverManager::Tick(float DeltaSeconds)
@@ -201,11 +212,14 @@ void AMassifRiverManager::LaunchBuilds()
 		const int32 TileX = Request.TileX;
 		const int32 TileY = Request.TileY;
 		const int32 TimeSlice = DrawnTimeSlice;
-		Async(EAsyncExecution::ThreadPool, [FieldRef, QueueRef, TileKey, TileX, TileY, TimeSlice]()
+		const FBox2d PatchMeters = SolvedPatchMeters;
+		Async(EAsyncExecution::ThreadPool,
+			[FieldRef, QueueRef, TileKey, TileX, TileY, TimeSlice, PatchMeters]()
 		{
 			FFinishedBuild Finished;
 			Finished.TileKey = TileKey;
-			Finished.Mesh = MassifWaterTileMesh::BuildWaterTileMesh(*FieldRef, TileX, TileY, TimeSlice);
+			Finished.Mesh =
+				MassifWaterTileMesh::BuildWaterTileMesh(*FieldRef, TileX, TileY, TimeSlice, PatchMeters);
 			QueueRef->Enqueue(MoveTemp(Finished));
 		});
 	}
