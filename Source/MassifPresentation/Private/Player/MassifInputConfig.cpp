@@ -66,6 +66,8 @@ void UMassifInputConfig::BuildActions()
 	MoveAction = MakeAction(this, TEXT("IA_Move"), EInputActionValueType::Axis2D);
 	LookAction = MakeAction(this, TEXT("IA_Look"), EInputActionValueType::Axis2D);
 	VerticalAction = MakeAction(this, TEXT("IA_Vertical"), EInputActionValueType::Axis1D);
+	ZoomAction = MakeAction(this, TEXT("IA_Zoom"), EInputActionValueType::Axis1D);
+	OrbitAction = MakeAction(this, TEXT("IA_Orbit"), EInputActionValueType::Boolean);
 	SprintAction = MakeAction(this, TEXT("IA_Sprint"), EInputActionValueType::Boolean);
 	JumpAction = MakeAction(this, TEXT("IA_Jump"), EInputActionValueType::Boolean);
 	ToggleViewAction = MakeAction(this, TEXT("IA_ToggleView"), EInputActionValueType::Boolean);
@@ -87,8 +89,14 @@ void UMassifInputConfig::BuildFlyContext()
 	FlyContext = NewObject<UInputMappingContext>(this, TEXT("IMC_Fly"));
 	MapMoveKeys(*FlyContext, MoveAction);
 	MapLookKeys(*FlyContext, LookAction);
-	FlyContext->MapKey(VerticalAction, EKeys::E);
-	FlyContext->MapKey(VerticalAction, EKeys::Q).Modifiers.Add(MakeNegate(this, true, true, true));
+
+	// Wheel up is towards the ground, so the axis is negated on the up notch and
+	// left alone on the down one.
+	FlyContext->MapKey(ZoomAction, EKeys::MouseScrollUp);
+	FlyContext->MapKey(ZoomAction, EKeys::MouseScrollDown)
+		.Modifiers.Add(MakeNegate(this, true, true, true));
+
+	FlyContext->MapKey(OrbitAction, EKeys::RightMouseButton);
 	FlyContext->MapKey(SprintAction, EKeys::LeftShift);
 }
 

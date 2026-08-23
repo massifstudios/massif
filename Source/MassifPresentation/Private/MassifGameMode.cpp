@@ -55,6 +55,9 @@ namespace
 	/** Mid-morning sun: low enough that ridges cast shadows down their own flanks. */
 	const FRotator SunRotation(-30.0f, 25.0f, 0.0f);
 
+	/** How far back the opening view sits, which frames most of the massif. */
+	constexpr double OpeningZoomMeters = 9000.0;
+
 	/**
 	 * Haze settings for a massif twenty kilometres across. The engine defaults
 	 * fall off over a few hundred metres of height, which puts the whole
@@ -446,6 +449,13 @@ void AMassifGameMode::ConfigureFlyPawn()
 		return;
 	}
 
-	PlayerController->GetPawn()->SetActorLocation(FVector(0.0, -300000.0, SpawnAltitudeMeters * 100.0));
-	PlayerController->SetControlRotation(FRotator(-22.0f, 90.0f, 0.0f));
+	// The camera frames a ground point rather than being posed, so the opening view
+	// is stated the same way every later one is.
+	AMassifFlyPawn* Camera = Cast<AMassifFlyPawn>(PlayerController->GetPawn());
+	if (Camera == nullptr)
+	{
+		return;
+	}
+
+	Camera->FrameGroundPoint(FVector2d::ZeroVector, OpeningZoomMeters);
 }

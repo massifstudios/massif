@@ -15,16 +15,26 @@ namespace
 	TSharedPtr<FMassifEnvironmentSettingsModel> GModel;
 	TWeakObjectPtr<UGameViewportClient> GViewport;
 
-	void ShowMouse(UWorld* World, bool bShow)
+	/**
+	 * Takes the camera away from the screen while it is up, and gives it back after.
+	 *
+	 * The cursor is not touched: it is shown for the whole game now, and a screen
+	 * that turned it off on the way out would take the pointer away from a building
+	 * game that is played with one.
+	 */
+	void HoldCameraStill(UWorld* World, bool bHold)
 	{
-		APlayerController* Controller = World != nullptr ? World->GetFirstPlayerController() : nullptr;
+		APlayerController* Controller = nullptr;
+		if (World != nullptr)
+		{
+			Controller = World->GetFirstPlayerController();
+		}
 		if (Controller == nullptr)
 		{
 			return;
 		}
-		Controller->bShowMouseCursor = bShow;
-		Controller->SetIgnoreLookInput(bShow);
-		Controller->SetIgnoreMoveInput(bShow);
+		Controller->SetIgnoreLookInput(bHold);
+		Controller->SetIgnoreMoveInput(bHold);
 	}
 
 	TSharedRef<SWidget> BuildScreen()
@@ -60,7 +70,7 @@ void MassifEnvironmentSettingsScreen::Close()
 	if (GViewport.IsValid())
 	{
 		GViewport->RemoveViewportWidgetContent(GScreenWidget.ToSharedRef());
-		ShowMouse(GViewport->GetWorld(), false);
+		HoldCameraStill(GViewport->GetWorld(), false);
 	}
 	GScreenWidget.Reset();
 	GModel.Reset();
@@ -86,7 +96,7 @@ void MassifEnvironmentSettingsScreen::Toggle(UWorld* World)
 	GViewport = World->GetGameViewport();
 	GScreenWidget = BuildScreen();
 	GViewport->AddViewportWidgetContent(GScreenWidget.ToSharedRef(), 100);
-	ShowMouse(World, true);
+	HoldCameraStill(World, true);
 }
 
 namespace

@@ -43,6 +43,9 @@ public:
 	virtual void BeginPlay() override;
 	virtual void SetupInputComponent() override;
 
+	/** Drops the walker at a named ground point. What zooming all the way in calls. */
+	void EnterWalkModeAt(FVector2d GroundPositionMeters);
+
 	EMassifViewMode GetViewMode() const
 	{
 		return ViewMode;
@@ -61,7 +64,14 @@ private:
 
 	EMassifViewMode ViewMode = EMassifViewMode::Fly;
 
+	/** Where the zoom asked the walker to be put, when it was the zoom that asked. */
+	FVector2d WalkerDropGroundMeters = FVector2d::ZeroVector;
+	bool bHasWalkerDropPoint = false;
+
 	UMassifInputConfig* EnsureInputConfig();
+
+	/** Puts the game into the cursor-visible input mode it stays in. */
+	void ShowCursor();
 
 	/** Adds the context for the current view, and the always-on one, to the local player. */
 	void ApplyMappingContexts();

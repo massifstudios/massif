@@ -157,12 +157,6 @@ void AMassifDebugHud::DrawHUD()
 		DrawProbePanel();
 	}
 
-	// The picker is the only thing here that wants a pointer, so the cursor follows
-	// it whether it was toggled by the key or by the console variable.
-	if (PlayerOwner != nullptr)
-	{
-		PlayerOwner->bShowMouseCursor = MassifViewPicker::IsVisible();
-	}
 	if (MassifViewPicker::IsVisible())
 	{
 		DrawViewPicker();

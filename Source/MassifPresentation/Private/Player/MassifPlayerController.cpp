@@ -9,8 +9,10 @@
 #include "MassifInputConfig.h"
 #include "MassifTerrainField.h"
 #include "MassifUnits.h"
+#include "MassifFlyPawn.h"
 #include "MassifWalkerPawn.h"
 
+using MassifUnits::CentimetersToMeters;
 using MassifUnits::MetersToCentimeters;
 
 namespace
@@ -19,6 +21,9 @@ namespace
 	constexpr double WalkerDropClearanceMeters = 1.0;
 
 	constexpr double SpawnProbeSpacingMeters = 1.0;
+
+	/** How far back the camera picks the walker up from, so stepping out reverses stepping in. */
+	constexpr double ReturnToCameraZoomMeters = 120.0;
 }
 
 AMassifPlayerController::AMassifPlayerController()
@@ -54,8 +59,19 @@ void AMassifPlayerController::BeginPlay()
 	ApplyMappingContexts();
 
 	FlyPawn = GetPawn();
-	SetInputMode(FInputModeGameOnly());
-	bShowMouseCursor = false;
+	ShowCursor();
+}
+
+void AMassifPlayerController::ShowCursor()
+{
+	// A building game is played with a pointer. The cursor is shown and stays
+	// shown, and the game keeps receiving keys alongside it, so the panels in the
+	// corner and the camera under them are both usable without a mode switch.
+	FInputModeGameAndUI InputMode;
+	InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+	InputMode.SetHideCursorDuringCapture(false);
+	SetInputMode(InputMode);
+	bShowMouseCursor = true;
 }
 
 void AMassifPlayerController::ApplyMappingContexts()
@@ -116,6 +132,18 @@ void AMassifPlayerController::ToggleViewMode()
 	EnterFlyMode();
 }
 
+void AMassifPlayerController::EnterWalkModeAt(FVector2d GroundPositionMeters)
+{
+	if (ViewMode == EMassifViewMode::Walk)
+	{
+		return;
+	}
+
+	WalkerDropGroundMeters = GroundPositionMeters;
+	bHasWalkerDropPoint = true;
+	EnterWalkMode();
+}
+
 void AMassifPlayerController::EnterWalkMode()
 {
 	AMassifWalkerPawn* Walker = AcquireWalkerPawn();
@@ -137,9 +165,17 @@ void AMassifPlayerController::EnterFlyMode()
 		return;
 	}
 
-	// The camera picks up where the walker was looking from, so the switch reads
-	// as stepping back rather than as a teleport.
-	FlyPawn->SetActorLocation(PlayerCameraManager->GetCameraLocation());
+	// The camera frames the ground the walker was standing on rather than taking
+	// its eye position, so zooming back out is the reverse of zooming in.
+	const FVector WalkerCentimeters = PlayerCameraManager->GetCameraLocation();
+	AMassifFlyPawn* Camera = Cast<AMassifFlyPawn>(FlyPawn);
+	if (Camera != nullptr)
+	{
+		Camera->FrameGroundPoint(
+			FVector2d(WalkerCentimeters.X * CentimetersToMeters, WalkerCentimeters.Y * CentimetersToMeters),
+			ReturnToCameraZoomMeters);
+	}
+
 	Possess(FlyPawn);
 	ViewMode = EMassifViewMode::Fly;
 	ApplyMappingContexts();
@@ -154,9 +190,17 @@ AMassifWalkerPawn* AMassifPlayerController::AcquireWalkerPawn()
 		TerrainField = GameMode->GetTerrainField();
 	}
 
-	const FVector CameraCentimeters = PlayerCameraManager->GetCameraLocation();
-	const FVector2d PositionMeters(
-		CameraCentimeters.X / MetersToCentimeters, CameraCentimeters.Y / MetersToCentimeters);
+	FVector2d PositionMeters(
+		PlayerCameraManager->GetCameraLocation().X * CentimetersToMeters,
+		PlayerCameraManager->GetCameraLocation().Y * CentimetersToMeters);
+
+	// Zooming all the way in names the spot; the view switch key does not, and
+	// falls back to whatever the camera was over.
+	if (bHasWalkerDropPoint)
+	{
+		PositionMeters = WalkerDropGroundMeters;
+		bHasWalkerDropPoint = false;
+	}
 
 	if (WalkerPawn == nullptr)
 	{
@@ -172,7 +216,8 @@ AMassifWalkerPawn* AMassifPlayerController::AcquireWalkerPawn()
 
 	const double GroundMeters = TerrainField->SampleHeightMeters(PositionMeters, SpawnProbeSpacingMeters);
 	const double StandMeters = GroundMeters + WalkerPawn->GetEyeHeightMeters() + WalkerDropClearanceMeters;
-	WalkerPawn->SetActorLocation(
-		FVector(CameraCentimeters.X, CameraCentimeters.Y, StandMeters * MetersToCentimeters));
+	WalkerPawn->SetActorLocation(FVector(
+		PositionMeters.X * MetersToCentimeters, PositionMeters.Y * MetersToCentimeters,
+		StandMeters * MetersToCentimeters));
 	return WalkerPawn;
 }

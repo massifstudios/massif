@@ -38,6 +38,20 @@ public:
 	UPROPERTY()
 	TObjectPtr<UInputAction> VerticalAction;
 
+	/** Axis1D, positive towards the ground. One wheel notch is one step of zoom. */
+	UPROPERTY()
+	TObjectPtr<UInputAction> ZoomAction;
+
+	/**
+	 * Held to turn the view.
+	 *
+	 * The cursor is always on screen in a building game, so the mouse cannot also
+	 * be steering: every move would drag the world out from under a pointer the
+	 * player is trying to aim with. Holding a button is the switch between the two.
+	 */
+	UPROPERTY()
+	TObjectPtr<UInputAction> OrbitAction;
+
 	UPROPERTY()
 	TObjectPtr<UInputAction> SprintAction;
 
