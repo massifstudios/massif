@@ -83,6 +83,16 @@ struct FMassifDebugView
 	}
 };
 
+/** Where a view's colour ramp begins and ends, and what space it runs in. */
+struct FMassifDebugRampSpace
+{
+	double Minimum = 0.0;
+	double Maximum = 0.0;
+
+	/** Set where the readings span orders of magnitude and no linear ramp can draw them. */
+	bool bLogarithmic = false;
+};
+
 /** What the legend needs to explain a view: what it shows, in what unit, over what range. */
 struct FMassifDebugChannelLegend
 {
@@ -148,4 +158,22 @@ namespace MassifDebugChannels
 
 	/** The slice a view can actually show, which is 0 for everything that holds one. */
 	int32 ClampTimeSlice(const FMassifDebugView& View, int32 TimeSlice);
+
+	/**
+	 * Where the view's colour ramp begins and ends.
+	 *
+	 * Measured over every slice the view can be scrubbed to rather than over the one
+	 * being drawn. A series normalised slice by slice paints an identical picture in
+	 * every slice wherever the slices differ only in scale - a year's rainfall
+	 * shared out over its half-months is exactly that - and the season becomes
+	 * invisible in the one view that exists to show it.
+	 *
+	 * SliceValues are the readings of the slice being drawn, which is all a view
+	 * with no slices to scrub has.
+	 */
+	FMassifDebugRampSpace MeasureRampSpace(
+		const FMassifEnvironmentState& Environment,
+		const FMassifDebugView& View,
+		const FMassifChannelGrid& Grid,
+		TArrayView<const double> SliceValues);
 }

@@ -286,14 +286,6 @@ namespace
 	 */
 	constexpr double LogarithmicRampRatio = 1000.0;
 
-	/** Where the ramp's ends sit and what space it runs in, taken from the numbers themselves. */
-	struct FMassifRampSpace
-	{
-		double Minimum = 0.0;
-		double Maximum = 0.0;
-		bool bLogarithmic = false;
-	};
-
 	TArray<double> SortedSample(TArrayView<const double> Values)
 	{
 		const int32 Stride = FMath::Max(Values.Num() / RangeSampleTarget, 1);
@@ -328,7 +320,7 @@ namespace
 	 * a world of dry ground. Clipping there would draw nothing at all, so those
 	 * views keep the extent they were measured over.
 	 */
-	void ApplyPercentileEnds(TArrayView<const double> Sorted, FMassifRampSpace& Space)
+	void ApplyPercentileEnds(TArrayView<const double> Sorted, FMassifDebugRampSpace& Space)
 	{
 		if (Sorted.IsEmpty())
 		{
@@ -345,27 +337,75 @@ namespace
 		}
 	}
 
-	FMassifRampSpace MeasureRampSpace(
-		const FMassifDebugView& View, const FMassifChannelStatistics& Statistics, TArrayView<const double> Values)
+	/**
+	 * Readings from across the whole year rather than from the slice being drawn.
+	 *
+	 * A scrubbed series has to be drawn against one ramp or the scrubber shows
+	 * nothing. A channel whose slices differ only in scale — a year's rainfall
+	 * shared out over its half-months is exactly that — renormalises to an
+	 * identical picture in every slice, and the season becomes invisible in the one
+	 * view that exists to show it.
+	 *
+	 * Strided across the slices as well as across the cells, so measuring a year
+	 * costs what measuring one slice cost.
+	 */
+	TArray<double> SortedYearSample(
+		const FMassifEnvironmentState& Environment, const FMassifDebugView& View, const FMassifChannelGrid& Grid)
 	{
-		FMassifRampSpace Space;
+		const int32 Stride = FMath::Max(Grid.CellCount() * View.TimeSliceCount / RangeSampleTarget, 1);
+		TArray<double> Sorted;
+		Sorted.Reserve(Grid.CellCount() * View.TimeSliceCount / Stride + 1);
+		for (int64 Reading = 0; Reading < int64(Grid.CellCount()) * View.TimeSliceCount; Reading += Stride)
+		{
+			const int32 CellIndex = static_cast<int32>(Reading % Grid.CellCount());
+			const int32 TimeSlice = static_cast<int32>(Reading / Grid.CellCount());
+			Sorted.Add(
+				ReadChannelCell(Environment, View, CellIndex % Grid.Width, CellIndex / Grid.Width, TimeSlice));
+		}
+		Sorted.Sort();
+		return Sorted;
+	}
+
+	/**
+	 * What the ramp is measured over: the whole year where the view has one, and the
+	 * drawn values where it does not. Habitat views carry no slices, and a channel
+	 * of one slice has already been read.
+	 */
+	TArray<double> MeasureRampSample(
+		const FMassifEnvironmentState& Environment, const FMassifDebugView& View, const FMassifChannelGrid& Grid,
+		TArrayView<const double> SliceValues)
+	{
+		if (View.Source == EMassifDebugViewSource::Habitat || View.TimeSliceCount <= 1)
+		{
+			return SortedSample(SliceValues);
+		}
+		return SortedYearSample(Environment, View, Grid);
+	}
+
+	FMassifDebugRampSpace MeasureRampSpaceOver(
+		const FMassifDebugView& View, TArrayView<const double> Sorted)
+	{
+		FMassifDebugRampSpace Space;
 		if (View.DisplayRange.IsSet())
 		{
 			Space.Minimum = View.DisplayRange->X;
 			Space.Maximum = View.DisplayRange->Y;
 			return Space;
 		}
+		if (Sorted.IsEmpty())
+		{
+			return Space;
+		}
 
-		const TArray<double> Sorted = SortedSample(Values);
-		Space.Minimum = Statistics.Minimum;
-		Space.Maximum = Statistics.Maximum;
-		Space.bLogarithmic = SpansOrdersOfMagnitude(Sorted, Statistics.Maximum);
+		Space.Minimum = Sorted[0];
+		Space.Maximum = Sorted[Sorted.Num() - 1];
+		Space.bLogarithmic = SpansOrdersOfMagnitude(Sorted, Space.Maximum);
 		ApplyPercentileEnds(Sorted, Space);
 		return Space;
 	}
 
 	/** Where a value sits between the ends of the legend, in the space the ramp is drawn in. */
-	double RampFraction(const FMassifRampSpace& Space, double Value)
+	double RampFraction(const FMassifDebugRampSpace& Space, double Value)
 	{
 		if (Space.Maximum - Space.Minimum <= UE_DOUBLE_KINDA_SMALL_NUMBER)
 		{
@@ -388,7 +428,7 @@ namespace
 		return (FMath::Loge(1.0 + FMath::Max(Value, 0.0)) - CompressedMin) / CompressedSpan;
 	}
 
-	FColor ColorForValue(const FMassifDebugView& View, const FMassifRampSpace& Space, double Value)
+	FColor ColorForValue(const FMassifDebugView& View, const FMassifDebugRampSpace& Space, double Value)
 	{
 		if (View.IsClassified())
 		{
@@ -419,7 +459,7 @@ namespace
 
 	void FillLegend(
 		const FMassifDebugView& View,
-		const FMassifRampSpace& Space,
+		const FMassifDebugRampSpace& Space,
 		const FMassifChannelStatistics& Statistics,
 		FMassifDebugChannelLegend& OutLegend)
 	{
@@ -437,7 +477,7 @@ namespace
 
 	void UploadPixels(
 		const FMassifDebugView& View,
-		const FMassifRampSpace& Space,
+		const FMassifDebugRampSpace& Space,
 		const FMassifChannelGrid& Grid,
 		TArrayView<const double> Values,
 		UTexture2D& Texture)
@@ -518,6 +558,15 @@ int32 MassifDebugChannels::ClampTimeSlice(const FMassifDebugView& View, int32 Ti
 	return FMath::Clamp(TimeSlice, 0, FMath::Max(0, View.TimeSliceCount - 1));
 }
 
+FMassifDebugRampSpace MassifDebugChannels::MeasureRampSpace(
+	const FMassifEnvironmentState& Environment,
+	const FMassifDebugView& View,
+	const FMassifChannelGrid& Grid,
+	TArrayView<const double> SliceValues)
+{
+	return MeasureRampSpaceOver(View, MeasureRampSample(Environment, View, Grid, SliceValues));
+}
+
 void MassifDebugChannels::RenderChannel(
 	const FMassifHabitatField& Habitat,
 	const FMassifDebugView& View,
@@ -532,7 +581,8 @@ void MassifDebugChannels::RenderChannel(
 	SampleWorld(Habitat, View, Grid, ClampTimeSlice(View, TimeSlice), Values);
 
 	const FMassifChannelStatistics Statistics = MassifChannelStatistics::Measure(Values);
-	const FMassifRampSpace Space = MeasureRampSpace(View, Statistics, Values);
+	const FMassifDebugRampSpace Space =
+		MassifDebugChannels::MeasureRampSpace(Environment, View, Grid, Values);
 	FillLegend(View, Space, Statistics, OutLegend);
 
 	UTexture2D* ViewTexture = EnsureTexture(Texture, Grid.Width, Grid.Height);

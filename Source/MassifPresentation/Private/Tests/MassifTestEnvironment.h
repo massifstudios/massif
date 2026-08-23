@@ -37,10 +37,29 @@ namespace MassifTestEnvironment
 		return Name;
 	}
 
+	inline const FName& SeasonChannel()
+	{
+		static const FName Name(TEXT("Test.Season"));
+		return Name;
+	}
+
 	inline const FName& ExtraProcess()
 	{
 		static const FName Name(TEXT("Test.Extra"));
 		return Name;
+	}
+
+	/** Slices the seasonal test channel holds, and how far its scale swings over them. */
+	constexpr int32 SeasonSliceCount = 24;
+	constexpr double SeasonQuietScale = 0.5;
+	constexpr double SeasonLoudScale = 1.5;
+
+	/** What one slice of the seasonal channel is scaled by. A cosine over the year, quiet at slice 0. */
+	inline double SeasonScale(int32 TimeSlice)
+	{
+		const double Middle = 0.5 * (SeasonQuietScale + SeasonLoudScale);
+		const double Half = 0.5 * (SeasonLoudScale - SeasonQuietScale);
+		return Middle - Half * FMath::Cos(UE_DOUBLE_TWO_PI * TimeSlice / SeasonSliceCount);
 	}
 
 	/** Writes the two channels nothing in presentation knows the name of. */
@@ -54,6 +73,7 @@ namespace MassifTestEnvironment
 			Declaration.SupportedFidelities = {EMassifFidelity::Standard};
 			Declaration.OutputChannels.Add(MakePatchChannel());
 			Declaration.OutputChannels.Add(MakeDriftChannel());
+			Declaration.OutputChannels.Add(MakeSeasonChannel());
 			return Declaration;
 		}
 
@@ -61,6 +81,7 @@ namespace MassifTestEnvironment
 		{
 			WritePatches(Context);
 			WriteDrift(Context);
+			WriteSeason(Context);
 		}
 
 	private:
@@ -86,6 +107,24 @@ namespace MassifTestEnvironment
 			return Descriptor;
 		}
 
+		/**
+		 * One field, scaled slice by slice and otherwise unchanged.
+		 *
+		 * The shape a year's rainfall shared out over its half-months has, and the
+		 * case a view normalised slice by slice cannot draw: every slice would
+		 * renormalise to the same picture.
+		 */
+		static FMassifChannelDescriptor MakeSeasonChannel()
+		{
+			FMassifChannelDescriptor Descriptor;
+			Descriptor.Name = SeasonChannel();
+			Descriptor.Encoding = EMassifChannelEncoding::Float32;
+			Descriptor.CellSizeMeters = ExtraCellSizeMeters;
+			Descriptor.TimeSliceCount = SeasonSliceCount;
+			Descriptor.Unit = TEXT("mm");
+			return Descriptor;
+		}
+
 		static void WritePatches(FMassifEnvironmentContext& Context)
 		{
 			const TUniquePtr<FMassifChannelWriteScope> Scope = Context.OpenOutput(PatchChannel());
@@ -94,6 +133,26 @@ namespace MassifTestEnvironment
 			for (int32 CellIndex = 0; CellIndex < Classes.Num(); ++CellIndex)
 			{
 				Classes[CellIndex] = (CellIndex % Width + CellIndex / Width) % PatchClassCount;
+			}
+			Scope->Commit();
+		}
+
+		static void WriteSeason(FMassifEnvironmentContext& Context)
+		{
+			for (int32 TimeSlice = 0; TimeSlice < SeasonSliceCount; ++TimeSlice)
+			{
+				WriteSeasonSlice(Context, TimeSlice);
+			}
+		}
+
+		static void WriteSeasonSlice(FMassifEnvironmentContext& Context, int32 TimeSlice)
+		{
+			const TUniquePtr<FMassifChannelWriteScope> Scope = Context.OpenOutput(SeasonChannel(), TimeSlice);
+			const int32 Width = Scope->GetGrid().Width;
+			TArrayView<double> Millimetres = Scope->GetComponent(0);
+			for (int32 CellIndex = 0; CellIndex < Millimetres.Num(); ++CellIndex)
+			{
+				Millimetres[CellIndex] = (100.0 + 10.0 * (CellIndex % Width)) * SeasonScale(TimeSlice);
 			}
 			Scope->Commit();
 		}

@@ -157,3 +157,81 @@ bool FEnvironmentVectorOverlayTest::RunTest(const FString& Parameters)
 	}
 	return true;
 }
+
+namespace
+{
+	/** Every cell of one slice of a channel view, as the renderer reads them. */
+	TArray<double> ReadSlice(
+		const FMassifEnvironmentState& State, const FMassifDebugView& View, int32 TimeSlice)
+	{
+		const FMassifChannelGrid& Grid = State.GetGrid(View.Channel);
+
+		TArray<double> Values;
+		Values.Reserve(Grid.CellCount());
+		for (int32 CellIndex = 0; CellIndex < Grid.CellCount(); ++CellIndex)
+		{
+			Values.Add(
+				State.ReadCell(View.Channel, CellIndex % Grid.Width, CellIndex / Grid.Width, 0, TimeSlice));
+		}
+		return Values;
+	}
+
+	double LargestValue(TArrayView<const double> Values)
+	{
+		double Largest = 0.0;
+		for (double Value : Values)
+		{
+			Largest = FMath::Max(Largest, Value);
+		}
+		return Largest;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FEnvironmentViewScrubbedRampTest,
+	"Massif.Presentation.EnvironmentViews.ScrubbedRamp",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FEnvironmentViewScrubbedRampTest::RunTest(const FString& Parameters)
+{
+	// A scrubbed series has to be drawn against one ramp. Test.Season is a single
+	// field scaled slice by slice, so a ramp measured on the slice being drawn
+	// would cancel the scaling exactly and paint every half-month identically -
+	// which is the one thing the scrubber exists to show.
+	const TUniquePtr<FMassifEnvironmentScheduler> Scheduler = MassifTestEnvironment::MakeScheduler();
+	const FMassifEnvironmentState& State = Scheduler->GetState();
+	const TArray<FMassifDebugView> Views = MassifDebugChannels::BuildViews(State);
+
+	const int32 ViewIndex = MassifDebugChannels::FindViewIndex(Views, MassifTestEnvironment::SeasonChannel());
+	if (!TestTrue(TEXT("The seasonal channel has a view"), ViewIndex != INDEX_NONE))
+	{
+		return false;
+	}
+
+	const FMassifDebugView& View = Views[ViewIndex];
+	const FMassifChannelGrid& Grid = State.GetGrid(View.Channel);
+
+	const int32 QuietSlice = 0;
+	const int32 LoudSlice = MassifTestEnvironment::SeasonSliceCount / 2;
+	const TArray<double> Quiet = ReadSlice(State, View, QuietSlice);
+	const TArray<double> Loud = ReadSlice(State, View, LoudSlice);
+
+	const FMassifDebugRampSpace QuietSpace =
+		MassifDebugChannels::MeasureRampSpace(State, View, Grid, Quiet);
+	const FMassifDebugRampSpace LoudSpace = MassifDebugChannels::MeasureRampSpace(State, View, Grid, Loud);
+
+	TestEqual(TEXT("Both slices are drawn against the same low end"), QuietSpace.Minimum, LoudSpace.Minimum);
+	TestEqual(TEXT("...and the same high end"), QuietSpace.Maximum, LoudSpace.Maximum);
+
+	// The quiet slice cannot reach the top of a ramp measured over the loud one,
+	// which is what makes the difference between them visible at all.
+	TestTrue(
+		FString::Printf(
+			TEXT("The quiet half-month falls short of the ramp (%.1f of %.1f)"), LargestValue(Quiet),
+			QuietSpace.Maximum),
+		LargestValue(Quiet) < QuietSpace.Maximum * 0.9);
+	TestTrue(
+		FString::Printf(
+			TEXT("The loud half-month reaches it (%.1f of %.1f)"), LargestValue(Loud), LoudSpace.Maximum),
+		LargestValue(Loud) >= LoudSpace.Maximum * 0.9);
+	return true;
+}
