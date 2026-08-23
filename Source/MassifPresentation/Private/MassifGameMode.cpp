@@ -435,10 +435,8 @@ void AMassifGameMode::BuildTerrainField(TSharedRef<const FMassifHeightmap> Heigh
 			GetEnvironmentParams().Rivers);
 	LogRiverSummary(Rivers.Get());
 
-	const FMassifRiverCarveParams CarveParams;
-	RiverField = FMassifRiverField::Build(Rivers.Get(), CarveParams.MaxBankMeters);
-	TerrainField =
-		MakeShared<const FMassifTerrainField>(MoveTemp(Heightmap), RiverField.ToSharedRef(), CarveParams);
+	RiverField = FMassifRiverField::Build(Rivers.Get(), MassifDefaultBankReachMeters);
+	TerrainField = MakeShared<const FMassifTerrainField>(MoveTemp(Heightmap), RiverField.ToSharedRef());
 
 	UE_LOG(LogTemp, Display, TEXT("Terrain field: %.0f m across, %d channel segments cut into it"),
 		TerrainField->GetWorldSizeMeters(), RiverField->GetSegmentCount());

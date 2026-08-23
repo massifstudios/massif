@@ -6,13 +6,13 @@
 #include "MassifFluidBake.h"
 #include "MassifFluidSurface.h"
 #include "MassifTerrainField.h"
+#include "MassifUnits.h"
 
 namespace
 {
+	using MassifUnits::MetersToCentimeters;
 	using UE::Geometry::FDynamicMesh3;
 	using UE::Geometry::FDynamicMeshNormalOverlay;
-
-	constexpr double MetersToCentimeters = 100.0;
 
 	/**
 	 * How much world one region covers, and how finely.

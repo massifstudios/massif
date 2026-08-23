@@ -349,8 +349,11 @@ namespace
 	/** Counting sort of the particles into the cells they stand in: count, prefix sum, place. */
 	void BinParticles(FFluidState& InOutState)
 	{
+		// Init rather than SetNumZeroed: the array is already this long from the step
+		// before, so SetNumZeroed adds nothing and clears nothing, and the counting
+		// pass would start from the cursors the last placement left in it.
 		const int32 CellCount = InOutState.CellKinds.Num();
-		InOutState.BinCounts.SetNumZeroed(CellCount);
+		InOutState.BinCounts.Init(0, CellCount);
 		for (const FVector3f& PositionMeters : InOutState.PositionsMeters)
 		{
 			++InOutState.BinCounts[InOutState.CellOfParticle(FVector(PositionMeters))];

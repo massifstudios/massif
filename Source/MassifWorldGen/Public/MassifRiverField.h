@@ -1,9 +1,21 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "MassifChannelProfile.h"
 
 class FMassifRiverNetwork;
+struct FMassifRiverNode;
 struct FMassifRiverReach;
+
+/**
+ * How far beyond the water the field answers about a channel: the ground a
+ * riparian species may stand on, and the band a semantic mask fades over.
+ *
+ * Nothing to do with the trench any more — that reaches as far as the station's
+ * own cross-section does, and the field indexes itself to cover whichever of the
+ * two is wider.
+ */
+inline constexpr double MassifDefaultBankReachMeters = 24.0;
 
 /** What the river network says about one point of ground. */
 struct FMassifRiverSample
@@ -18,8 +30,24 @@ struct FMassifRiverSample
 	/** Where the water's top sits over this point. */
 	double WaterSurfaceMeters = 0.0;
 
-	/** The channel invert: what the terrain is cut down to. Always below the surface. */
+	/** The channel invert: the deepest point of the section. Always below the surface. */
 	double BedAltitudeMeters = 0.0;
+
+	/**
+	 * How far the ground here is cut below the surface the elevation model
+	 * measured: the trench the carve left, read across its own cross-section.
+	 *
+	 * A depth rather than an altitude, and that is the whole point. The carve
+	 * works a section of thirty-three bed samples — a scour pool against one bank,
+	 * a bar against the other, the slope the material stands at between them — and
+	 * an altitude can only carry the deepest of them. Subtracted from whatever the
+	 * ground is at a point, the section arrives on the terrain as the shape it was
+	 * worked into rather than as a parabola fitted to one number of it.
+	 *
+	 * Never negative: cutting a bed is a subtraction, and a channel that silted up
+	 * above its banks is not a dyke across the valley.
+	 */
+	double CutDepthMeters = 0.0;
 
 	double WidthMeters = 0.0;
 	double DepthMeters = 0.0;
@@ -64,6 +92,14 @@ struct FMassifRiverSample
  * is what makes the water surface single valued at a confluence, and single
  * valued is what stops it being drawn as two sheets in the same place.
  *
+ * The cut is the exception, and takes the deepest of them instead. Picking one
+ * channel's bed steps the ground to the other's along the line the winner
+ * changes on, and above a confluence two channels overlap for as far back as
+ * their own widths reach. A maximum has no such line: the deeper of two
+ * continuous surfaces is continuous, so two beds that agree nowhere still meet
+ * without a step. Two channels close enough to share ground share one trench,
+ * which is what they are.
+ *
  * Never serialized: a pure function of the network, rebuilt with it at load.
  *
  * Thread-safe once built: sampling touches only immutable state.
@@ -92,6 +128,14 @@ public:
 	double SampleSignedDistanceMeters(FVector2d PositionMeters) const;
 
 	/**
+	 * Only the trench, without working out which channel cut it or what the water
+	 * in it is doing. The terrain asks this and nothing else, once per vertex of
+	 * every tile it builds, and it is the deepest cut of every channel reaching
+	 * the point rather than the nearest one's.
+	 */
+	double SampleCutDepthMeters(FVector2d PositionMeters) const;
+
+	/**
 	 * Whether any channel could reach into the box. Conservative — it may say yes
 	 * where a query would find nothing — so it is a rejection test, which is what
 	 * keeps a tile with no river in it from being meshed or rasterised at all.
@@ -117,6 +161,32 @@ public:
 private:
 	FMassifRiverField() = default;
 
+	/**
+	 * One station's trench, as depth below the ground across its own section.
+	 *
+	 * Stored per node and referenced by the two segments that meet there, so a
+	 * station's thirty-three samples are held once rather than once per span.
+	 */
+	struct FSectionCut
+	{
+		/** Half the span the samples cover. Zero where the station has no section. */
+		float HalfSpanMeters = 0.0f;
+		float DepthMeters[MassifChannelProfileOffsetCount] = {};
+
+		/** Between the two samples the offset falls in, and nothing at all outside the span. */
+		double DepthAt(double AcrossMeters) const;
+
+		/** The ground a station's section was cut from, less the bed the carve left in it. */
+		void SetFromProfile(const FMassifChannelProfile& Profile);
+
+		/**
+		 * A station with no section solved for it: the trench the discharge alone
+		 * asks for, round rather than flat-bottomed. What a network assembled
+		 * without the section solve falls back to.
+		 */
+		void SetFromChannel(double WidthMeters, double CutMeters);
+	};
+
 	/** One span between two nodes, with both ends' attributes so a query interpolates without the network. */
 	struct FSegment
 	{
@@ -125,6 +195,11 @@ private:
 		double LengthMeters = 0.0;
 
 		double StartAlongMeters = 0.0;
+
+		/** Both ends' sections, and how far from the centreline either of them reaches. */
+		int32 StartCutIndex = INDEX_NONE;
+		int32 EndCutIndex = INDEX_NONE;
+		double InfluenceMeters = 0.0;
 
 		double StartWaterSurfaceMeters = 0.0;
 		double EndWaterSurfaceMeters = 0.0;
@@ -152,8 +227,15 @@ private:
 
 	void CollectSegments(const FMassifRiverNetwork& Network);
 	void AppendReachSegments(const FMassifRiverReach& Reach);
+	void AppendSectionCut(const FMassifRiverNode& Node);
+	FSegment MakeSpanSegment(
+		const FMassifRiverReach& Reach, TArrayView<const double> AlongMeters, int32 SpanIndex,
+		int32 FirstCutIndex) const;
 	void MeasureGrid();
 	void IndexSegments();
+
+	/** The trench one segment leaves at a point, interpolated along it and across both its sections. */
+	double CutDepthOfSegment(int32 SegmentIndex, FVector2d PositionMeters) const;
 
 	void GetSegmentBox(const FSegment& Segment, FVector2d& OutMinMeters, FVector2d& OutMaxMeters) const;
 	TArray<int32> GetSegmentCells(const FSegment& Segment) const;
@@ -178,6 +260,7 @@ private:
 	int32 RowAt(double PositionYMeters) const;
 
 	TArray<FSegment> Segments;
+	TArray<FSectionCut> SectionCuts;
 
 	/** Compressed rows: the segments of cell N are CellSegments over [Start[N], Start[N + 1]). */
 	TArray<int32> CellSegmentStart;

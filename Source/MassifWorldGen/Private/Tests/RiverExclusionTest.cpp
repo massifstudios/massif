@@ -55,12 +55,11 @@ namespace
 		Reaches.Add(MakeChannelReach());
 		const TSharedRef<const FMassifRiverNetwork> Network = FMassifRiverNetwork::Create(MoveTemp(Reaches));
 
-		const FMassifRiverCarveParams CarveParams;
 		FExclusionTestWorld World;
-		World.RiverField = FMassifRiverField::Build(Network.Get(), CarveParams.MaxBankMeters);
+		World.RiverField = FMassifRiverField::Build(Network.Get(), MassifDefaultBankReachMeters);
 
 		const TSharedRef<const FMassifTerrainField> Field = MakeShared<const FMassifTerrainField>(
-			Heightmap, World.RiverField.ToSharedRef(), CarveParams);
+			Heightmap, World.RiverField.ToSharedRef());
 
 		FMassifEnvironmentBakeParams BakeParams;
 		BakeParams.CellSizeMeters = ExclusionTestSpacingMeters;
