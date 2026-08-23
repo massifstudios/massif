@@ -608,16 +608,43 @@ tests the sun's current altitude against the horizon at that bearing.
 **Cadence is in sim ticks, never wall-clock.** Game speed changes how many ticks
 run per real second and never the tick delta (§3), so a weather step measured in
 seconds would advance at a different rate per simulated hour at 4× and stop
-meaning anything under pause. Weather advances every fixed *N* ticks. The clock
-advances `MassifGameMinutesPerSimTick` per tick — one constant every other
-quantity here is denominated in, from melt rates to how long a front takes to
-cross.
+meaning anything under pause. Weather advances every fixed *N* ticks.
 
-> **Open:** the value of that constant is a game-feel decision, not a technical
-> one, and it is coupled to guest agents (§8): a clock fast enough to make a ski
-> day pass in minutes is faster than a guest can plausibly be animated skiing.
-> Recorded here so the two are decided together rather than one defaulting into
-> the other.
+**Two clocks, deliberately decoupled.** A tick is a tenth of a second of
+*motion*: guests ski, chairs travel and snow settles against `MassifSimTickSeconds`
+at real-world rates, because a skier at ten times speed does not read as a
+skier. The *wall clock* runs on its own scale, advancing
+`MassifGameMinutesPerSimTick` per tick, because a day that took a real day to
+pass would put every weather system out of reach of the player watching for it.
+
+The two cannot both be right. A ski run takes three minutes of motion and
+advances the clock by far more than three minutes, and that inconsistency is
+accepted: tying them together makes either the guests absurd or the weather
+unwatchable, and each half reads correctly on its own. Anything denominated in
+simulated *time* — melt, settling, how long a front takes to cross — is
+denominated against the wall clock. Anything denominated in *motion* — speeds,
+distances, queue rates — is denominated against the tick.
+
+**Fog is a lake, not a cloud.** Radiation fog — what fills an Alpine valley on a
+still morning — forms because the ground radiates its heat to a clear sky
+overnight and chills the air above it past its dew point, and cold air is dense,
+so it pools where it cannot drain. It therefore has a **flat top**: an inversion
+lid, with clear air above and fog below. The sun destroys it rather than making
+it, which inverts what drives what: an open sky (`Sun.SkyViewFactor`) and calm
+air *form* fog overnight, and direct sun arriving at that particular point
+(`Sun.Horizon`) and wind *burn it off*.
+
+That shape is already in the bake. `Hydrology.FilledAltitude` is the
+depression-fill surface — every hollow raised to the level it overflows at — and
+a fog lake fills a basin and spills over its col in exactly that way, so the
+basins fog forms in are the depressions hydrology already found. Fog is
+therefore not a volumetric field to be solved but a small set of **basins**, each
+with a floor, a spill altitude and a fill level, and the fill level is what the
+weather moves.
+
+Steam fog over open water is a real second mechanism and a much smaller one:
+local, shallow and confined to `Hydrology.StandingWaterDepth` and the larger
+`SeasonalFlow`. It is a term, not a system.
 
 **Snow off the resident tiles.** Non-resident ground is not simulated and stores
 nothing; it reads the baked climatological depth for the slice, scaled by the

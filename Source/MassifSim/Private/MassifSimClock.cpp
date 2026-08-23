@@ -17,6 +17,23 @@ double MassifGameSpeedMultiplier(EMassifGameSpeed Speed)
 	return 1.0;
 }
 
+FMassifWallClock MassifWallClockAtTick(int64 TickCount)
+{
+	// Ticks per day is exact — a day is 1440 minutes and a tick is an eighth of
+	// one — so the day boundary is found in integers and only the position inside
+	// the day is a fraction. Deriving both from a running double would drift a
+	// little further off midnight every day.
+	constexpr int64 TicksPerDay =
+		static_cast<int64>(MassifGameMinutesPerDay / MassifGameMinutesPerSimTick);
+
+	const int64 TicksIntoDay = ((TickCount % TicksPerDay) + TicksPerDay) % TicksPerDay;
+
+	FMassifWallClock Clock;
+	Clock.Day = FMath::DivideAndRoundDown(TickCount, TicksPerDay);
+	Clock.DayFraction = double(TicksIntoDay) / double(TicksPerDay);
+	return Clock;
+}
+
 int32 FMassifSimClock::ConsumeTicks(double DeltaSeconds)
 {
 	AccumulatorSeconds += DeltaSeconds * MassifGameSpeedMultiplier(Speed);

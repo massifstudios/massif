@@ -220,3 +220,41 @@ bool FMassifSimClockCapsCatchUpTest::RunTest(const FString& Parameters)
 		Steady.GetAccumulatorSeconds() < MassifSimTickSeconds);
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMassifSimWallClockTest,
+	"Massif.Sim.Core.WallClock",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMassifSimWallClockTest::RunTest(const FString& Parameters)
+{
+	// The wall clock runs on its own scale from the tick that carries motion
+	// (ARCHITECTURE §6.1), and is derived rather than stored, so it cannot drift
+	// away from the tick count or disagree with it across a save.
+	constexpr int64 TicksPerDay =
+		static_cast<int64>(MassifGameMinutesPerDay / MassifGameMinutesPerSimTick);
+
+	TestEqual(TEXT("A day divides into whole ticks"), TicksPerDay, int64(11520));
+
+	const FMassifWallClock Midnight = MassifWallClockAtTick(0);
+	TestEqual(TEXT("The world begins on day zero"), Midnight.Day, int64(0));
+	TestEqual(TEXT("At midnight"), Midnight.GetHour(), 0);
+	TestEqual(TEXT("On the hour"), Midnight.GetMinute(), 0);
+
+	const FMassifWallClock Midday = MassifWallClockAtTick(TicksPerDay / 2);
+	TestEqual(TEXT("Half a day in is noon"), Midday.GetHour(), 12);
+	TestEqual(TEXT("Exactly"), Midday.GetMinute(), 0);
+	TestEqual(TEXT("And still day zero"), Midday.Day, int64(0));
+
+	// The boundary is found in integers, so it lands on midnight however many days
+	// have gone by rather than creeping a little further off each one.
+	const FMassifWallClock HundredDays = MassifWallClockAtTick(TicksPerDay * 100);
+	TestEqual(TEXT("A hundred days in, the day has turned over a hundred times"),
+		HundredDays.Day, int64(100));
+	TestEqual(TEXT("And it is midnight again, not a minute either side"), HundredDays.GetHour(), 0);
+	TestEqual(TEXT("To the minute"), HundredDays.GetMinute(), 0);
+
+	const FMassifWallClock QuarterPast = MassifWallClockAtTick(TicksPerDay / 24 + 2);
+	TestEqual(TEXT("An hour and two ticks in is one o'clock"), QuarterPast.GetHour(), 1);
+	TestEqual(TEXT("A quarter minute past, which reads as the minute"), QuarterPast.GetMinute(), 0);
+	return true;
+}
