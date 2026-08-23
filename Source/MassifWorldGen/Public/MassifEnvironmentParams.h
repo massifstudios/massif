@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "MassifClimateParams.h"
 #include "MassifEnvironmentBakeParams.h"
+#include "MassifLithologyParams.h"
 #include "MassifPrecipitationParams.h"
 #include "MassifSnowParams.h"
 #include "MassifSunParams.h"
@@ -19,6 +20,7 @@
 struct FMassifEnvironmentParams
 {
 	FMassifEnvironmentBakeParams Water;
+	FMassifLithologyParams Lithology;
 	FMassifSunParams Sun;
 	FMassifClimateParams Climate;
 	FMassifWindParams Wind;
