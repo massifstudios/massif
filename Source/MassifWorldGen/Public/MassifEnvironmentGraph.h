@@ -25,6 +25,9 @@ namespace MassifEnvironmentChannels
 	MASSIFWORLDGEN_API const FName& FlowAccumulation();
 	MASSIFWORLDGEN_API const FName& Wetness();
 	MASSIFWORLDGEN_API const FName& SoilDepth();
+
+	/** What the droplets left, before roots hold any of it in place. */
+	MASSIFWORLDGEN_API const FName& SoilDeposition();
 }
 
 /** Names of the processes that produce them, for fidelity switching and the graph inspector. */
@@ -35,6 +38,7 @@ namespace MassifEnvironmentProcesses
 	MASSIFWORLDGEN_API const FName& StandingWater();
 	MASSIFWORLDGEN_API const FName& FlowRouting();
 	MASSIFWORLDGEN_API const FName& SoilDepth();
+	MASSIFWORLDGEN_API const FName& SoilDeposition();
 	MASSIFWORLDGEN_API const FName& Wetness();
 }
 

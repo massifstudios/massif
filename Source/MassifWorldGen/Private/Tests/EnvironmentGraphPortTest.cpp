@@ -88,7 +88,7 @@ namespace
 	/** The seed the soil process derives, so the reference droplets land on the same lattice. */
 	uint32 PortTestDropletSeed()
 	{
-		return FMassifSeed(PortTestSeed).MakeChannelSeed(TEXT("Soil.Depth.Droplets"));
+		return FMassifSeed(PortTestSeed).MakeChannelSeed(TEXT("Soil.Deposition.Droplets"));
 	}
 
 	double LargestDifferenceInRow(
@@ -191,10 +191,14 @@ bool FEnvironmentGraphPortTest::RunTest(const FString& Parameters)
 			State, MassifEnvironmentChannels::StandingWaterDepth(),
 			AsDoubles(Reference.StandingWaterDepthMeters))
 			<= QuantisationStep(State, MassifEnvironmentChannels::StandingWaterDepth()));
+	// Against the deposition rather than the depth: the droplets are the stage that
+	// was ported, and the depth is a later channel that reads this one back and
+	// quantises it a second time.
 	TestTrue(
-		TEXT("Soil depth is within its quantisation"),
-		LargestDifference(State, MassifEnvironmentChannels::SoilDepth(), AsDoubles(Reference.SoilDepthMeters))
-			<= QuantisationStep(State, MassifEnvironmentChannels::SoilDepth()));
+		TEXT("Deposited soil is within its quantisation"),
+		LargestDifference(
+			State, MassifEnvironmentChannels::SoilDeposition(), AsDoubles(Reference.SoilDepthMeters))
+			<= QuantisationStep(State, MassifEnvironmentChannels::SoilDeposition()));
 	TestTrue(
 		TEXT("Wetness is within its quantisation"),
 		LargestDifference(State, MassifEnvironmentChannels::Wetness(), AsDoubles(Reference.Wetness))

@@ -3,6 +3,7 @@
 #include "MassifEnvironmentBakeGrid.h"
 #include "MassifClimateProcesses.h"
 #include "MassifPrecipitationProcesses.h"
+#include "MassifLithologyProcesses.h"
 #include "MassifSnowProcesses.h"
 #include "MassifSunProcesses.h"
 #include "MassifVegetationProcesses.h"
@@ -46,6 +47,12 @@ namespace MassifEnvironmentChannels
 		static const FName Name(TEXT("Soil.Depth"));
 		return Name;
 	}
+
+	const FName& SoilDeposition()
+	{
+		static const FName Name(TEXT("Soil.Deposition"));
+		return Name;
+	}
 }
 
 namespace MassifEnvironmentProcesses
@@ -77,6 +84,12 @@ namespace MassifEnvironmentProcesses
 	const FName& SoilDepth()
 	{
 		static const FName Name(TEXT("Soil.Depth"));
+		return Name;
+	}
+
+	const FName& SoilDeposition()
+	{
+		static const FName Name(TEXT("Soil.Deposition"));
 		return Name;
 	}
 
@@ -354,7 +367,55 @@ namespace
 		}
 	};
 
-	/** Where droplets running down the surface dropped what they were carrying. */
+	/**
+	 * Where droplets running down the surface dropped what they were carrying.
+	 *
+	 * Deliberately separate from the soil depth that reads it. This is the
+	 * expensive part of the whole bake and it depends only on the filled surface,
+	 * which nothing in the vegetation loop touches - so keeping it out of that loop
+	 * is the difference between running it once and running it once per relaxation
+	 * round.
+	 */
+	class FSoilDepositionProcess final : public FBakeProcess
+	{
+	public:
+		using FBakeProcess::FBakeProcess;
+
+		FMassifProcessDeclaration Declare() const override
+		{
+			FMassifProcessDeclaration Declaration;
+			Declaration.Name = MassifEnvironmentProcesses::SoilDeposition();
+			Declaration.InputChannels = {MassifEnvironmentChannels::FilledAltitude()};
+			Declaration.SupportedFidelities = {EMassifFidelity::Standard};
+			Declaration.OutputChannels.Add(MakeChannel(
+				MassifEnvironmentChannels::SoilDeposition(), EMassifChannelEncoding::Uint16,
+				Params.CellSizeMeters, TEXT("m"), EMassifChannelColorMap::Magma));
+			return Declaration;
+		}
+
+		void Execute(FMassifEnvironmentContext& Context, EMassifFidelity Fidelity) const override
+		{
+			const TUniquePtr<FMassifChannelWriteScope> Scope =
+				Context.OpenOutput(MassifEnvironmentChannels::SoilDeposition());
+			if (Fidelity == EMassifFidelity::Off)
+			{
+				// Regolith on ground nothing has moved, everywhere.
+				FillWithConstant(*Scope, Params.BaseSoilDepthMeters);
+				return;
+			}
+
+			TArray<double> Filled;
+			ReadCells(Context.GetState(), Context.GetInput(MassifEnvironmentChannels::FilledAltitude()), Filled);
+
+			TArray<float> SoilDepthMeters;
+			MassifBakeCpu::RunDroplets(
+				MakeBakeGrid(Scope->GetGrid()), Params, Context.MakeSeed(TEXT("Droplets")), Filled,
+				SoilDepthMeters);
+			WriteCells(*Scope, SoilDepthMeters);
+		}
+	};
+
+	/** What the droplets left, plus what roots hold on to. */
 	class FSoilDepthProcess final : public FBakeProcess
 	{
 	public:
@@ -364,7 +425,7 @@ namespace
 		{
 			FMassifProcessDeclaration Declaration;
 			Declaration.Name = MassifEnvironmentProcesses::SoilDepth();
-			Declaration.InputChannels = {MassifEnvironmentChannels::FilledAltitude()};
+			Declaration.InputChannels = {MassifEnvironmentChannels::SoilDeposition()};
 			Declaration.OptionalInputChannels = {MassifEnvironmentChannels::VegetationCover()};
 			Declaration.SupportedFidelities = {EMassifFidelity::Standard};
 
@@ -390,44 +451,32 @@ namespace
 			return Context.GetState().SampleScalar(Cover, Position);
 		}
 
-		/** Ground that grew something keeps more of what the droplets left on it. */
-		void ApplyRootRetention(
-			const FMassifEnvironmentContext& Context, FMassifChannelWriteScope& Scope,
-			TArrayView<const float> SoilDepthMeters) const
-		{
-			const FMassifChannelHandle Cover =
-				Context.FindOptionalInput(MassifEnvironmentChannels::VegetationCover());
-			const FMassifChannelGrid& Grid = Scope.GetGrid();
-
-			TArrayView<double> Scratch = Scope.GetComponent(0);
-			for (int32 CellIndex = 0; CellIndex < Scratch.Num(); ++CellIndex)
-			{
-				const double Retained = 1.0 + Params.VegetationSoilRetention
-					* CoverAt(Context, Cover, Grid, CellIndex);
-				Scratch[CellIndex] = FMath::Min(SoilDepthMeters[CellIndex] * Retained, Params.MaxSoilDepthMeters);
-			}
-			Scope.Commit();
-		}
-
 		void Execute(FMassifEnvironmentContext& Context, EMassifFidelity Fidelity) const override
 		{
+			TArray<double> Deposited;
+			ReadCells(
+				Context.GetState(), Context.GetInput(MassifEnvironmentChannels::SoilDeposition()), Deposited);
+
 			const TUniquePtr<FMassifChannelWriteScope> Scope =
 				Context.OpenOutput(MassifEnvironmentChannels::SoilDepth());
 			if (Fidelity == EMassifFidelity::Off)
 			{
-				// Regolith on ground nothing has moved, everywhere.
-				FillWithConstant(*Scope, Params.BaseSoilDepthMeters);
+				WriteCells(*Scope, Deposited);
 				return;
 			}
 
-			TArray<double> Filled;
-			ReadCells(Context.GetState(), Context.GetInput(MassifEnvironmentChannels::FilledAltitude()), Filled);
+			const FMassifChannelHandle Cover =
+				Context.FindOptionalInput(MassifEnvironmentChannels::VegetationCover());
+			const FMassifChannelGrid& Grid = Scope->GetGrid();
 
-			TArray<float> SoilDepthMeters;
-			MassifBakeCpu::RunDroplets(
-				MakeBakeGrid(Scope->GetGrid()), Params, Context.MakeSeed(TEXT("Droplets")), Filled,
-				SoilDepthMeters);
-			ApplyRootRetention(Context, *Scope, SoilDepthMeters);
+			TArrayView<double> Scratch = Scope->GetComponent(0);
+			for (int32 CellIndex = 0; CellIndex < Scratch.Num(); ++CellIndex)
+			{
+				const double Retained =
+					1.0 + Params.VegetationSoilRetention * CoverAt(Context, Cover, Grid, CellIndex);
+				Scratch[CellIndex] = FMath::Min(Deposited[CellIndex] * Retained, Params.MaxSoilDepthMeters);
+			}
+			Scope->Commit();
 		}
 	};
 
@@ -495,8 +544,10 @@ void MassifRegisterEnvironmentProcesses(
 	Scheduler.RegisterProcess(MakeShared<FDepressionFillProcess>(Params.Water));
 	Scheduler.RegisterProcess(MakeShared<FStandingWaterProcess>(Params.Water));
 	Scheduler.RegisterProcess(MakeShared<FFlowRoutingProcess>(Params.Water));
+	Scheduler.RegisterProcess(MakeShared<FSoilDepositionProcess>(Params.Water));
 	Scheduler.RegisterProcess(MakeShared<FSoilDepthProcess>(Params.Water));
 	Scheduler.RegisterProcess(MakeShared<FWetnessProcess>(Params.Water));
+	MassifRegisterLithologyProcesses(Scheduler, Params.Lithology);
 	MassifRegisterSunProcesses(Scheduler, Params.Sun);
 	MassifRegisterClimateProcesses(Scheduler, Params.Climate);
 	MassifRegisterWindProcesses(Scheduler, Params.Wind);
