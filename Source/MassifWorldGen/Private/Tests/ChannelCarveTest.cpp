@@ -230,3 +230,42 @@ bool FChannelCarveDeterminismTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("The same reach carves to the same bed"), OffsetsDisagreeing, 0);
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FChannelCarveGradedTest,
+	"Massif.WorldGen.ChannelCarve.Graded",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FChannelCarveGradedTest::RunTest(const FString& Parameters)
+{
+	// One slope, one section, the same water at every station: nothing along this
+	// reach distinguishes one station from the next, so whatever the carve settles
+	// on it has to settle on the same thing everywhere and leave the bed straight.
+	const FTrapezoidChannelSource Source(4.0, 2.0, 0.03);
+	const TArray<FMassifRiverReach> After = CarveOne(Source, MakeStraightReach(Source, FReachSpec{0.9, 0.9, 16.0, 8.0}));
+
+	// Measured as curvature rather than as a drop, so the reach's own gradient is
+	// not counted: a straight bed on any slope has none. What this catches is the
+	// one thing a gradient cannot explain — a station standing clear of the two
+	// beside it, which is a pit or a bar a station wide.
+	double WorstMeters = 0.0;
+	int32 WorstIndex = INDEX_NONE;
+	for (int32 NodeIndex = 1; NodeIndex + 1 < After[0].Nodes.Num(); ++NodeIndex)
+	{
+		const double MeanOfNeighboursMeters = 0.5
+			* (ThalwegAltitudeMeters(After[0].Nodes[NodeIndex - 1].Profile)
+				+ ThalwegAltitudeMeters(After[0].Nodes[NodeIndex + 1].Profile));
+		const double DepartureMeters = FMath::Abs(
+			ThalwegAltitudeMeters(After[0].Nodes[NodeIndex].Profile) - MeanOfNeighboursMeters);
+		if (DepartureMeters > WorstMeters)
+		{
+			WorstMeters = DepartureMeters;
+			WorstIndex = NodeIndex;
+		}
+	}
+
+	AddInfo(FString::Printf(TEXT("worst station %d stands %.4f m off its neighbours"), WorstIndex, WorstMeters));
+	TestTrue(
+		FString::Printf(TEXT("No station stands %.3f m clear of the two beside it"), WorstMeters),
+		WorstMeters < 0.05);
+	return true;
+}

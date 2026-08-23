@@ -106,6 +106,17 @@ struct FMassifChannelCarveParams
 	double MaxBedChangeMetersPerStep = 0.04;
 
 	/**
+	 * Share of the bed's own along-channel curvature taken out each sweep.
+	 *
+	 * Under a half the relaxation is stable; a quarter takes a pit one station wide
+	 * out over a handful of sweeps and leaves a wedge spanning many of them almost
+	 * untouched, which is the separation this is here to make. At zero the carve
+	 * grades each station against its neighbours' supply and nothing holds the bed
+	 * between them to a slope the water could run down.
+	 */
+	double BedDiffusion = 0.25;
+
+	/**
 	 * Deepest the whole carve may cut below the ground it started from.
 	 *
 	 * A backstop rather than a model. A reach is fed only at its own head, so a long

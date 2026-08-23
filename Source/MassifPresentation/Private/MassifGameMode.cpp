@@ -49,6 +49,76 @@ namespace
 	/** Gap between posing the camera and shooting, so the quadtree can stream the new view in. */
 	constexpr float DebugScreenshotSettleSeconds = 3.0f;
 
+	/**
+	 * How graded the carved bed came out, which is what decides whether the ground
+	 * under the water reads as a channel or as a row of pits. A step is the drop
+	 * from one station's invert to the next: a bed the flow could have graded has
+	 * small ones everywhere, and a bed that hit a limit somewhere has a few large.
+	 */
+	struct FMassifRiverBedSummary
+	{
+		double MeanDepthMeters = 0.0;
+		double MaxDepthMeters = 0.0;
+		double MaxStepMeters = 0.0;
+		double MaxStepSpanMeters = 0.0;
+		double IncisionLimitFraction = 0.0;
+	};
+
+	/** Within this of the backstop counts as having reached it. */
+	constexpr double IncisionLimitToleranceMeters = 0.05;
+
+	void AccumulateReachBed(
+		const FMassifRiverReach& Reach, double IncisionLimitMeters, FMassifRiverBedSummary& InOutSummary,
+		int32& InOutStationCount, int32& InOutLimitedCount)
+	{
+		for (int32 NodeIndex = 0; NodeIndex < Reach.Nodes.Num(); ++NodeIndex)
+		{
+			const FMassifRiverNode& Node = Reach.Nodes[NodeIndex];
+			InOutSummary.MeanDepthMeters += Node.DepthMeters;
+			InOutSummary.MaxDepthMeters = FMath::Max(InOutSummary.MaxDepthMeters, Node.DepthMeters);
+			++InOutStationCount;
+
+			const double IncisionMeters = Node.GroundAltitudeMeters - Node.BedAltitudeMeters;
+			if (IncisionMeters >= IncisionLimitMeters - IncisionLimitToleranceMeters)
+			{
+				++InOutLimitedCount;
+			}
+			if (NodeIndex == 0)
+			{
+				continue;
+			}
+
+			const FMassifRiverNode& Above = Reach.Nodes[NodeIndex - 1];
+			const double StepMeters = FMath::Abs(Above.BedAltitudeMeters - Node.BedAltitudeMeters);
+			if (StepMeters > InOutSummary.MaxStepMeters)
+			{
+				InOutSummary.MaxStepMeters = StepMeters;
+				InOutSummary.MaxStepSpanMeters =
+					(Node.PositionMeters - Above.PositionMeters).Length();
+			}
+		}
+	}
+
+	FMassifRiverBedSummary MeasureRiverBed(const FMassifRiverNetwork& Rivers)
+	{
+		FMassifRiverBedSummary Summary;
+		int32 StationCount = 0;
+		int32 LimitedCount = 0;
+		const double IncisionLimitMeters = FMassifChannelCarveParams().MaxIncisionBelowGroundMeters;
+		for (const FMassifRiverReach& Reach : Rivers.GetReaches())
+		{
+			AccumulateReachBed(Reach, IncisionLimitMeters, Summary, StationCount, LimitedCount);
+		}
+
+		if (StationCount == 0)
+		{
+			return Summary;
+		}
+		Summary.MeanDepthMeters /= StationCount;
+		Summary.IncisionLimitFraction = static_cast<double>(LimitedCount) / StationCount;
+		return Summary;
+	}
+
 	/** Earth's surface gravity, 9.81 m/s down. */
 	constexpr float EarthGravityCentimetersPerSecondSquared = -981.0f;
 
@@ -323,6 +393,13 @@ void AMassifGameMode::LogRiverSummary(const FMassifRiverNetwork& Rivers) const
 			"largest %.1f m3/s and %.1f m wide"),
 		Rivers.GetReaches().Num(), Rivers.GetSourceCount(), Rivers.GetTotalLengthMeters() / 1000.0,
 		Rivers.GetMaxStrahlerOrder(), Rivers.GetMaxDischargeCubicMetersPerSecond(), Rivers.GetMaxWidthMeters());
+
+	const FMassifRiverBedSummary Bed = MeasureRiverBed(Rivers);
+	UE_LOG(LogTemp, Display,
+		TEXT("River bed: %.2f m mean depth, deepest %.2f m, steepest step %.2f m over %.1f m, "
+			"%.1f%% of stations at the incision limit"),
+		Bed.MeanDepthMeters, Bed.MaxDepthMeters, Bed.MaxStepMeters, Bed.MaxStepSpanMeters,
+		100.0 * Bed.IncisionLimitFraction);
 }
 
 void AMassifGameMode::SchedulePosedScreenshot(

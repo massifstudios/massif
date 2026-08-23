@@ -240,6 +240,29 @@ bool FRiverNetworkSmoothingTest::RunTest(const FString& Parameters)
 		LongestReachNodes = FMath::Max(LongestReachNodes, Reach.Nodes.Num());
 	}
 	TestTrue(TEXT("The trunk is resampled along its length"), LongestReachNodes > 8);
+
+	// Every reach, not only the ones that kept a corner. A reach running straight
+	// is simplified to its two ends however long it is, and a station spacing that
+	// survives that is one that does not depend on the line having bent.
+	//
+	// Against twice the spacing rather than the spacing itself: the steps are
+	// placed at equal fractions of a cubic, so the one that spans a curve measures
+	// a little longer than the chord it was divided on.
+	const double MaxSpanMeters = 2.0 * MakeTestRiverParams().SmoothingSpacingMeters;
+	double LongestSpanMeters = 0.0;
+	for (const FMassifRiverReach& Reach : Rivers->GetReaches())
+	{
+		for (int32 NodeIndex = 1; NodeIndex < Reach.Nodes.Num(); ++NodeIndex)
+		{
+			const double SpanMeters =
+				(Reach.Nodes[NodeIndex].PositionMeters - Reach.Nodes[NodeIndex - 1].PositionMeters).Length();
+			LongestSpanMeters = FMath::Max(LongestSpanMeters, SpanMeters);
+		}
+	}
+
+	TestTrue(
+		FString::Printf(TEXT("No two stations stand %.1f m apart"), LongestSpanMeters),
+		LongestSpanMeters <= MaxSpanMeters);
 	return true;
 }
 

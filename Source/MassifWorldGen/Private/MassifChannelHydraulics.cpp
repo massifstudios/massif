@@ -2,6 +2,16 @@
 
 namespace
 {
+	/**
+	 * Below which two offsets of a bed count as level with one another.
+	 *
+	 * A float altitude a few thousand metres up resolves to about a quarter of a
+	 * millimetre, so a bed that is flat by construction is not flat when it is read
+	 * back. A millimetre is well clear of that and far under anything that decides
+	 * where a river's deep point is.
+	 */
+	constexpr double LevelBedToleranceMeters = 1.0e-3;
+
 	/** What one interval between neighbouring offsets contributes to the section. */
 	struct FIntervalMeasure
 	{
@@ -38,6 +48,18 @@ namespace
 		return Measure;
 	}
 
+	/** Whether the offset one step out on this side is inside the section and out of the water. */
+	bool IsNextOffsetDry(
+		const FMassifChannelProfile& Profile, double SurfaceAltitudeMeters, int32 EdgeOffset, int32 Step)
+	{
+		const int32 NextOffset = EdgeOffset + Step;
+		if (NextOffset < 0 || NextOffset >= MassifChannelProfileOffsetCount)
+		{
+			return false;
+		}
+		return Profile.BedAltitudeMeters[NextOffset] > SurfaceAltitudeMeters;
+	}
+
 	/** Whether the water can reach one offset further out on this side of the run. */
 	bool CanWiden(
 		const FMassifChannelProfile& Profile, double SurfaceAltitudeMeters, int32 EdgeOffset, int32 Step)
@@ -50,10 +72,18 @@ namespace
 		return Profile.BedAltitudeMeters[NextOffset] <= SurfaceAltitudeMeters;
 	}
 
-	/** Takes in the next offset on whichever side the water reaches first: the lower one. */
+	/**
+	 * Takes in the next offset on whichever side the water reaches first: the lower
+	 * one, or both at once where the two are level with each other.
+	 *
+	 * Both, because a section symmetric about its own centreline ties on every step,
+	 * and a tie broken the same way every time is a run that ends one offset further
+	 * to that side than to the other. The scour is shared out over the run, so the
+	 * channel takes a step that way each sweep and walks out of its own section.
+	 */
 	void WidenRun(
 		const FMassifChannelProfile& Profile, FMassifSectionFlow& InOutSection, bool bCanWidenFirst,
-		bool bCanWidenLast)
+		bool bCanWidenLast, bool bHasRoomForBoth)
 	{
 		if (!bCanWidenLast)
 		{
@@ -65,8 +95,16 @@ namespace
 			++InOutSection.LastWetOffset;
 			return;
 		}
-		if (Profile.BedAltitudeMeters[InOutSection.FirstWetOffset - 1]
-			<= Profile.BedAltitudeMeters[InOutSection.LastWetOffset + 1])
+
+		const double LeftMeters = Profile.BedAltitudeMeters[InOutSection.FirstWetOffset - 1];
+		const double RightMeters = Profile.BedAltitudeMeters[InOutSection.LastWetOffset + 1];
+		if (bHasRoomForBoth && FMath::Abs(LeftMeters - RightMeters) <= LevelBedToleranceMeters)
+		{
+			--InOutSection.FirstWetOffset;
+			++InOutSection.LastWetOffset;
+			return;
+		}
+		if (LeftMeters <= RightMeters)
 		{
 			--InOutSection.FirstWetOffset;
 			return;
@@ -107,7 +145,38 @@ namespace
 			{
 				return;
 			}
-			WidenRun(Profile, OutSection, bCanWidenFirst, bCanWidenLast);
+
+			const bool bHasRoomForBoth =
+				OutSection.LastWetOffset - OutSection.FirstWetOffset + 3 <= MaxOffsetCount;
+			WidenRun(Profile, OutSection, bCanWidenFirst, bCanWidenLast, bHasRoomForBoth);
+		}
+	}
+
+	/**
+	 * Reaches the measured range one offset past the wet run, on each side the bed
+	 * rose out of the water.
+	 *
+	 * The run ends at the last sample still under the surface, and the water's edge
+	 * is somewhere between that sample and the dry one beyond it. Measured over the
+	 * run alone the wedge between them is dropped from every section — and a run one
+	 * offset wide, which a trench narrower than the section is sampled at produces,
+	 * has no interval in it at all and comes back with no area and no width.
+	 *
+	 * A side the width guard stopped is not extended. There the run ends because the
+	 * water is not allowed any further across, not because the ground rose, and the
+	 * offset beyond it is under the surface rather than over it.
+	 */
+	void ExtendOverTheBank(
+		const FMassifChannelProfile& Profile, double SurfaceAltitudeMeters, int32& InOutFirstOffset,
+		int32& InOutLastOffset)
+	{
+		if (IsNextOffsetDry(Profile, SurfaceAltitudeMeters, InOutFirstOffset, -1))
+		{
+			--InOutFirstOffset;
+		}
+		if (IsNextOffsetDry(Profile, SurfaceAltitudeMeters, InOutLastOffset, 1))
+		{
+			++InOutLastOffset;
 		}
 	}
 
@@ -118,16 +187,19 @@ namespace
 	 * the flat ribbon a laser scan returns over water — is level at every offset, and
 	 * taking the first of those puts the channel against the edge of its own profile
 	 * rather than under the line it was traced along.
+	 *
+	 * Level to a tolerance rather than exactly, or the tie-break only fires on beds
+	 * that happen to be bit-identical: a flat bed the solve has worked over is level
+	 * to the last digit of a float and no further, and taking that digit seriously
+	 * puts the deep point wherever the noise is lowest.
 	 */
 	bool IsLower(const float* AltitudeMeters, int32 CandidateOffset, int32 CurrentOffset)
 	{
-		if (AltitudeMeters[CandidateOffset] < AltitudeMeters[CurrentOffset])
+		const double DropMeters =
+			static_cast<double>(AltitudeMeters[CurrentOffset]) - AltitudeMeters[CandidateOffset];
+		if (FMath::Abs(DropMeters) > LevelBedToleranceMeters)
 		{
-			return true;
-		}
-		if (AltitudeMeters[CandidateOffset] > AltitudeMeters[CurrentOffset])
-		{
-			return false;
+			return DropMeters > 0.0;
 		}
 		return FMath::Abs(CandidateOffset - MassifChannelProfileMidOffset)
 			< FMath::Abs(CurrentOffset - MassifChannelProfileMidOffset);
@@ -210,8 +282,12 @@ FMassifSectionFlow MassifChannelHydraulics::MeasureSection(
 		return Section;
 	}
 
+	int32 FirstOffset = Section.FirstWetOffset;
+	int32 LastOffset = Section.LastWetOffset;
+	ExtendOverTheBank(Profile, SurfaceAltitudeMeters, FirstOffset, LastOffset);
+
 	const double SpacingMeters = Profile.OffsetSpacingMeters();
-	for (int32 OffsetIndex = Section.FirstWetOffset; OffsetIndex < Section.LastWetOffset; ++OffsetIndex)
+	for (int32 OffsetIndex = FirstOffset; OffsetIndex < LastOffset; ++OffsetIndex)
 	{
 		const double LeftBedMeters = Profile.BedAltitudeMeters[OffsetIndex];
 		const double RightBedMeters = Profile.BedAltitudeMeters[OffsetIndex + 1];

@@ -443,6 +443,7 @@ namespace
 		TArray<double> OffsetRates;
 		TArray<double> ChangeMeters;
 		TArray<double> SmoothedMeters;
+		TArray<float> DiffusedBedMeters;
 
 		void Prepare(
 			const IMassifBedMaterialSource& BedMaterial, const FMassifChannelCarveParams& Params,
@@ -455,6 +456,7 @@ namespace
 			OffsetRates.SetNumZeroed(Nodes.Num() * MassifChannelProfileOffsetCount);
 			ChangeMeters.SetNumZeroed(Nodes.Num());
 			SmoothedMeters.SetNumZeroed(Nodes.Num());
+			DiffusedBedMeters.SetNumZeroed(Nodes.Num() * MassifChannelProfileOffsetCount);
 		}
 
 		TArrayView<double> RatesAt(int32 NodeIndex)
@@ -586,6 +588,76 @@ namespace
 		}
 	}
 
+	/** The bed this station would relax to, held against the pre-sweep beds either side. */
+	void DiffuseStationBed(
+		const TArray<FMassifRiverNode>& Nodes, const FMassifChannelCarveParams& Params, int32 NodeIndex,
+		FReachScratch& InOutScratch)
+	{
+		const float* AboveMeters = Nodes[NodeIndex - 1].Profile.BedAltitudeMeters;
+		const float* HereMeters = Nodes[NodeIndex].Profile.BedAltitudeMeters;
+		const float* BelowMeters = Nodes[NodeIndex + 1].Profile.BedAltitudeMeters;
+		float* OutMeters = InOutScratch.DiffusedBedMeters.GetData() + NodeIndex * MassifChannelProfileOffsetCount;
+
+		for (int32 OffsetIndex = 0; OffsetIndex < MassifChannelProfileOffsetCount; ++OffsetIndex)
+		{
+			const double CurvatureMeters = static_cast<double>(AboveMeters[OffsetIndex])
+				- 2.0 * HereMeters[OffsetIndex] + BelowMeters[OffsetIndex];
+			OutMeters[OffsetIndex] =
+				static_cast<float>(HereMeters[OffsetIndex] + Params.BedDiffusion * CurvatureMeters);
+		}
+	}
+
+	void ApplyDiffusedBed(
+		FMassifChannelProfile& InOutProfile, const FMassifChannelCarveParams& Params, int32 NodeIndex,
+		const FReachScratch& Scratch)
+	{
+		const float* DiffusedMeters =
+			Scratch.DiffusedBedMeters.GetData() + NodeIndex * MassifChannelProfileOffsetCount;
+		FMemory::Memcpy(
+			InOutProfile.BedAltitudeMeters, DiffusedMeters,
+			MassifChannelProfileOffsetCount * sizeof(float));
+		HoldBedInsideGround(InOutProfile, Params.MaxIncisionBelowGroundMeters);
+	}
+
+	/**
+	 * Relaxes the bed along the reach, the way the repose sweep relaxes it across.
+	 *
+	 * The threshold of motion is a cliff: a station a hair under it carries nothing
+	 * and hands nothing on, and the station below carries what it can out of its own
+	 * bed instead. Along a uniform reach every station has the same geometry, so
+	 * which side of the threshold each one lands on is decided by the last digit of
+	 * a float altitude over a kilometre of relief — and the bed comes out as a row
+	 * of pits between stations that never moved at all.
+	 *
+	 * A pit one station wide is a bed slope no gravel holds against the water
+	 * running over it, whatever put it there. Diffusion takes those out over the
+	 * sweeps while leaving a wedge that spans many stations, because it works on the
+	 * curvature and a wedge has almost none.
+	 *
+	 * Jacobi, so a station's move does not depend on which end the sweep started
+	 * from, and per offset, so the shape across the channel is carried along rather
+	 * than averaged away.
+	 */
+	void DiffuseBedAlongReach(
+		TArray<FMassifRiverNode>& InOutNodes, const FMassifChannelCarveParams& Params,
+		FReachScratch& InOutScratch)
+	{
+		const int32 LastIndex = InOutNodes.Num() - 1;
+		if (LastIndex < 2 || Params.BedDiffusion <= 0.0)
+		{
+			return;
+		}
+
+		for (int32 NodeIndex = 1; NodeIndex < LastIndex; ++NodeIndex)
+		{
+			DiffuseStationBed(InOutNodes, Params, NodeIndex, InOutScratch);
+		}
+		for (int32 NodeIndex = 1; NodeIndex < LastIndex; ++NodeIndex)
+		{
+			ApplyDiffusedBed(InOutNodes[NodeIndex].Profile, Params, NodeIndex, InOutScratch);
+		}
+	}
+
 	/**
 	 * One sweep of the reach: measure it all, work out what each station owes the
 	 * one below, then move every bed at once.
@@ -603,6 +675,7 @@ namespace
 		MeasureBedChange(Params, InOutScratch);
 		SmoothBedChange(InOutScratch, Params.ChangeSmoothingPasses);
 		ShapeReachBed(InOutReach.Nodes, Params, InOutScratch);
+		DiffuseBedAlongReach(InOutReach.Nodes, Params, InOutScratch);
 	}
 
 	void CarveReach(

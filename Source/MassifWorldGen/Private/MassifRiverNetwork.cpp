@@ -182,17 +182,51 @@ namespace
 
 namespace
 {
-	/** Catmull-Rom through four nodes, clamped at the ends so the curve keeps them. */
+	/** Chord between two nodes, floored so a reach that stands still has a length to divide by. */
+	double ChordMeters(TArrayView<const FMassifRiverNode> Nodes, int32 FromIndex, int32 ToIndex)
+	{
+		const double LengthMeters =
+			(Nodes[ToIndex].PositionMeters - Nodes[FromIndex].PositionMeters).Length();
+		return FMath::Max(LengthMeters, UE_DOUBLE_KINDA_SMALL_NUMBER);
+	}
+
+	/**
+	 * Which way the line runs at one node, per metre run.
+	 *
+	 * Per metre rather than per span. Simplification leaves spans of very unequal
+	 * length, and a tangent taken as half the vector between the two neighbours is
+	 * a length belonging to the long span applied to the short one: the curve over
+	 * the short span swings clear of the corridor its own two ends stand in and
+	 * comes back, and the station spacing is measured on the chord so nothing
+	 * subdivides the excursion.
+	 *
+	 * Clamped at the ends, where the one secant there is cannot overshoot.
+	 */
+	FVector2d SplineTangent(TArrayView<const FMassifRiverNode> Nodes, int32 NodeIndex)
+	{
+		const int32 BeforeIndex = FMath::Max(NodeIndex - 1, 0);
+		const int32 AfterIndex = FMath::Min(NodeIndex + 1, Nodes.Num() - 1);
+		if (BeforeIndex == AfterIndex)
+		{
+			return FVector2d::ZeroVector;
+		}
+
+		const FVector2d RunMeters = Nodes[AfterIndex].PositionMeters - Nodes[BeforeIndex].PositionMeters;
+		const double AlongMeters =
+			ChordMeters(Nodes, BeforeIndex, NodeIndex) + ChordMeters(Nodes, NodeIndex, AfterIndex);
+		return RunMeters / AlongMeters;
+	}
+
+	/** Cubic Hermite over one span, on tangents scaled to that span's own length. */
 	FVector2d SplinePosition(TArrayView<const FMassifRiverNode> Nodes, int32 SpanIndex, double Fraction)
 	{
-		const FVector2d Before = Nodes[FMath::Max(SpanIndex - 1, 0)].PositionMeters;
-		const FVector2d Start = Nodes[SpanIndex].PositionMeters;
-		const FVector2d End = Nodes[SpanIndex + 1].PositionMeters;
-		const FVector2d After = Nodes[FMath::Min(SpanIndex + 2, Nodes.Num() - 1)].PositionMeters;
-
-		const FVector2d StartTangent = 0.5 * (End - Before);
-		const FVector2d EndTangent = 0.5 * (After - Start);
-		return FMath::CubicInterp(Start, StartTangent, End, EndTangent, Fraction);
+		const double SpanMeters = ChordMeters(Nodes, SpanIndex, SpanIndex + 1);
+		return FMath::CubicInterp(
+			Nodes[SpanIndex].PositionMeters,
+			SplineTangent(Nodes, SpanIndex) * SpanMeters,
+			Nodes[SpanIndex + 1].PositionMeters,
+			SplineTangent(Nodes, SpanIndex + 1) * SpanMeters,
+			Fraction);
 	}
 
 	/**
@@ -377,10 +411,18 @@ namespace
 		}
 	};
 
-	/** End points are kept exactly, so reaches still meet where they met before. */
+	/**
+	 * End points are kept exactly, so reaches still meet where they met before.
+	 *
+	 * Two nodes is resampled like any other count. Simplification measures how far
+	 * the line is moved and nothing else, so a reach that runs straight across the
+	 * map is kept as its two ends however long it is and however far it falls
+	 * between them — and left at two nodes, everything downstream reads that drop
+	 * as one linear ramp cut through whatever stands in the way.
+	 */
 	void SmoothReach(TArray<FMassifRiverNode>& Nodes, const FMassifRiverParams& Params)
 	{
-		if (Nodes.Num() < 3 || Params.SmoothingSpacingMeters <= 0.0)
+		if (Nodes.Num() < 2 || Params.SmoothingSpacingMeters <= 0.0)
 		{
 			return;
 		}

@@ -1,5 +1,6 @@
 #include "MassifChannelProfile.h"
 
+#include "MassifChannelHydraulics.h"
 #include "MassifRiverNetwork.h"
 #include "Misc/AutomationTest.h"
 #include "Tests/MassifTestChannel.h"
@@ -169,5 +170,44 @@ bool FChannelProfileDeterminismTest::RunTest(const FString& Parameters)
 	// a pure function of the section, so anything else is a dependence on how the
 	// reaches happened to be split across threads.
 	TestEqual(TEXT("The same section solves to the same channel"), StationsDisagreeing, 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FChannelProfileNarrowSectionTest,
+	"Massif.WorldGen.ChannelProfile.NarrowSection",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FChannelProfileNarrowSectionTest::RunTest(const FString& Parameters)
+{
+	// A trench cut into one offset and nothing either side of it, which is what a
+	// channel narrower than its own section is sampled at comes out as. The water
+	// stands inside the trench, so the only offset under the surface is its floor.
+	FMassifChannelProfile Profile;
+	Profile.HalfSpanMeters = 16.0;
+	for (int32 OffsetIndex = 0; OffsetIndex < MassifChannelProfileOffsetCount; ++OffsetIndex)
+	{
+		Profile.GroundAltitudeMeters[OffsetIndex] = 1000.0f;
+		Profile.BedAltitudeMeters[OffsetIndex] = 1000.0f;
+	}
+	Profile.BedAltitudeMeters[MassifChannelProfileMidOffset] = 999.0f;
+
+	const FMassifSectionFlow Section = MassifChannelHydraulics::MeasureSection(Profile, 999.5);
+
+	// The water's edge is where the bed crosses the surface, which is inside the
+	// two intervals either side of the floor rather than at a sample. Measured
+	// between wet samples alone there are none, and the section is a line: no area
+	// to pass the flow through and no width to draw.
+	TestTrue(TEXT("The section is wet"), Section.IsWet());
+	TestEqual(TEXT("The water stands half a metre over the floor"), Section.MaxDepthMeters, 0.5, 1.0e-9);
+	TestTrue(TEXT("The section has a width"), Section.TopWidthMeters > 0.0);
+	TestTrue(TEXT("The section has an area"), Section.AreaSquareMeters > 0.0);
+
+	// Two triangles back to back: the bed rises a metre over the one metre spacing,
+	// so the surface half a metre up reaches half an offset to each side.
+	const double ExpectedWidthMeters = Profile.OffsetSpacingMeters();
+	TestEqual(TEXT("The water reaches half an offset either side"),
+		Section.TopWidthMeters, ExpectedWidthMeters, 1.0e-9);
+	TestEqual(TEXT("The area is the triangle the two sides make"),
+		Section.AreaSquareMeters, 0.5 * ExpectedWidthMeters * Section.MaxDepthMeters, 1.0e-9);
 	return true;
 }
