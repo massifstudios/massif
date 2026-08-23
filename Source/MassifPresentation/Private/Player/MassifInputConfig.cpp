@@ -71,6 +71,7 @@ void UMassifInputConfig::BuildActions()
 	ToggleViewAction = MakeAction(this, TEXT("IA_ToggleView"), EInputActionValueType::Boolean);
 
 	ToggleViewPickerAction = MakeAction(this, TEXT("IA_ToggleViewPicker"), EInputActionValueType::Boolean);
+	ToggleSettingsAction = MakeAction(this, TEXT("IA_ToggleSettings"), EInputActionValueType::Boolean);
 }
 
 void UMassifInputConfig::BuildCommonContext()
@@ -78,6 +79,7 @@ void UMassifInputConfig::BuildCommonContext()
 	CommonContext = NewObject<UInputMappingContext>(this, TEXT("IMC_Common"));
 	CommonContext->MapKey(ToggleViewAction, EKeys::V);
 	CommonContext->MapKey(ToggleViewPickerAction, EKeys::One);
+	CommonContext->MapKey(ToggleSettingsAction, EKeys::F1);
 }
 
 void UMassifInputConfig::BuildFlyContext()

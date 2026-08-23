@@ -2,6 +2,7 @@
 
 #include "Debug/MassifDebugChannelView.h"
 #include "Debug/MassifViewPicker.h"
+#include "UI/MassifEnvironmentSettingsScreen.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "MassifGameMode.h"
@@ -90,6 +91,14 @@ void AMassifPlayerController::SetupInputComponent()
 
 	Input->BindAction(InputConfig->ToggleViewPickerAction, ETriggerEvent::Started, this,
 		&AMassifPlayerController::ToggleViewPicker);
+
+	Input->BindAction(InputConfig->ToggleSettingsAction, ETriggerEvent::Started, this,
+		&AMassifPlayerController::ToggleSettings);
+}
+
+void AMassifPlayerController::ToggleSettings()
+{
+	MassifEnvironmentSettingsScreen::Toggle(GetWorld());
 }
 
 void AMassifPlayerController::ToggleViewPicker()

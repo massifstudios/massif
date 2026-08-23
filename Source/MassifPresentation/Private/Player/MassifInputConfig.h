@@ -57,6 +57,10 @@ public:
 	UPROPERTY()
 	TObjectPtr<UInputAction> ToggleViewPickerAction;
 
+	/** Shows and hides the environment simulation settings screen. */
+	UPROPERTY()
+	TObjectPtr<UInputAction> ToggleSettingsAction;
+
 	UPROPERTY()
 	TObjectPtr<UInputMappingContext> CommonContext;
 

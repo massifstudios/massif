@@ -71,6 +71,9 @@ private:
 	/** Number key handler: switches the terrain to that channel's view, or off for 0. */
 	/** Shows and hides the view picker, and gives the cursor back when it goes away. */
 	void ToggleViewPicker();
+
+	/** Shows and hides the environment settings screen, which takes the mouse while it is up. */
+	void ToggleSettings();
 	void EnterWalkMode();
 	void EnterFlyMode();
 
