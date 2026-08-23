@@ -33,6 +33,15 @@ struct FMassifChannelProfile
 	/** Ground across the flow, left bank first, as the elevation model has it. */
 	float GroundAltitudeMeters[MassifChannelProfileOffsetCount] = {};
 
+	/**
+	 * The bed the water actually runs on: the ground with the channel cut into it.
+	 *
+	 * Never above the ground, and equal to it outside the channel. This is the
+	 * surface the terrain is shaped to and the one every hydraulic measure is taken
+	 * against — the ground is kept beside it only as what the cut started from.
+	 */
+	float BedAltitudeMeters[MassifChannelProfileOffsetCount] = {};
+
 	/** Where the water reaches across the section, as offset indices with a fraction either side. */
 	double WettedWidthMeters = 0.0;
 
