@@ -40,6 +40,16 @@ struct FMassifProcessDeclaration
 	/** Dotted and stable, e.g. "Wind.TerrainExposure". Derives the process's random streams. */
 	FName Name;
 
+	/**
+	 * What to call this in front of a player, e.g. "Wind Simulation".
+	 *
+	 * Declared here rather than looked up by a settings screen, for the same reason
+	 * a channel carries its own unit and description: a system added to the graph
+	 * has to appear everywhere that lists systems without anything downstream being
+	 * taught its name (ARCHITECTURE §5.7). Empty falls back to the process name.
+	 */
+	FString DisplayName;
+
 	/** Channels read. Reading anything else is rejected, so the graph's edges are the real ones. */
 	TArray<FName> InputChannels;
 

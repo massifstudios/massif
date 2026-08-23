@@ -293,6 +293,7 @@ namespace
 		{
 			FMassifProcessDeclaration Declaration;
 			Declaration.Name = MassifEnvironmentProcesses::Altitude();
+			Declaration.DisplayName = TEXT("Terrain Sampling");
 			Declaration.SupportedFidelities = {EMassifFidelity::Standard};
 			Declaration.OutputChannels.Add(MakeChannel(
 				MassifEnvironmentChannels::Altitude(), EMassifChannelEncoding::Float64, Params.CellSizeMeters,
@@ -338,6 +339,7 @@ namespace
 		{
 			FMassifProcessDeclaration Declaration;
 			Declaration.Name = MassifEnvironmentProcesses::DepressionFill();
+			Declaration.DisplayName = TEXT("Depression Filling");
 			Declaration.InputChannels = {MassifEnvironmentChannels::Altitude()};
 			Declaration.SupportedFidelities = {EMassifFidelity::Standard};
 			Declaration.OutputChannels.Add(MakeChannel(
@@ -375,6 +377,7 @@ namespace
 		{
 			FMassifProcessDeclaration Declaration;
 			Declaration.Name = MassifEnvironmentProcesses::StandingWater();
+			Declaration.DisplayName = TEXT("Standing Water");
 			Declaration.InputChannels = {
 				MassifEnvironmentChannels::Altitude(), MassifEnvironmentChannels::FilledAltitude()};
 			Declaration.SupportedFidelities = {EMassifFidelity::Standard};
@@ -421,6 +424,7 @@ namespace
 		{
 			FMassifProcessDeclaration Declaration;
 			Declaration.Name = MassifEnvironmentProcesses::FlowRouting();
+			Declaration.DisplayName = TEXT("Water Flow Routing");
 			Declaration.InputChannels = {MassifEnvironmentChannels::FilledAltitude()};
 			Declaration.SupportedFidelities = {EMassifFidelity::Standard};
 			Declaration.OutputChannels.Add(MakeChannel(
@@ -468,6 +472,7 @@ namespace
 		{
 			FMassifProcessDeclaration Declaration;
 			Declaration.Name = MassifEnvironmentProcesses::SoilDeposition();
+			Declaration.DisplayName = TEXT("Soil Erosion");
 			Declaration.InputChannels = {MassifEnvironmentChannels::FilledAltitude()};
 			Declaration.SupportedFidelities = {EMassifFidelity::Standard};
 			Declaration.OutputChannels.Add(MakeChannel(
@@ -508,6 +513,7 @@ namespace
 		{
 			FMassifProcessDeclaration Declaration;
 			Declaration.Name = MassifEnvironmentProcesses::SoilDepth();
+			Declaration.DisplayName = TEXT("Soil Depth");
 			Declaration.InputChannels = {MassifEnvironmentChannels::SoilDeposition()};
 			Declaration.OptionalInputChannels = {MassifEnvironmentChannels::VegetationCover()};
 			Declaration.SupportedFidelities = {EMassifFidelity::Standard};
@@ -573,6 +579,7 @@ namespace
 		{
 			FMassifProcessDeclaration Declaration;
 			Declaration.Name = MassifEnvironmentProcesses::Wetness();
+			Declaration.DisplayName = TEXT("Ground Wetness");
 			Declaration.InputChannels = {
 				MassifEnvironmentChannels::Altitude(), MassifEnvironmentChannels::FlowAccumulation(),
 				MassifEnvironmentChannels::StandingWaterDepth()};
@@ -631,6 +638,7 @@ namespace
 		{
 			FMassifProcessDeclaration Declaration;
 			Declaration.Name = MassifEnvironmentProcesses::Infiltration();
+			Declaration.DisplayName = TEXT("Infiltration");
 			Declaration.OptionalInputChannels = {
 				MassifEnvironmentChannels::SoilDepth(), MassifEnvironmentChannels::SoilYield()};
 			Declaration.SupportedFidelities = {EMassifFidelity::Cheap, EMassifFidelity::Standard};
@@ -807,6 +815,7 @@ namespace
 		{
 			FMassifProcessDeclaration Declaration;
 			Declaration.Name = MassifEnvironmentProcesses::Springs();
+			Declaration.DisplayName = TEXT("Springs");
 			Declaration.InputChannels = {
 				MassifEnvironmentChannels::Altitude(), MassifEnvironmentChannels::FlowAccumulation(),
 				MassifEnvironmentChannels::Infiltration()};
@@ -989,6 +998,7 @@ namespace
 		{
 			FMassifProcessDeclaration Declaration;
 			Declaration.Name = MassifEnvironmentProcesses::SeasonalFlow();
+			Declaration.DisplayName = TEXT("Seasonal Discharge");
 			Declaration.InputChannels = {
 				MassifEnvironmentChannels::FlowAccumulation(), MassifEnvironmentChannels::Infiltration()};
 			Declaration.OptionalInputChannels = {
@@ -1159,7 +1169,7 @@ void MassifRegisterEnvironmentProcesses(
 	MassifRegisterEnvironmentProcesses(Scheduler, Params);
 }
 
-TUniquePtr<FMassifEnvironmentScheduler> MassifBuildEnvironment(
+TUniquePtr<FMassifEnvironmentScheduler> MassifPrepareEnvironment(
 	TSharedRef<const IMassifElevationSource> Elevation,
 	const FMassifGeoreference& Georeference,
 	uint32 MasterSeed,
@@ -1171,6 +1181,22 @@ TUniquePtr<FMassifEnvironmentScheduler> MassifBuildEnvironment(
 	MassifRegisterEnvironmentProcesses(*Scheduler, Params);
 
 	if (!Scheduler->BuildSchedule(OutError))
+	{
+		return nullptr;
+	}
+	return Scheduler;
+}
+
+TUniquePtr<FMassifEnvironmentScheduler> MassifBuildEnvironment(
+	TSharedRef<const IMassifElevationSource> Elevation,
+	const FMassifGeoreference& Georeference,
+	uint32 MasterSeed,
+	const FMassifEnvironmentBakeParams& Params,
+	FString& OutError)
+{
+	TUniquePtr<FMassifEnvironmentScheduler> Scheduler =
+		MassifPrepareEnvironment(Elevation, Georeference, MasterSeed, Params, OutError);
+	if (!Scheduler.IsValid())
 	{
 		return nullptr;
 	}

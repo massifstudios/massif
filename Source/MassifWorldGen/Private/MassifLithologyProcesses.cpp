@@ -347,6 +347,7 @@ FMassifProcessDeclaration FLithologyProcess::Declare() const
 {
 	FMassifProcessDeclaration Declaration;
 	Declaration.Name = MassifEnvironmentProcesses::Lithology();
+	Declaration.DisplayName = TEXT("Bedrock and Scree");
 
 	// Both optional: rock is not made by weather, and a graph with neither a climate
 	// nor a sampled terrain in it still has rock under it.

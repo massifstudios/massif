@@ -523,6 +523,7 @@ FMassifProcessDeclaration FWindFieldProcess::Declare() const
 {
 	FMassifProcessDeclaration Declaration;
 	Declaration.Name = MassifEnvironmentProcesses::Wind();
+	Declaration.DisplayName = TEXT("Wind Simulation");
 	Declaration.InputChannels = {MassifEnvironmentChannels::Altitude()};
 
 	// The catchment above a point is what cold air drains off, and the hollow it

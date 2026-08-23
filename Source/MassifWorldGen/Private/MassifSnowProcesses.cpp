@@ -930,6 +930,7 @@ FMassifProcessDeclaration FSnowpackProcess::Declare() const
 {
 	FMassifProcessDeclaration Declaration;
 	Declaration.Name = MassifEnvironmentProcesses::Snowpack();
+	Declaration.DisplayName = TEXT("Snowpack");
 	Declaration.InputChannels = {
 		MassifEnvironmentChannels::Altitude(), MassifEnvironmentChannels::AnnualPrecipitation(),
 		MassifEnvironmentChannels::SeasonalTemperature(), MassifEnvironmentChannels::DirectInsolation(),

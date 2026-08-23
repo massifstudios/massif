@@ -511,12 +511,13 @@ void FMassifEnvironmentScheduler::SetGpuEnabled(bool bEnabled)
 	bGpuEnabled = bEnabled;
 }
 
-void FMassifEnvironmentScheduler::MarkDirty(FName ProcessName)
+TSet<int32> FMassifEnvironmentScheduler::CollectAffectedGroups(FName ProcessName) const
 {
+	TSet<int32> Reached;
 	const int32 NodeIndex = FindProcessIndex(ProcessName);
 	if (NodeIndex == INDEX_NONE || Nodes[NodeIndex].GroupIndex == INDEX_NONE)
 	{
-		return;
+		return Reached;
 	}
 
 	TArray<int32> Pending;
@@ -524,12 +525,51 @@ void FMassifEnvironmentScheduler::MarkDirty(FName ProcessName)
 	while (Pending.Num() > 0)
 	{
 		const int32 GroupIndex = Pending.Pop();
-		if (!GroupIsDirty[GroupIndex])
+		if (!Reached.Contains(GroupIndex))
 		{
-			GroupIsDirty[GroupIndex] = true;
+			Reached.Add(GroupIndex);
 			Pending.Append(DependentsOfGroup[GroupIndex].Array());
 		}
 	}
+	return Reached;
+}
+
+void FMassifEnvironmentScheduler::MarkDirty(FName ProcessName)
+{
+	for (int32 GroupIndex : CollectAffectedGroups(ProcessName))
+	{
+		GroupIsDirty[GroupIndex] = true;
+	}
+}
+
+TArray<FName> FMassifEnvironmentScheduler::GetAffectedProcesses(FName ProcessName) const
+{
+	const TSet<int32> Affected = CollectAffectedGroups(ProcessName);
+
+	TArray<FName> Names;
+	for (FName Name : GetExecutionOrder())
+	{
+		const int32 NodeIndex = FindProcessIndex(Name);
+		if (Affected.Contains(Nodes[NodeIndex].GroupIndex))
+		{
+			Names.Add(Name);
+		}
+	}
+	return Names;
+}
+
+FString FMassifEnvironmentScheduler::GetDisplayName(FName ProcessName) const
+{
+	const int32 NodeIndex = FindProcessIndex(ProcessName);
+	if (NodeIndex == INDEX_NONE)
+	{
+		return ProcessName.ToString();
+	}
+	if (Nodes[NodeIndex].Declaration.DisplayName.IsEmpty())
+	{
+		return ProcessName.ToString();
+	}
+	return Nodes[NodeIndex].Declaration.DisplayName;
 }
 
 void FMassifEnvironmentScheduler::MarkAllDirty()

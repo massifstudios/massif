@@ -512,6 +512,7 @@ FMassifProcessDeclaration FInsolationProcess::Declare() const
 {
 	FMassifProcessDeclaration Declaration;
 	Declaration.Name = MassifEnvironmentProcesses::Insolation();
+	Declaration.DisplayName = TEXT("Sunlight and Shadow");
 	Declaration.InputChannels = {MassifEnvironmentChannels::Altitude()};
 	Declaration.SupportedFidelities = {
 		EMassifFidelity::Cheap, EMassifFidelity::Standard, EMassifFidelity::Reference};

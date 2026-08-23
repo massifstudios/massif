@@ -353,6 +353,7 @@ FMassifProcessDeclaration FVegetationProcess::Declare() const
 {
 	FMassifProcessDeclaration Declaration;
 	Declaration.Name = MassifEnvironmentProcesses::Vegetation();
+	Declaration.DisplayName = TEXT("Vegetation");
 	Declaration.InputChannels = {
 		MassifEnvironmentChannels::MeanTemperature(), MassifEnvironmentChannels::Wetness(),
 		MassifEnvironmentChannels::SoilDepth()};

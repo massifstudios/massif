@@ -86,6 +86,21 @@ public:
 	void MarkDirty(FName ProcessName);
 	void MarkAllDirty();
 
+	/**
+	 * Every process a change to this one would re-solve, itself included, in
+	 * execution order.
+	 *
+	 * The same walk MarkDirty makes, answered instead of applied, so a settings
+	 * screen showing what a change costs cannot drift from what the change actually
+	 * does. Covers the rest of a feedback group as well as everything downstream:
+	 * where the graph found wind and vegetation to be one loop, changing either
+	 * re-runs both.
+	 */
+	TArray<FName> GetAffectedProcesses(FName ProcessName) const;
+
+	/** What to call the process in front of a player. The process name where it declared nothing. */
+	FString GetDisplayName(FName ProcessName) const;
+
 	/** Runs every dirty group in schedule order. */
 	void Execute();
 
@@ -154,6 +169,9 @@ private:
 		/** Diagnostic, for the inspector. Never read by a solve. */
 		double LastExecutionSeconds = 0.0;
 	};
+
+	/** Groups a change to the process reaches: its own, and everything downstream of it. */
+	TSet<int32> CollectAffectedGroups(FName ProcessName) const;
 
 	bool ValidateNames(FString& OutError) const;
 	bool MapProducers(TMap<FName, int32>& OutProducerOfChannel, FString& OutError) const;

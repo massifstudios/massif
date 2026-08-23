@@ -197,6 +197,7 @@ FMassifProcessDeclaration FTemperatureProcess::Declare() const
 {
 	FMassifProcessDeclaration Declaration;
 	Declaration.Name = MassifEnvironmentProcesses::Temperature();
+	Declaration.DisplayName = TEXT("Ground Temperature");
 	Declaration.InputChannels = {
 		MassifEnvironmentChannels::Altitude(), MassifEnvironmentChannels::FilledAltitude(),
 		MassifEnvironmentChannels::AnnualInsolation()};
@@ -310,6 +311,7 @@ FMassifProcessDeclaration FSeasonalTemperatureProcess::Declare() const
 {
 	FMassifProcessDeclaration Declaration;
 	Declaration.Name = MassifEnvironmentProcesses::SeasonalClimate();
+	Declaration.DisplayName = TEXT("Seasonal Climate");
 	Declaration.InputChannels = {MassifEnvironmentChannels::MeanTemperature()};
 
 	// Optional, so the temperature still solves in a graph with no snowpack in it:

@@ -326,6 +326,7 @@ FMassifProcessDeclaration FPrecipitationProcess::Declare() const
 {
 	FMassifProcessDeclaration Declaration;
 	Declaration.Name = MassifEnvironmentProcesses::Precipitation();
+	Declaration.DisplayName = TEXT("Rain and Snowfall");
 	Declaration.InputChannels = {
 		MassifEnvironmentChannels::Altitude(), MassifEnvironmentChannels::WindField(),
 		MassifEnvironmentChannels::MeanTemperature(), MassifEnvironmentChannels::SeasonalTemperature()};

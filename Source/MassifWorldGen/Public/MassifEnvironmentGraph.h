@@ -91,6 +91,20 @@ MASSIFWORLDGEN_API void MassifRegisterAltitudeProcess(
 MASSIFWORLDGEN_API void MassifRegisterWaterBalanceProcesses(
 	FMassifEnvironmentScheduler& Scheduler, const FMassifEnvironmentBakeParams& Params);
 
+/**
+ * Registers the standard processes and orders them, without solving.
+ *
+ * For a caller that has fidelities to set first: a level set after the solve
+ * dirties the graph and runs the whole thing a second time. Null if the schedule
+ * was refused.
+ */
+MASSIFWORLDGEN_API TUniquePtr<FMassifEnvironmentScheduler> MassifPrepareEnvironment(
+	TSharedRef<const IMassifElevationSource> Elevation,
+	const FMassifGeoreference& Georeference,
+	uint32 MasterSeed,
+	const FMassifEnvironmentBakeParams& Params,
+	FString& OutError);
+
 /** Registers the standard processes, schedules them and runs them. Null if the schedule was refused. */
 MASSIFWORLDGEN_API TUniquePtr<FMassifEnvironmentScheduler> MassifBuildEnvironment(
 	TSharedRef<const IMassifElevationSource> Elevation,
