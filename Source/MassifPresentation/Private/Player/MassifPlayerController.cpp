@@ -3,6 +3,7 @@
 #include "Debug/MassifDebugChannelView.h"
 #include "Debug/MassifViewPicker.h"
 #include "UI/MassifEnvironmentSettingsScreen.h"
+#include "UI/MassifWorldControlsPanel.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "MassifGameMode.h"
@@ -60,6 +61,7 @@ void AMassifPlayerController::BeginPlay()
 
 	FlyPawn = GetPawn();
 	ShowCursor();
+	MassifWorldControlsPanel::Show(GetWorld());
 }
 
 void AMassifPlayerController::ShowCursor()
