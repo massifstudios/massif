@@ -1,5 +1,6 @@
 #include "MassifFluidBake.h"
 
+#include "Async/ParallelFor.h"
 #include "HAL/PlatformTime.h"
 #include "MassifTerrainField.h"
 
@@ -444,10 +445,10 @@ namespace
 			InOutField.Reached.GetData(), InOutField.Seeded.GetData(), InOutField.Seeded.Num());
 		for (int32 Layer = 0; Layer < LayerCount; ++Layer)
 		{
-			for (int32 Z = 0; Z < InOutField.Counts.Z; ++Z)
+			ParallelFor(InOutField.Counts.Z, [&InOutField](int32 Z)
 			{
 				ExtrapolateLayerAt(InOutField, Z);
-			}
+			});
 			Swap(InOutField.Values, InOutField.NextValues);
 			Swap(InOutField.Reached, InOutField.NextReached);
 		}
@@ -463,10 +464,10 @@ namespace
 	/** A cell is solid under the ground, fluid where a particle sits in it, and air otherwise. */
 	void MarkCells(FFluidState& InOutState)
 	{
-		for (int32 Z = 0; Z < InOutState.CellCounts.Z; ++Z)
+		ParallelFor(InOutState.CellCounts.Z, [&InOutState](int32 Z)
 		{
 			MarkSolidLayer(InOutState, Z);
-		}
+		});
 		for (const FVector3f& PositionMeters : InOutState.PositionsMeters)
 		{
 			MarkFluidAt(InOutState, FVector(PositionMeters));
@@ -552,10 +553,10 @@ namespace
 	void MeasureDivergence(FFluidState& InOutState)
 	{
 		const double Scale = 1.0 / InOutState.CellSizeMeters;
-		for (int32 Z = 0; Z < InOutState.CellCounts.Z; ++Z)
+		ParallelFor(InOutState.CellCounts.Z, [&InOutState, Scale](int32 Z)
 		{
 			MeasureDivergenceInLayer(InOutState, Z, Scale);
-		}
+		});
 	}
 
 	void MeasureDivergenceInLayer(FFluidState& InOutState, int32 Z, double Scale)
@@ -659,8 +660,9 @@ namespace
 	/**
 	 * Jacobi rather than Gauss-Seidel: every cell reads the sweep before it and
 	 * none reads a neighbour this sweep already touched, so the result does not
-	 * depend on the order the grid is walked and the sweeps can be split across
-	 * threads without changing it.
+	 * depend on the order the grid is walked. That is what lets the sweep be split
+	 * across threads and still land on the same answer to the bit, which is the
+	 * whole reason the solve can be both threaded and deterministic.
 	 */
 	void SolvePressure(FFluidState& InOutState, const FMassifFluidBakeParams& Params)
 	{
@@ -670,10 +672,10 @@ namespace
 
 		for (int32 Iteration = 0; Iteration < Params.PressureIterations; ++Iteration)
 		{
-			for (int32 Z = 0; Z < InOutState.CellCounts.Z; ++Z)
+			ParallelFor(InOutState.CellCounts.Z, [&InOutState, SourceScale](int32 Z)
 			{
 				SweepPressureInLayer(InOutState, Z, SourceScale);
-			}
+			});
 			Swap(InOutState.Pressure, InOutState.NextPressure);
 		}
 	}
@@ -703,10 +705,10 @@ namespace
 	void SubtractPressureGradient(FFluidState& InOutState, const FMassifFluidBakeParams& Params)
 	{
 		const double Scale = Params.StepSeconds / InOutState.CellSizeMeters;
-		for (int32 Z = 0; Z < InOutState.CellCounts.Z; ++Z)
+		ParallelFor(InOutState.CellCounts.Z, [&InOutState, Scale](int32 Z)
 		{
 			SubtractPressureInLayer(InOutState, Z, Scale);
-		}
+		});
 		CloseSolidFaces(InOutState);
 	}
 
@@ -805,12 +807,13 @@ namespace
 	void StepParticles(
 		FFluidState& InOutState, const FMassifFluidBakeParams& Params, const FMassifFluidRegion& Region)
 	{
-		for (int32 ParticleIndex = 0; ParticleIndex < InOutState.PositionsMeters.Num(); ++ParticleIndex)
+		ParallelFor(InOutState.PositionsMeters.Num(),
+			[&InOutState, &Params, &Region](int32 ParticleIndex)
 		{
 			StepParticle(
 				InOutState, Params, Region, InOutState.PositionsMeters[ParticleIndex],
 				InOutState.VelocitiesMetersPerSecond[ParticleIndex]);
-		}
+		});
 	}
 
 	void StepRegion(

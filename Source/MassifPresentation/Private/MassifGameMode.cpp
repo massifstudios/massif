@@ -34,6 +34,7 @@
 #include "Player/MassifPlayerController.h"
 #include "Terrain/MassifTerrainManager.h"
 #include "UObject/SoftObjectPath.h"
+#include "Water/MassifFluidRegionManager.h"
 #include "Water/MassifRiverManager.h"
 
 namespace
@@ -117,6 +118,43 @@ namespace
 		Summary.MeanDepthMeters /= StationCount;
 		Summary.IncisionLimitFraction = static_cast<double>(LimitedCount) / StationCount;
 		return Summary;
+	}
+
+	/** The station carrying the most water in one reach, which is where its channel is widest. */
+	const FMassifRiverNode* BusiestNode(const FMassifRiverReach& Reach)
+	{
+		const FMassifRiverNode* Busiest = nullptr;
+		for (const FMassifRiverNode& Node : Reach.Nodes)
+		{
+			if (Busiest != nullptr
+				&& Node.DischargeCubicMetersPerSecond <= Busiest->DischargeCubicMetersPerSecond)
+			{
+				continue;
+			}
+			Busiest = &Node;
+		}
+		return Busiest;
+	}
+
+	/** The busiest station in the whole world, which is the one worth baking first. */
+	const FMassifRiverNode* BusiestNode(const FMassifRiverNetwork& Rivers)
+	{
+		const FMassifRiverNode* Busiest = nullptr;
+		for (const FMassifRiverReach& Reach : Rivers.GetReaches())
+		{
+			const FMassifRiverNode* Node = BusiestNode(Reach);
+			if (Node == nullptr)
+			{
+				continue;
+			}
+			if (Busiest != nullptr
+				&& Node->DischargeCubicMetersPerSecond <= Busiest->DischargeCubicMetersPerSecond)
+			{
+				continue;
+			}
+			Busiest = Node;
+		}
+		return Busiest;
 	}
 
 	/** Earth's surface gravity, 9.81 m/s down. */
@@ -342,6 +380,21 @@ void AMassifGameMode::BuildTerrainField(TSharedRef<const FMassifHeightmap> Heigh
 
 	UE_LOG(LogTemp, Display, TEXT("Terrain field: %.0f m across, %d channel segments cut into it"),
 		TerrainField->GetWorldSizeMeters(), RiverField->GetSegmentCount());
+
+	SpawnFluidRegion(Rivers.Get());
+}
+
+void AMassifGameMode::SpawnFluidRegion(const FMassifRiverNetwork& Rivers)
+{
+	const FMassifRiverNode* Node = BusiestNode(Rivers);
+	if (Node == nullptr)
+	{
+		return;
+	}
+
+	FluidRegionManager = GetWorld()->SpawnActor<AMassifFluidRegionManager>();
+	FluidRegionManager->Initialize(
+		TerrainField, Node->PositionMeters, Node->WaterSurfaceMeters, LoadRiverMaterial());
 }
 
 bool AMassifGameMode::BuildEnvironment(TSharedRef<const FMassifHeightmap> Heightmap)

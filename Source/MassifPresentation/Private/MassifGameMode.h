@@ -8,6 +8,7 @@ class AMassifDebugChannelView;
 class AMassifDaylightManager;
 class AMassifFogManager;
 class AMassifFoliageManager;
+class AMassifFluidRegionManager;
 class AMassifRiverManager;
 class AMassifTerrainManager;
 class FMassifEnvironmentScheduler;
@@ -62,6 +63,9 @@ private:
 
 	/** The elevation model with the solved rivers cut into it. Needs the environment to have run. */
 	void BuildTerrainField(TSharedRef<const FMassifHeightmap> Heightmap);
+
+	/** Puts the baked fluid region on the largest channel the world traced. */
+	void SpawnFluidRegion(const FMassifRiverNetwork& Rivers);
 	void SpawnEnvironmentActors();
 	void SpawnSunAndSky();
 	void SpawnAtmosphericHaze();
@@ -89,6 +93,9 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<AMassifRiverManager> RiverManager;
+
+	UPROPERTY()
+	TObjectPtr<AMassifFluidRegionManager> FluidRegionManager;
 
 	UPROPERTY()
 	TObjectPtr<AMassifDebugChannelView> DebugChannelView;
