@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "MassifChannelProfile.h"
+#include "MassifRiverNetwork.h"
 
 /**
  * What one cross-section carries with its water at a given level.
@@ -48,8 +49,26 @@ namespace MassifChannelHydraulics
 	constexpr double GravityMetersPerSecondSquared = 9.80665;
 	constexpr double WaterDensityKgPerCubicMeter = 1000.0;
 
+	/**
+	 * Distance from each station to the one above it. The head takes the distance to
+	 * the one below instead, so every entry is a real span and no caller has to
+	 * special-case the first.
+	 */
+	void MeasureStationSpans(const TArray<FMassifRiverNode>& Nodes, TArray<double>& OutSpanMeters);
+
 	/** Deepest offset of the bed: the thalweg the wetted run is grown out from. */
 	int32 FindThalwegOffset(const FMassifChannelProfile& Profile);
+
+	/**
+	 * The lowest of a section's offsets, and on a tie the one nearest the
+	 * centreline.
+	 *
+	 * The tie-break is what a section across level ground turns on. A valley floor,
+	 * or the flat ribbon a laser scan returns over water, is level at every offset:
+	 * taking the first of them puts the channel against the edge of its own profile
+	 * instead of under the line it was traced along.
+	 */
+	int32 FindLowestOffset(const float* AltitudeMeters);
 
 	FMassifSectionFlow MeasureSection(const FMassifChannelProfile& Profile, double SurfaceAltitudeMeters);
 
@@ -63,13 +82,12 @@ namespace MassifChannelHydraulics
 	 * The level at which the section carries the discharge — normal depth, solved
 	 * on the section's own shape rather than on a prismatic idealisation of it.
 	 *
-	 * Bisected over a fixed count rather than to a tolerance (ARCHITECTURE §4).
-	 * The ceiling is where the section stops being a channel: above it the water
-	 * is over the bank and the answer is a floodplain's, not this section's.
+	 * Bisected over a fixed count rather than to a tolerance (ARCHITECTURE §4),
+	 * between the thalweg and the ceiling below.
 	 */
 	double SolveSurfaceAltitudeMeters(
 		const FMassifChannelProfile& Profile, double Roughness, double EnergySlope,
-		double DischargeCubicMetersPerSecond, double CeilingAltitudeMeters, int32 IterationCount);
+		double DischargeCubicMetersPerSecond, double MinDepthMeters, int32 IterationCount);
 
 	/**
 	 * The lower of the two crests the water would spill over.
@@ -80,6 +98,18 @@ namespace MassifChannelHydraulics
 	 */
 	double BankCrestAltitudeMeters(const FMassifChannelProfile& Profile);
 
+	/**
+	 * As high as the water is allowed to stand: its own bank, or the minimum column
+	 * over the thalweg where the section has no bank to speak of.
+	 *
+	 * The bank is where the section stops being a channel — above it the water is on
+	 * a floodplain, and a floodplain is not what a cross-section can answer for. The
+	 * floor under that is what keeps a station on flat ground from having nowhere at
+	 * all to put its water: a section with no relief across it has its crest at its
+	 * own thalweg, and a solve bracketed between those two carries nothing.
+	 */
+	double SurfaceCeilingMeters(const FMassifChannelProfile& Profile, double MinDepthMeters);
+
 	double MeanSpeedMetersPerSecond(double DischargeCubicMetersPerSecond, double AreaSquareMeters);
 
 	/** Speed against the speed of a wave on water this deep on average across the section. */
@@ -87,4 +117,15 @@ namespace MassifChannelHydraulics
 
 	/** Bed shear under a column this deep running down a slope this steep. */
 	double ShearStressPascals(double DepthMeters, double EnergySlope);
+
+	/**
+	 * Measures the node's section at the surface it carries and hands the answer to
+	 * the node itself.
+	 *
+	 * Width, depth and speed leave as what fits the ground here, so everything that
+	 * already reads a node — the field, the terrain carve, the water mesh, the
+	 * masks — picks the section up without being taught about it. Every solve that
+	 * moves a bed or a surface ends by calling this, and so all of them agree.
+	 */
+	void ApplySectionToNode(FMassifRiverNode& InOutNode, double MinDepthMeters);
 }

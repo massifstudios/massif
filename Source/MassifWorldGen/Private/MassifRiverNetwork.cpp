@@ -716,6 +716,7 @@ namespace
 TSharedRef<const FMassifRiverNetwork> MassifBakeCpu::ExtractRivers(
 	const FMassifBakeGrid& Grid,
 	const IMassifElevationSource& Elevation,
+	const IMassifBedMaterialSource& BedMaterial,
 	const FMassifRiverParams& Params,
 	TArrayView<const double> Measured,
 	TArrayView<const double> Filled,
@@ -728,7 +729,10 @@ TSharedRef<const FMassifRiverNetwork> MassifBakeCpu::ExtractRivers(
 
 	// After the polylines are traced and resampled, so a section is taken across
 	// the line the water is actually drawn along rather than across the staircase
-	// the routing produced.
+	// the routing produced. Then the bed under that first fit is worked, and the
+	// water is put back on whatever the working left.
 	MassifSolveChannelProfiles(Elevation, Params.Channels, Reaches);
+	MassifCarveChannels(BedMaterial, Params.Carve, Reaches);
+	MassifSolveChannelFlow(Params.Flow, Reaches);
 	return FMassifRiverNetwork::Create(MoveTemp(Reaches));
 }

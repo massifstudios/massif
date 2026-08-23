@@ -180,43 +180,67 @@ ground it is in.
   raises the surface; the wetted edge sits where the profile crosses the solved
   surface; determinism hash over the profiles.
 
-### F2 — Channel carve
+### F2 — Channel carve *(landed)*
 
-`Hydrology.ChannelCarve`. Outputs `Water.BedAltitude`, `Water.BankHeight`.
+`MassifCarveChannels`, a free function over the reaches, with its own fidelity.
 
-- Sediment transport against the flow: shear stress from depth and slope,
-  entrainment above a threshold, deposition as capacity falls, bed updated by
-  Exner. Bank erosion on the outer bend, deposition on the inner.
-- `Geology.RockHardness` gates incision rate, so the lithology work already in
-  the graph reaches the channel.
-- **Off** is the current analytic hydraulic-geometry trench, which works on any
-  surface — so `Off` is a usable level on a diffusion map rather than a sheet of
-  water on flat ground. `MinCarveDepthMeters`, the hand-hack that puts a bed
-  under the Ötztal's flat laser ribbons, is deleted: the carve removes that
-  material because the physics says to, not because the format was known.
-- **Verify:** tests — a channel cut into an analytic tilted plane is deeper at
-  higher discharge and steeper slope; mass is conserved between eroded and
-  deposited volume; an outer bend erodes and the matching inner bend deposits;
-  determinism hash; `Off` reproduces today's trench exactly.
+- Meyer-Peter & Müller bedload from the shear each offset of the section is
+  under, differenced station to station and applied by Exner. Each station's
+  supply is what the station above it carries; a reach's head is fed at its own
+  capacity, so it is in balance and the rest grades to it.
+- Bend sort: the bed leans across the channel by Engelund's transverse slope, so
+  the deep point is thrown against the outer bank and a bar builds on the inner.
+- Bank slumping at the angle of repose, over the water and one offset past it.
+- `Geology.RockHardness`, through `IMassifBedMaterialSource`, gates the cut rate
+  and not the fill rate.
+- **Off** leaves the first fit's trench, which is a channel on any surface.
 
-### F3 — Channel flow
+### F3 — Channel flow *(landed)*
 
-`Hydrology.ChannelFlow`. Outputs `Water.Depth`, `Water.SurfaceAltitude`,
-`Water.Velocity` (vector2), `Water.Froude`.
+`MassifSolveChannelFlow`, likewise, replacing the surface handed down as a
+running minimum.
 
-- 2D shallow water over the carved bed, integrated to steady state at a fixed
-  step count.
-- Fidelity ladder: **Off** fills to the hydraulic depth (today's behaviour);
-  **Cheap** is Manning normal depth per cross-section, no time integration, which
-  already gives width and depth that vary with local slope and a wetted edge that
-  follows the real cross-section; **Standard** is the 2D solve, which adds
-  backwater above constrictions, pool-riffle sequences, steepening into drops and
-  wetted extent that responds to season; **Reference** runs the seasonal slices
-  rather than one representative discharge.
-- **Verify:** tests — a prismatic channel of known slope and roughness reproduces
-  the closed-form normal depth; discharge is conserved through a constriction;
-  water surface is monotone non-increasing downstream; the Froude number crosses
-  1 at a known drop; CPU determinism hash across runs.
+- **Off** keeps the measured surface. **Cheap** puts each station at its own
+  normal depth on its own section. **Standard** adds a friction-slope backwater
+  sweep from each reach's outlet upwards, so a pool fills above a constriction
+  and falls gently towards it instead of stepping down into it.
+- The surface never rises downstream and never goes over the lower bank of its
+  own section, which is what stops a channel becoming a sheet on a valley floor.
+- Two passes, because the slope a depth is solved against is a property of the
+  surface being solved for.
+
+**What they cost:** 1.6 s over 12k reaches on the Ötztal, against 25 s for the
+bake they read.
+
+**What went wrong, so it is not rediscovered:**
+
+- The carve froze the energy slope at the first fit's value. A trench that
+  deepens gains shear — the water in it gets deeper faster than it narrows — so
+  it cut until it hit a limit rather than until it was graded. The slope has to
+  be remeasured as the bed moves.
+- Applied station by station downstream, a station's supply depended on whether
+  the station above it had already been moved, and the reach grew a sawtooth of
+  alternating scour and fill. Measure the whole reach, then move every bed.
+- The bed change is paced by its own limiter wherever a station is far from
+  balance, which makes it a bang-bang controller with a limit cycle the size of
+  the limit. The limit is now well below what anything draws and the distance is
+  bought with sweeps.
+- `FindLowestOffset` took the first of several equal offsets, so on level ground
+  — a valley floor, or the flat ribbon a laser scan returns over water — every
+  channel was cut against the edge of its own section instead of under the line
+  it was traced along. Ties now go to the offset nearest the centreline. This was
+  most of what made the rivers read as lopsided blobs.
+- The bend sort rotated the section about the middle of the water, so the axis
+  followed the channel as the bend moved it, the lean was never reached, and the
+  channel walked out of the section over a hundred sweeps while the polyline
+  everything draws from stayed put. It rotates about the centreline.
+- The lean and the bank slumping work against each other, and left to run they
+  quarry the whole profile: the lean oversteepens the outer bank, the bank comes
+  down into the water, the lean takes it away again. Bounded by
+  `MaxBendReliefDepthFactor`, and by keeping slumping off the dry hillside.
+- Nothing bounded the wetted width once the first fit handed off, so the widest
+  channel went from 45 m to 66 m. The guard now lives on the section as
+  `MaxWettedWidthMeters` and every solve measures through it.
 
 ### F4 — Consumers rewired
 
@@ -268,18 +292,32 @@ none of them are this work.
 
 ## Open questions
 
-- **Where the solve is registered.** It is a pure function over the elevation
-  source and the network, like `MassifExtractRivers`, and its main output is not
-  a channel. The coarse `Water.*` channels are, and a process that wrote them
-  would have to run the solve a second time or read a result no channel carries.
-  Resolve before F3, not before F1 — F1 needs no answer.
+- **Where the solve is registered.** *Answered, for now:* nowhere. A process's
+  only output is a channel, and the corridor solve's output is per-station
+  cross-sections; a process that wrote coarse `Water.*` channels would have to
+  run the solve a second time or read a result no channel carries. The carve and
+  the flow are free functions like `MassifExtractRivers`, each with its own
+  `EMassifFidelity`, so the ladder survives and only the debug channel views are
+  lost. Teaching the framework about non-channel artifacts is the alternative and
+  is a larger change than either milestone.
 - **Station spacing and offset count.** 6 m stations and 33 offsets are a guess at
   what reads as a river.
-- **`MaxWettedWidthFactor` on the Ötztal.** F1 puts the widest channel in the
-  world at 45 m against a hydraulic-geometry width of 17 m for the same 12.8 m³/s.
-  A braided gravel flat does that, and so does a solve spilling across a flat
-  valley floor, and the two are not distinguishable from the number. Worth a look
-  before the guard is loosened or tightened.
+- **`MaxWettedWidthFactor`.** Tightened from 4 to 2 with the carve, which takes
+  the widest channel on the Ötztal from 66 m to 35 m against a hydraulic-geometry
+  width of 17 m for the same 12.8 m³/s. Still the single knob that decides
+  whether the trunk reads as a braided gravel flat or as water spilled across the
+  valley floor.
+- **A reach is fed only at its own head.** Nothing routes sediment between
+  reaches and nothing delivers it from the hillsides alongside, so a long reach
+  whose upper stations settle their load out starves every station below them,
+  and those take the difference from their own beds until they hit
+  `MaxIncisionBelowGroundMeters`. Ötztal reaches average 27 m, so it barely
+  shows there; it is plainly visible on a forty-station test reach.
+- **The bend on ground with no valley to hold it.** On dead-level ground the
+  outer side of a bend runs down to the incision backstop rather than settling
+  into an undercut bank against a bar. The deep point migrates the right way and
+  mirrors correctly, which is what `ChannelCarve.Bend` asserts; the shape of the
+  two banks is not yet something to assert.
 - **Confluences.** Two reaches meeting have overlapping corridors, and the water
   surface has to be single-valued there or it draws as two sheets in the same
   place. `FMassifRiverField` currently resolves this by taking the channel whose

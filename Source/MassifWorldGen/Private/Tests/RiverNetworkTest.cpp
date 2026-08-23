@@ -99,8 +99,9 @@ namespace
 		MassifRouteEvenRunoff(Grid, Params, Filled, Discharge);
 
 		const FMassifHeightmapElevationSource Elevation(MoveTemp(Heightmap));
+		const FMassifUniformBedMaterial BedMaterial;
 		return MassifBakeCpu::ExtractRivers(
-			Grid, Elevation, RiverParams, Measured, Filled, Accumulation, Discharge);
+			Grid, Elevation, BedMaterial, RiverParams, Measured, Filled, Accumulation, Discharge);
 	}
 
 	bool IsOnWorldBorder(FVector2d PositionMeters)

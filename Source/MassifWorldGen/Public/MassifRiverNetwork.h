@@ -1,6 +1,8 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "MassifChannelCarve.h"
+#include "MassifChannelFlow.h"
 #include "MassifChannelProfile.h"
 
 /**
@@ -74,6 +76,10 @@ struct FMassifRiverParams
 
 	/** How the ground across each station is read, and how the discharge is fitted into it. */
 	FMassifChannelSolveParams Channels;
+
+	/** How the bed under that first fit is then worked, and where the water settles over it. */
+	FMassifChannelCarveParams Carve;
+	FMassifChannelFlowParams Flow;
 };
 
 /** One point along a channel, with the channel's shape where it stands. */

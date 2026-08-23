@@ -6,6 +6,7 @@
 #include "MassifEnvironmentScheduler.h"
 
 class FMassifRiverNetwork;
+class IMassifBedMaterialSource;
 
 /**
  * Names of the channels the standard environment graph produces.
@@ -143,3 +144,12 @@ MASSIFWORLDGEN_API TSharedRef<const FMassifRiverNetwork> MassifExtractRivers(
 	const FMassifEnvironmentState& State,
 	const IMassifElevationSource& Elevation,
 	const FMassifRiverParams& Params);
+
+/**
+ * The rock a channel is cutting into, read off `Geology.RockHardness`.
+ *
+ * Uniform where nothing in the graph solved for rock, so the carve stands alone
+ * in a graph with no lithology in it rather than being unavailable there.
+ */
+MASSIFWORLDGEN_API TSharedRef<const IMassifBedMaterialSource> MassifMakeBedMaterial(
+	const FMassifEnvironmentState& State);

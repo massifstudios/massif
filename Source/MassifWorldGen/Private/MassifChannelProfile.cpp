@@ -42,7 +42,9 @@ namespace
 		const IMassifElevationSource& Elevation, const FMassifRiverNode& Node, FVector2d FlowDirection,
 		FMassifChannelProfile& OutProfile)
 	{
-		const FVector2d AcrossFlow(-FlowDirection.Y, FlowDirection.X);
+		// Towards the right bank, so an offset index runs the same way across the
+		// channel as the field's own across-fraction does.
+		const FVector2d AcrossFlow(FlowDirection.Y, -FlowDirection.X);
 		const double SpacingMeters =
 			FMath::Max(OutProfile.OffsetSpacingMeters(), Elevation.GetFinestSpacingMeters());
 
@@ -79,19 +81,6 @@ namespace
 		}
 	};
 
-	int32 FindLowestGroundOffset(const FMassifChannelProfile& Profile)
-	{
-		int32 DeepestOffset = 0;
-		for (int32 OffsetIndex = 1; OffsetIndex < MassifChannelProfileOffsetCount; ++OffsetIndex)
-		{
-			if (Profile.GroundAltitudeMeters[OffsetIndex] < Profile.GroundAltitudeMeters[DeepestOffset])
-			{
-				DeepestOffset = OffsetIndex;
-			}
-		}
-		return DeepestOffset;
-	}
-
 	/**
 	 * The offsets under the water, taken as the run around the deepest of them.
 	 *
@@ -103,7 +92,7 @@ namespace
 	FTrenchBand FindTrenchBand(const FMassifChannelProfile& Profile, double SurfaceMeters)
 	{
 		FTrenchBand Band;
-		Band.DeepestOffset = FindLowestGroundOffset(Profile);
+		Band.DeepestOffset = MassifChannelHydraulics::FindLowestOffset(Profile.GroundAltitudeMeters);
 		Band.LowestGroundMeters = Profile.GroundAltitudeMeters[Band.DeepestOffset];
 		if (Band.LowestGroundMeters > SurfaceMeters)
 		{
@@ -165,6 +154,22 @@ namespace
 		return false;
 	}
 
+	int32 OffsetCountForWidth(const FMassifChannelProfile& Profile, double WidthMeters)
+	{
+		return FMath::Clamp(
+			FMath::CeilToInt32(WidthMeters / Profile.OffsetSpacingMeters()) + 1,
+			2, MassifChannelProfileOffsetCount);
+	}
+
+	/** Widens the band about its own deepest point until it spans at least the width. */
+	void GrowBandToWidth(FTrenchBand& InOutBand, const FMassifChannelProfile& Profile, double WidthMeters)
+	{
+		const int32 TargetCount = OffsetCountForWidth(Profile, WidthMeters);
+		while (InOutBand.OffsetCount() < TargetCount && GrowShorterEnd(InOutBand))
+		{
+		}
+	}
+
 	/**
 	 * Holds the band inside a band of the width the discharge alone predicts.
 	 *
@@ -176,21 +181,15 @@ namespace
 		FTrenchBand& InOutBand, const FMassifChannelProfile& Profile, const FMassifChannelSolveParams& Params,
 		double HydraulicWidthMeters)
 	{
-		const double SpacingMeters = Profile.OffsetSpacingMeters();
-		const int32 MinOffsetCount = FMath::Clamp(
-			FMath::CeilToInt32(Params.MinWettedWidthFactor * HydraulicWidthMeters / SpacingMeters) + 1,
-			2, MassifChannelProfileOffsetCount);
 		const int32 MaxOffsetCount = FMath::Clamp(
-			FMath::FloorToInt32(Params.MaxWettedWidthFactor * HydraulicWidthMeters / SpacingMeters) + 1,
-			MinOffsetCount, MassifChannelProfileOffsetCount);
-
+			FMath::FloorToInt32(
+				Params.MaxWettedWidthFactor * HydraulicWidthMeters / Profile.OffsetSpacingMeters()) + 1,
+			2, MassifChannelProfileOffsetCount);
 		while (InOutBand.OffsetCount() > MaxOffsetCount)
 		{
 			DropFurtherEnd(InOutBand);
 		}
-		while (InOutBand.OffsetCount() < MinOffsetCount && GrowShorterEnd(InOutBand))
-		{
-		}
+		GrowBandToWidth(InOutBand, Profile, Params.MinWettedWidthFactor * HydraulicWidthMeters);
 	}
 
 	// -----------------------------------------------------------------------
@@ -250,7 +249,8 @@ namespace
 			CutTrench(InOutProfile, Band, MiddleMeters);
 			const FMassifSectionFlow Section =
 				MassifChannelHydraulics::MeasureSection(InOutProfile, SurfaceMeters);
-			if (MassifChannelHydraulics::ManningDischarge(Section, Params.Roughness, InOutProfile.EnergySlope)
+			if (MassifChannelHydraulics::ManningDischarge(
+					Section, InOutProfile.Roughness, InOutProfile.EnergySlope)
 				< DischargeCubicMetersPerSecond)
 			{
 				LowMeters = MiddleMeters;
@@ -276,44 +276,18 @@ namespace
 	void FallBackToHydraulicGeometry(
 		const FMassifChannelSolveParams& Params, const FMassifRiverNode& Node, FMassifChannelProfile& OutProfile)
 	{
-		OutProfile.WettedWidthMeters = Node.WidthMeters;
-		OutProfile.DepthMeters = FMath::Max(Node.DepthMeters, Params.MinDepthMeters);
-
 		FTrenchBand Band;
-		Band.DeepestOffset = FindLowestGroundOffset(OutProfile);
+		Band.DeepestOffset = MassifChannelHydraulics::FindLowestOffset(OutProfile.GroundAltitudeMeters);
 		Band.LowestGroundMeters = OutProfile.GroundAltitudeMeters[Band.DeepestOffset];
 		Band.FirstOffset = Band.DeepestOffset;
 		Band.LastOffset = Band.DeepestOffset;
-		ClampBandWidth(Band, OutProfile, Params, Node.WidthMeters);
-		CutTrench(OutProfile, Band, OutProfile.DepthMeters);
+		GrowBandToWidth(Band, OutProfile, Node.WidthMeters);
 
-		// The round trench again: two thirds of the box it sits in.
-		OutProfile.FlowAreaSquareMeters =
-			(2.0 / 3.0) * OutProfile.WettedWidthMeters * OutProfile.DepthMeters;
-		OutProfile.SpeedMetersPerSecond = MassifChannelHydraulics::MeanSpeedMetersPerSecond(
-			Node.DischargeCubicMetersPerSecond, OutProfile.FlowAreaSquareMeters);
-
-		FMassifSectionFlow Section;
-		Section.AreaSquareMeters = OutProfile.FlowAreaSquareMeters;
-		Section.TopWidthMeters = OutProfile.WettedWidthMeters;
-		OutProfile.FroudeNumber =
-			MassifChannelHydraulics::FroudeNumber(OutProfile.SpeedMetersPerSecond, Section);
-	}
-
-	/**
-	 * The section's answer becomes the channel's.
-	 *
-	 * Width, depth and speed arrive as the hydraulic geometry's guess and leave as
-	 * what fits the ground here, so everything that already reads a node — the
-	 * field, the terrain carve, the water mesh, the masks — picks the section up
-	 * without being taught about it.
-	 */
-	void AdoptProfile(FMassifRiverNode& InOutNode)
-	{
-		InOutNode.WidthMeters = InOutNode.Profile.WettedWidthMeters;
-		InOutNode.DepthMeters = InOutNode.Profile.DepthMeters;
-		InOutNode.SpeedMetersPerSecond = InOutNode.Profile.SpeedMetersPerSecond;
-		InOutNode.BedAltitudeMeters = InOutNode.WaterSurfaceMeters - InOutNode.Profile.DepthMeters;
+		// The whole section stands above the surface, so the trench has to reach down
+		// to it before it can hold the column the hydraulic geometry asks for.
+		const double ReachDownMeters = Band.LowestGroundMeters - Node.WaterSurfaceMeters;
+		CutTrench(
+			OutProfile, Band, ReachDownMeters + FMath::Max(Node.DepthMeters, Params.MinDepthMeters));
 	}
 
 	void SolveNodeProfile(
@@ -323,6 +297,8 @@ namespace
 		FMassifChannelProfile& Profile = InOutNode.Profile;
 		Profile.HalfSpanMeters = ProfileHalfSpanMeters(Params, InOutNode);
 		Profile.EnergySlope = EnergySlope;
+		Profile.Roughness = Params.Roughness;
+		Profile.MaxWettedWidthMeters = Params.MaxWettedWidthFactor * InOutNode.WidthMeters;
 		SampleSection(Elevation, InOutNode, FlowDirection, Profile);
 
 		const double SurfaceMeters = InOutNode.WaterSurfaceMeters;
@@ -330,7 +306,7 @@ namespace
 		if (!Band.IsValid())
 		{
 			FallBackToHydraulicGeometry(Params, InOutNode, Profile);
-			AdoptProfile(InOutNode);
+			MassifChannelHydraulics::ApplySectionToNode(InOutNode, Params.MinDepthMeters);
 			return;
 		}
 		ClampBandWidth(Band, Profile, Params, InOutNode.WidthMeters);
@@ -339,15 +315,7 @@ namespace
 			Profile, Band, Params, SurfaceMeters, InOutNode.DischargeCubicMetersPerSecond,
 			Params.MaxDepthFactor * InOutNode.DepthMeters);
 		CutTrench(Profile, Band, TrenchDepthMeters);
-
-		const FMassifSectionFlow Section = MassifChannelHydraulics::MeasureSection(Profile, SurfaceMeters);
-		Profile.WettedWidthMeters = Section.TopWidthMeters;
-		Profile.FlowAreaSquareMeters = Section.AreaSquareMeters;
-		Profile.DepthMeters = FMath::Max(Section.MaxDepthMeters, Params.MinDepthMeters);
-		Profile.SpeedMetersPerSecond = MassifChannelHydraulics::MeanSpeedMetersPerSecond(
-			InOutNode.DischargeCubicMetersPerSecond, Section.AreaSquareMeters);
-		Profile.FroudeNumber = MassifChannelHydraulics::FroudeNumber(Profile.SpeedMetersPerSecond, Section);
-		AdoptProfile(InOutNode);
+		MassifChannelHydraulics::ApplySectionToNode(InOutNode, Params.MinDepthMeters);
 	}
 
 	// -----------------------------------------------------------------------

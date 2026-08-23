@@ -161,6 +161,7 @@ namespace MassifBakeCpu
 	TSharedRef<const FMassifRiverNetwork> ExtractRivers(
 		const FMassifBakeGrid& Grid,
 		const IMassifElevationSource& Elevation,
+		const IMassifBedMaterialSource& BedMaterial,
 		const FMassifRiverParams& Params,
 		TArrayView<const double> Measured,
 		TArrayView<const double> Filled,

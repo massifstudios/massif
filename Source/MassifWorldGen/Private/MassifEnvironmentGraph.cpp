@@ -1325,6 +1325,56 @@ TUniquePtr<FMassifEnvironmentScheduler> MassifBuildEnvironment(
 	return Scheduler;
 }
 
+namespace
+{
+	/**
+	 * The lithology channel as something the carve can cut into.
+	 *
+	 * Nearest cell rather than interpolated: hardness is a property of the rock unit
+	 * a point stands in, and a boundary between two units is a boundary, not a ramp.
+	 */
+	class FMassifRasterBedMaterial final : public IMassifBedMaterialSource
+	{
+	public:
+		FMassifRasterBedMaterial(const FMassifChannelGrid& InGrid, TArray<double>&& InHardness)
+			: Grid(InGrid)
+			, Hardness(MoveTemp(InHardness))
+		{
+		}
+
+		double SampleRockHardness(FVector2d PositionMeters) const override
+		{
+			const int32 Column = FMath::FloorToInt32(
+				(PositionMeters.X + 0.5 * Grid.WorldSizeXMeters) / Grid.CellSizeMeters);
+			const int32 Row = FMath::FloorToInt32(
+				(0.5 * Grid.WorldSizeYMeters - PositionMeters.Y) / Grid.CellSizeMeters);
+			if (Column < 0 || Column >= Grid.Width || Row < 0 || Row >= Grid.Height)
+			{
+				return 0.0;
+			}
+			return Hardness[Row * Grid.Width + Column];
+		}
+
+	private:
+		FMassifChannelGrid Grid;
+		TArray<double> Hardness;
+	};
+}
+
+TSharedRef<const IMassifBedMaterialSource> MassifMakeBedMaterial(const FMassifEnvironmentState& State)
+{
+	const FMassifChannelHandle HardnessChannel =
+		State.FindChannel(MassifEnvironmentChannels::RockHardness());
+	if (!HardnessChannel.IsValid())
+	{
+		return MakeShared<FMassifUniformBedMaterial>();
+	}
+
+	TArray<double> Hardness;
+	ReadCells(State, HardnessChannel, Hardness);
+	return MakeShared<FMassifRasterBedMaterial>(State.GetGrid(HardnessChannel), MoveTemp(Hardness));
+}
+
 TSharedRef<const FMassifRiverNetwork> MassifExtractRivers(
 	const FMassifEnvironmentState& State,
 	const IMassifElevationSource& Elevation,
@@ -1350,6 +1400,6 @@ TSharedRef<const FMassifRiverNetwork> MassifExtractRivers(
 	ReadCellsAsFloats(State, DischargeChannel, Discharge);
 
 	return MassifBakeCpu::ExtractRivers(
-		MakeBakeGrid(State.GetGrid(FilledChannel)), Elevation, Params, Measured, Filled, Accumulation,
-		Discharge);
+		MakeBakeGrid(State.GetGrid(FilledChannel)), Elevation, *MassifMakeBedMaterial(State), Params, Measured,
+		Filled, Accumulation, Discharge);
 }

@@ -16,6 +16,9 @@ struct FMassifRiverReach;
  */
 inline constexpr int32 MassifChannelProfileOffsetCount = 33;
 
+/** The offset on the centreline itself, which the odd count guarantees exists. */
+inline constexpr int32 MassifChannelProfileMidOffset = MassifChannelProfileOffsetCount / 2;
+
 /**
  * One cross-section through a channel, and what the discharge does in it.
  *
@@ -30,8 +33,30 @@ struct FMassifChannelProfile
 	/** Half the span the offsets cover, which is wider than the water. */
 	double HalfSpanMeters = 0.0;
 
+	/**
+	 * As far across as the water is allowed to reach.
+	 *
+	 * A guard, and the only thing standing between a channel and the valley floor it
+	 * runs along. A section with no bank inside it — a gravel flat, or the level
+	 * ribbon a laser scan returns over water — is under the surface at every offset,
+	 * and the water spreads to whatever the profile happens to have been cut off at.
+	 * Set once from the width the discharge alone predicts, so it is a property of
+	 * the river rather than of whatever the solve last made of it.
+	 */
+	double MaxWettedWidthMeters = TNumericLimits<double>::Max();
+
 	/** Ground across the flow, left bank first, as the elevation model has it. */
 	float GroundAltitudeMeters[MassifChannelProfileOffsetCount] = {};
+
+	/**
+	 * Manning's n for the bed here.
+	 *
+	 * Carried per station rather than passed to each solve, so the normal-depth
+	 * fit, the carve and the backwater sweep cannot be given three different beds
+	 * to resist against, and so a roughness that varies with the material has
+	 * somewhere to live.
+	 */
+	double Roughness = 0.045;
 
 	/**
 	 * The bed the water actually runs on: the ground with the channel cut into it.
@@ -116,7 +141,7 @@ struct FMassifChannelSolveParams
 	 * later milestone's job.
 	 */
 	double MinWettedWidthFactor = 0.25;
-	double MaxWettedWidthFactor = 4.0;
+	double MaxWettedWidthFactor = 2.0;
 
 	/** Deepest the bed is cut below the section, as a multiple of the hydraulic-geometry depth. */
 	double MaxDepthFactor = 6.0;
