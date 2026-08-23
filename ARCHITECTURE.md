@@ -78,14 +78,15 @@ and `MassifCore` tests must pass headless.
   float-reproducibility exposure a computed surface carries. No
   gameplay-relevant value comes from a GPU pass. Compute shaders may mirror
   the field for rendering, but their results are never read back into sim.
-- **The environment bake (§5.6) runs on the GPU and is not sim state.** Its
-  channels — drainage, standing water, wetness, soil depth, insolation — feed
+- **The environment bake (§5.6) is not sim state.** Its channels — drainage,
+  standing water, wetness, soil depth, insolation, wind, snow, vegetation — feed
   worldgen and presentation: what to plant, what the ground is made of, how the
-  terrain is shaded. Nothing in `MassifSim` reads them. The bake carries a CPU
-  reference implementation that is the algorithm's definition and the contract
-  the tests hold; the GPU path exists to make it fast. When a mask that sim
-  does read (buildable, forest) later needs a bake channel, it comes from the
-  CPU path, so the rule above stands unweakened.
+  terrain is shaded. Nothing in `MassifSim` reads them. The CPU implementation is
+  each algorithm's definition and the contract the tests hold. Where a process
+  later gains a GPU path it exists to make that process fast, and when a mask sim
+  does read (buildable, forest) needs a bake channel, it comes from the CPU path
+  — so the rule above stands unweakened however much of the bake moves to the
+  hardware.
 - **Sim samples the terrain field only at fixed, named spacings.** The
   field is LOD-dependent by design, so sampling it at view LOD would make
   sim state depend on where the camera is. Sim therefore uses named
@@ -418,12 +419,24 @@ schedules, so a float accumulator would make the same bake differ run to run on
 one machine, never mind across two.
 
 **Two implementations, one interface.** Per process, not per bake. The CPU path
-is the definition of each algorithm and what the automation suite runs; the GPU
-compute path is the same algorithm arranged for the hardware, and is what
-actually runs at world gen. Headless (`-nullrhi`) falls back to the CPU path
-rather than skipping, so every process is covered by tests on every machine. The
-two are held to agreeing within a tolerance, which is what catches a GPU port
-that has drifted from its reference.
+is the definition of each algorithm and what the automation suite runs. A process
+may also carry a GPU compute path — the same algorithm arranged for the hardware
+— and the scheduler prefers it where one exists. Headless (`-nullrhi`) falls back
+to the CPU path rather than skipping, so every process is covered by tests on
+every machine, and the two are held to agreeing within a tolerance, which is what
+catches a GPU port that has drifted from its reference.
+
+**No process has a GPU path yet; every one of them runs on the CPU.** The whole
+bake is about 15 s over the 20 km world, and two processes are most of it: the
+horizon sweep and sun-path integration at 6.4 s, and the droplet erosion at 3.1 s.
+Both are the shape hardware is good at — the sweep is per-cell and reads a
+read-only surface, and the droplets already scatter through integer atomics on a
+fixed-point encoding precisely so the port would be reproducible. The two ordered
+hydrology solves are not: a priority flood and an altitude-sorted routing pass
+would have to become fixed-count relaxations to move, which is what
+`GpuDepressionFillIterations` and `GpuFlowRoutingIterations` are reserved for.
+Everything else already solves in under a quarter of a second and would gain
+nothing.
 
 #### 5.6.4 Time
 

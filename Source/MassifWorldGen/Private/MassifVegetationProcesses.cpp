@@ -24,6 +24,24 @@ namespace MassifEnvironmentChannels
 		static const FName Name(TEXT("Vegetation.Height"));
 		return Name;
 	}
+
+	const FName& Interception()
+	{
+		static const FName Name(TEXT("Vegetation.Interception"));
+		return Name;
+	}
+
+	const FName& VegetationClass()
+	{
+		static const FName Name(TEXT("Vegetation.Class"));
+		return Name;
+	}
+
+	const FName& Disturbance()
+	{
+		static const FName Name(TEXT("Vegetation.Disturbance"));
+		return Name;
+	}
 }
 
 namespace MassifEnvironmentProcesses
@@ -32,6 +50,21 @@ namespace MassifEnvironmentProcesses
 	{
 		static const FName Name(TEXT("Vegetation.Cover"));
 		return Name;
+	}
+}
+
+const TCHAR* MassifVegetationClassName(EMassifVegetationClass Class)
+{
+	switch (Class)
+	{
+		case EMassifVegetationClass::Bare: return TEXT("Bare");
+		case EMassifVegetationClass::Snowbed: return TEXT("Snowbed");
+		case EMassifVegetationClass::AlpineMeadow: return TEXT("AlpineMeadow");
+		case EMassifVegetationClass::DwarfShrub: return TEXT("DwarfShrub");
+		case EMassifVegetationClass::ConiferForest: return TEXT("ConiferForest");
+		case EMassifVegetationClass::BroadleafForest: return TEXT("BroadleafForest");
+		case EMassifVegetationClass::Wetland: return TEXT("Wetland");
+		default: return TEXT("Unknown");
 	}
 }
 
@@ -45,6 +78,15 @@ namespace
 		double SoilDepthMeters = 0.0;
 		double WindExposure = 1.0;
 		double SnowCoverDuration = 0.0;
+	};
+
+	/** What one cell came to: what is left standing, what took it down, and what it is. */
+	struct FVegetationStand
+	{
+		double Cover = 0.0;
+		double Canopy = 0.0;
+		double Disturbance = 0.0;
+		EMassifVegetationClass Class = EMassifVegetationClass::Bare;
 	};
 
 	double WarmthFactor(double TemperatureCelsius, const FMassifVegetationParams& Params)
@@ -101,6 +143,78 @@ namespace
 		return Cover * Warmth * RootingFactor(Conditions.SoilDepthMeters, Params.TreeRootingDepthMeters);
 	}
 
+	/**
+	 * What has been knocked down of what could have grown.
+	 *
+	 * The wind throws trees where it gets at them, so that term carries the canopy
+	 * with it — open ground has nothing to throw. Snow lying past the season a
+	 * snowbed clears in scours the ground whatever stood on it.
+	 */
+	double DisturbanceAt(double Canopy, const FGrowingConditions& Conditions, const FMassifVegetationParams& Params)
+	{
+		const double Windthrow =
+			Params.WindthrowSensitivity * FMath::Max(0.0, Conditions.WindExposure - 1.0) * Canopy;
+		const double Scour = Params.SnowScourSensitivity
+			* FMath::Max(0.0, Conditions.SnowCoverDuration - Params.SnowbedCoverDuration);
+		return FMath::Clamp(Windthrow + Scour, 0.0, 1.0);
+	}
+
+	/** Broadleaf wants the warm damp ground low down; the belt above it is conifer. */
+	EMassifVegetationClass ForestClass(
+		const FGrowingConditions& Conditions, const FMassifVegetationParams& Params)
+	{
+		if (Conditions.TemperatureCelsius > Params.BroadleafTemperatureCelsius)
+		{
+			return EMassifVegetationClass::BroadleafForest;
+		}
+		return EMassifVegetationClass::ConiferForest;
+	}
+
+	/** A key over what the stand came to and what it grew in, read in order: the first match holds. */
+	EMassifVegetationClass ClassifyStand(
+		const FVegetationStand& Stand, const FGrowingConditions& Conditions,
+		const FMassifVegetationParams& Params)
+	{
+		if (Conditions.Wetness > Params.WetlandWetness)
+		{
+			return EMassifVegetationClass::Wetland;
+		}
+		if (Stand.Cover < Params.BareCoverThreshold)
+		{
+			return EMassifVegetationClass::Bare;
+		}
+		if (Conditions.SnowCoverDuration > Params.SnowbedCoverDuration)
+		{
+			return EMassifVegetationClass::Snowbed;
+		}
+		if (Stand.Canopy > Params.ForestCanopyThreshold)
+		{
+			return ForestClass(Conditions, Params);
+		}
+		if (Conditions.WindExposure > Params.ShrubExposure || Stand.Canopy > 0.0)
+		{
+			return EMassifVegetationClass::DwarfShrub;
+		}
+		return EMassifVegetationClass::AlpineMeadow;
+	}
+
+	FVegetationStand StandAt(const FGrowingConditions& Conditions, const FMassifVegetationParams& Params)
+	{
+		const double PotentialCover = CoverAt(Conditions, Params);
+		const double PotentialCanopy = CanopyAt(PotentialCover, Conditions, Params);
+
+		FVegetationStand Stand;
+		Stand.Disturbance = DisturbanceAt(PotentialCanopy, Conditions, Params);
+
+		// What is left standing is what everything downstream sees: the soil it
+		// holds, the wind it slows and the rain it catches are all the reduced stand.
+		const double Standing = 1.0 - Stand.Disturbance;
+		Stand.Cover = PotentialCover * Standing;
+		Stand.Canopy = PotentialCanopy * Standing;
+		Stand.Class = ClassifyStand(Stand, Conditions, Params);
+		return Stand;
+	}
+
 	FMassifChannelDescriptor MakeVegetationChannel(
 		const FName& Name, const TCHAR* Unit, double CellSizeMeters, TOptional<FVector2d> DisplayRange)
 	{
@@ -114,6 +228,85 @@ namespace
 		Descriptor.DisplayRange = DisplayRange;
 		return Descriptor;
 	}
+
+	/** Class indices, so the channel is sampled by nearest cell and never blended. */
+	FMassifChannelDescriptor MakeVegetationClassChannel(double CellSizeMeters)
+	{
+		FMassifChannelDescriptor Descriptor;
+		Descriptor.Name = MassifEnvironmentChannels::VegetationClass();
+		Descriptor.Type = EMassifChannelType::Classified;
+		Descriptor.Encoding = EMassifChannelEncoding::Uint8;
+		Descriptor.CellSizeMeters = CellSizeMeters;
+		Descriptor.Unit = TEXT("class");
+		Descriptor.ColorMap = EMassifChannelColorMap::Categorical;
+		return Descriptor;
+	}
+
+	/** Every channel one run writes, opened together so a cell is written in one place. */
+	class FVegetationOutputs
+	{
+	public:
+		explicit FVegetationOutputs(const FMassifEnvironmentContext& Context)
+			: CoverScope(Context.OpenOutput(MassifEnvironmentChannels::VegetationCover()))
+			, CanopyScope(Context.OpenOutput(MassifEnvironmentChannels::VegetationCanopy()))
+			, HeightScope(Context.OpenOutput(MassifEnvironmentChannels::VegetationHeight()))
+			, InterceptionScope(Context.OpenOutput(MassifEnvironmentChannels::Interception()))
+			, DisturbanceScope(Context.OpenOutput(MassifEnvironmentChannels::Disturbance()))
+			, ClassScope(Context.OpenOutput(MassifEnvironmentChannels::VegetationClass()))
+			, CoverValues(CoverScope->GetComponent(0))
+			, CanopyValues(CanopyScope->GetComponent(0))
+			, HeightValues(HeightScope->GetComponent(0))
+			, InterceptionValues(InterceptionScope->GetComponent(0))
+			, DisturbanceValues(DisturbanceScope->GetComponent(0))
+			, ClassValues(ClassScope->GetComponent(0))
+		{
+		}
+
+		const FMassifChannelGrid& GetGrid() const
+		{
+			return CoverScope->GetGrid();
+		}
+
+		int32 CellCount() const
+		{
+			return CoverValues.Num();
+		}
+
+		void Write(int32 CellIndex, const FVegetationStand& Stand, const FMassifVegetationParams& Params)
+		{
+			CoverValues[CellIndex] = Stand.Cover;
+			CanopyValues[CellIndex] = Stand.Canopy;
+			HeightValues[CellIndex] = Params.MaxCanopyHeightMeters * Stand.Canopy;
+			InterceptionValues[CellIndex] = Params.MaxInterceptionFraction * Stand.Canopy;
+			DisturbanceValues[CellIndex] = Stand.Disturbance;
+			ClassValues[CellIndex] = static_cast<double>(Stand.Class);
+		}
+
+		void Commit()
+		{
+			CoverScope->Commit();
+			CanopyScope->Commit();
+			HeightScope->Commit();
+			InterceptionScope->Commit();
+			DisturbanceScope->Commit();
+			ClassScope->Commit();
+		}
+
+	private:
+		TUniquePtr<FMassifChannelWriteScope> CoverScope;
+		TUniquePtr<FMassifChannelWriteScope> CanopyScope;
+		TUniquePtr<FMassifChannelWriteScope> HeightScope;
+		TUniquePtr<FMassifChannelWriteScope> InterceptionScope;
+		TUniquePtr<FMassifChannelWriteScope> DisturbanceScope;
+		TUniquePtr<FMassifChannelWriteScope> ClassScope;
+
+		TArrayView<double> CoverValues;
+		TArrayView<double> CanopyValues;
+		TArrayView<double> HeightValues;
+		TArrayView<double> InterceptionValues;
+		TArrayView<double> DisturbanceValues;
+		TArrayView<double> ClassValues;
+	};
 }
 
 /**
@@ -179,14 +372,22 @@ FMassifProcessDeclaration FVegetationProcess::Declare() const
 		FVector2d(0.0, 1.0)));
 	Declaration.OutputChannels.Add(MakeVegetationChannel(
 		MassifEnvironmentChannels::VegetationHeight(), TEXT("m"), Params.CellSizeMeters, {}));
+	Declaration.OutputChannels.Add(MakeVegetationChannel(
+		MassifEnvironmentChannels::Interception(), TEXT("0-1"), Params.CellSizeMeters, FVector2d(0.0, 1.0)));
+	Declaration.OutputChannels.Add(MakeVegetationChannel(
+		MassifEnvironmentChannels::Disturbance(), TEXT("0-1"), Params.CellSizeMeters, FVector2d(0.0, 1.0)));
+	Declaration.OutputChannels.Add(MakeVegetationClassChannel(Params.CellSizeMeters));
 	return Declaration;
 }
 
 void FVegetationProcess::WriteBare(FMassifEnvironmentContext& Context) const
 {
+	// Bare is class zero, so the same fill covers the class channel as covers the
+	// fractions: nothing grows, nothing is intercepted, and nothing was thrown.
 	const FName Names[] = {
 		MassifEnvironmentChannels::VegetationCover(), MassifEnvironmentChannels::VegetationCanopy(),
-		MassifEnvironmentChannels::VegetationHeight()};
+		MassifEnvironmentChannels::VegetationHeight(), MassifEnvironmentChannels::Interception(),
+		MassifEnvironmentChannels::Disturbance(), MassifEnvironmentChannels::VegetationClass()};
 	for (const FName& Name : Names)
 	{
 		const TUniquePtr<FMassifChannelWriteScope> Scope = Context.OpenOutput(Name);
@@ -214,7 +415,7 @@ FGrowingConditions FVegetationProcess::ConditionsAt(
 
 	// Wind and snow are the two the loop runs through. Both read as neutral until
 	// the round that writes them has happened, and stay neutral in a graph that
-	// holds neither.
+	// holds neither — which is also what leaves the disturbance at nothing.
 	if (Inputs.WindExposure.IsValid())
 	{
 		Conditions.WindExposure = State.SampleScalar(Inputs.WindExposure, PositionMeters);
@@ -241,32 +442,17 @@ void FVegetationProcess::Execute(FMassifEnvironmentContext& Context, EMassifFide
 	Inputs.WindExposure = Context.FindOptionalInput(MassifEnvironmentChannels::WindExposure());
 	Inputs.SnowCoverDuration = Context.FindOptionalInput(MassifEnvironmentChannels::SnowCoverDuration());
 
-	const TUniquePtr<FMassifChannelWriteScope> Cover =
-		Context.OpenOutput(MassifEnvironmentChannels::VegetationCover());
-	const TUniquePtr<FMassifChannelWriteScope> Canopy =
-		Context.OpenOutput(MassifEnvironmentChannels::VegetationCanopy());
-	const TUniquePtr<FMassifChannelWriteScope> Height =
-		Context.OpenOutput(MassifEnvironmentChannels::VegetationHeight());
-
-	const FMassifChannelGrid& Grid = Cover->GetGrid();
-	TArrayView<double> CoverValues = Cover->GetComponent(0);
-	TArrayView<double> CanopyValues = Canopy->GetComponent(0);
-	TArrayView<double> HeightValues = Height->GetComponent(0);
-
-	for (int32 CellIndex = 0; CellIndex < CoverValues.Num(); ++CellIndex)
+	FVegetationOutputs Outputs(Context);
+	const FMassifChannelGrid& Grid = Outputs.GetGrid();
+	for (int32 CellIndex = 0; CellIndex < Outputs.CellCount(); ++CellIndex)
 	{
 		const FVector2d Position = Grid.CellCentreMeters(CellIndex % Grid.Width, CellIndex / Grid.Width);
 		const FGrowingConditions Conditions =
 			ConditionsAt(Context.GetState(), Inputs, Position, Fidelity);
-
-		CoverValues[CellIndex] = CoverAt(Conditions, Params);
-		CanopyValues[CellIndex] = CanopyAt(CoverValues[CellIndex], Conditions, Params);
-		HeightValues[CellIndex] = Params.MaxCanopyHeightMeters * CanopyValues[CellIndex];
+		Outputs.Write(CellIndex, StandAt(Conditions, Params), Params);
 	}
 
-	Cover->Commit();
-	Canopy->Commit();
-	Height->Commit();
+	Outputs.Commit();
 }
 
 void MassifRegisterVegetationProcesses(
