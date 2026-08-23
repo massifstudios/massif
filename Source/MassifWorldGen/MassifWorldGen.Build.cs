@@ -11,6 +11,7 @@ public class MassifWorldGen : ModuleRules
 			"Core",
 			"CoreUObject",
 			"Engine",
+			"GeometryCore",
 			"MassifCore"
 		});
 	}
