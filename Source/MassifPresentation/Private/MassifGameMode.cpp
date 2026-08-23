@@ -18,6 +18,7 @@
 #include "MassifEnvironmentScheduler.h"
 #include "MassifEnvironmentState.h"
 #include "MassifHabitat.h"
+#include "UI/MassifEnvironmentSettings.h"
 #include "MassifHeightmap.h"
 #include "MassifRiverField.h"
 #include "MassifRiverNetwork.h"
@@ -256,7 +257,7 @@ bool AMassifGameMode::BuildEnvironment(TSharedRef<const FMassifHeightmap> Height
 	const double StartSeconds = FPlatformTime::Seconds();
 
 	FString BuildError;
-	TUniquePtr<FMassifEnvironmentScheduler> Scheduler = MassifBuildEnvironment(
+	TUniquePtr<FMassifEnvironmentScheduler> Scheduler = MassifPrepareEnvironment(
 		MakeShared<const FMassifHeightmapElevationSource>(MoveTemp(Heightmap)),
 		FMassifGeoreference(),
 		GetMasterSeed(),
@@ -267,6 +268,11 @@ bool AMassifGameMode::BuildEnvironment(TSharedRef<const FMassifHeightmap> Height
 		UE_LOG(LogTemp, Error, TEXT("Environment: %s. Nothing downstream of the solve is built."), *BuildError);
 		return false;
 	}
+
+	// Before the first solve, so a world set to something other than the defaults
+	// is solved once at what it is set to rather than twice.
+	MassifEnvironmentSettings::ApplySaved(*Scheduler);
+	Scheduler->Execute();
 
 	EnvironmentScheduler = MakeShareable(Scheduler.Release());
 	LogEnvironmentSummary(FPlatformTime::Seconds() - StartSeconds);

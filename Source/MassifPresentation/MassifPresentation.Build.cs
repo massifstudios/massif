@@ -20,6 +20,8 @@ public class MassifPresentation : ModuleRules
 
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
+			"Slate",
+			"SlateCore",
 			"GeometryCore",
 			"GeometryFramework",
 			"GeometryScriptingCore",
