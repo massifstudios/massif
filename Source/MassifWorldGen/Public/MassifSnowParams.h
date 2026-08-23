@@ -42,9 +42,19 @@ struct FMassifSnowParams
 
 	/**
 	 * How far the sun moves melt away from what the air temperature alone would
-	 * give. The insolation channel is a ratio against level open ground, so at 0.6
-	 * a shaded north face melts at roughly half the rate of a face taking a full
-	 * day of sun — which is why the two sides of one valley clear weeks apart.
+	 * give.
+	 *
+	 * The insolation this multiplies is a ratio against level open ground on an
+	 * average growing-season day, so it carries the season as well as the aspect:
+	 * level ground reads about a quarter in midwinter and a fifth more than one at
+	 * midsummer, and the growing season averages to exactly one. A warm spell in
+	 * January therefore takes less pack than the same spell in May does, and a
+	 * shaded north face melts slower than the flank opposite it all year — which is
+	 * why the two sides of one valley clear weeks apart.
+	 *
+	 * Held below one on purpose: at one the darkest midwinter ground would reach a
+	 * melt factor of zero, and above it the term would want to go negative and turn
+	 * a thaw into a snowfall.
 	 */
 	double InsolationMeltGain = 0.6;
 
@@ -72,4 +82,59 @@ struct FMassifSnowParams
 	 * would read a whole year of it.
 	 */
 	double LyingSnowThresholdMetres = 0.05;
+
+	/**
+	 * Density snow falls at, and the density it settles towards.
+	 *
+	 * A hundred is new snow that a ski sinks through; four hundred is a spring pack
+	 * that has been through enough melt-freeze cycles to walk on. What separates the
+	 * two is the whole difference between ground a groomer can work and ground it
+	 * cannot, which is why the pack carries a density rather than a depth alone.
+	 */
+	double FreshSnowDensityKilogramsPerCubicMetre = 100.0;
+	double SettledSnowDensityKilogramsPerCubicMetre = 400.0;
+
+	/** Share of the way to the settled density a cold pack closes in one half-month. */
+	double CompactionRatePerSlice = 0.15;
+
+	/**
+	 * How much faster a pack at its melting point settles than a cold one. Melt-
+	 * freeze rounds the grains off and packs them in days; snow at twenty below
+	 * keeps its structure for months.
+	 */
+	double WarmCompactionMultiplier = 3.0;
+
+	/** Degrees below the melt threshold over which that speed-up comes in. */
+	double WarmCompactionBandCelsius = 5.0;
+
+	/**
+	 * What the ground reflects, fresh, settled, and with nothing lying on it.
+	 *
+	 * Snow keeps its own ground cold by throwing the sunlight back off it, and a
+	 * settled spring pack does far less of that than a fresh fall does — which is
+	 * why an old pack goes in a rush once it starts going at all.
+	 */
+	double FreshSnowAlbedo = 0.85;
+	double OldSnowAlbedo = 0.45;
+	double BareGroundAlbedo = 0.15;
+
+	/**
+	 * Slope band a slab both forms on and lets go from. Below the lower angle snow
+	 * simply sits where it fell; above the upper one it sloughs off in small loads
+	 * as it arrives and never builds the slab that would release.
+	 */
+	double MinReleaseSlopeDegrees = 30.0;
+	double MaxReleaseSlopeDegrees = 55.0;
+
+	/** Peak depth at which a release area is as loaded as it is counted for. */
+	double ReleaseFullLoadDepthMetres = 1.5;
+
+	/** Slope a running slab comes to rest below, which is what ends a path on the valley floor. */
+	double RunoutSlopeDegrees = 15.0;
+
+	/** Cells one release is traced down before the trace gives up. A budget, never a convergence test. */
+	int32 MaxRunoutStepCount = 128;
+
+	/** Release passing through a cell at which its track reads as fully marked. */
+	double PathSaturationLoad = 3.0;
 };

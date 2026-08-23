@@ -1,6 +1,7 @@
 #include "MassifClimateProcesses.h"
 
 #include "MassifEnvironmentGraph.h"
+#include "MassifSnowProcesses.h"
 #include "MassifSunProcesses.h"
 
 namespace MassifEnvironmentChannels
@@ -116,6 +117,19 @@ namespace
 		return 0.5 * Params.AnnualTemperatureRangeCelsius * FMath::Cos(PhaseRadians);
 	}
 
+	/**
+	 * How far a half-month is pulled down by the snow lying on it.
+	 *
+	 * Measured from bare ground rather than from zero: what cools a slope is the
+	 * sunlight the pack throws back over what the ground it covers would have thrown
+	 * back anyway. A settled spring pack reflects far less than a fresh fall, so the
+	 * cooling weakens as the pack ages — which is part of why it then goes quickly.
+	 */
+	double AlbedoAnomalyCelsius(const FMassifClimateParams& Params, double Albedo)
+	{
+		return -Params.SnowAlbedoCoolingCelsius * FMath::Max(0.0, Albedo - Params.BareGroundAlbedo);
+	}
+
 	/** Off is a year without seasons: the mean in every slice, so the channel still exists. */
 	double SeasonalAnomalyForFidelity(
 		const FMassifClimateParams& Params, int32 TimeSlice, EMassifFidelity Fidelity)
@@ -126,6 +140,18 @@ namespace
 		}
 		return SeasonalAnomalyCelsius(Params, TimeSlice);
 	}
+
+	/** Everything one half-month of the seasonal solve is written from. */
+	struct FSeasonalInputs
+	{
+		FMassifChannelHandle MeanTemperature;
+
+		/** Invalid where no snowpack is in the graph, or where the seasons are switched off. */
+		FMassifChannelHandle SnowAlbedo;
+
+		int32 TimeSlice = 0;
+		double AnomalyCelsius = 0.0;
+	};
 
 	void WriteConstant(FMassifChannelWriteScope& Scope, double Value)
 	{
@@ -254,7 +280,10 @@ void FTemperatureProcess::Execute(FMassifEnvironmentContext& Context, EMassifFid
  * Per-slice, not sequential: a slice is a closed form of its own index over the
  * mean, so nothing here carries state forward the way the snowpack that reads it
  * does (ARCHITECTURE §5.6.4). The swing is uniform because everything that makes
- * one slope colder than another is already in the mean it is added to.
+ * one slope colder than another is already in the mean it is added to — except
+ * the snow, which cools the ground it lies on by throwing back the sunlight that
+ * would have warmed it, and which is itself decided by the temperature this
+ * writes.
  */
 class FSeasonalTemperatureProcess final : public IMassifEnvironmentProcess
 {
@@ -268,11 +297,14 @@ public:
 	void Execute(FMassifEnvironmentContext& Context, EMassifFidelity Fidelity) const override;
 
 private:
-	void WriteSlice(FMassifEnvironmentContext& Context, int32 TimeSlice, double AnomalyCelsius) const;
+	void WriteSlice(FMassifEnvironmentContext& Context, const FSeasonalInputs& Inputs) const;
 
-	static void SolveRow(
-		const FMassifEnvironmentState& State, FMassifChannelHandle MeanTemperature,
-		const FMassifChannelGrid& Grid, int32 Row, double AnomalyCelsius, TArrayView<double> OutCelsius);
+	double CelsiusAt(
+		const FMassifEnvironmentState& State, const FSeasonalInputs& Inputs, FVector2d PositionMeters) const;
+
+	void SolveRow(
+		const FMassifEnvironmentState& State, const FSeasonalInputs& Inputs, const FMassifChannelGrid& Grid,
+		int32 Row, TArrayView<double> OutCelsius) const;
 
 	FMassifClimateParams Params;
 };
@@ -282,8 +314,16 @@ FMassifProcessDeclaration FSeasonalTemperatureProcess::Declare() const
 	FMassifProcessDeclaration Declaration;
 	Declaration.Name = MassifEnvironmentProcesses::SeasonalClimate();
 	Declaration.InputChannels = {MassifEnvironmentChannels::MeanTemperature()};
+
+	// Optional, so the temperature still solves in a graph with no snowpack in it:
+	// there is simply nothing white anywhere to keep its own ground cold.
+	Declaration.OptionalInputChannels = {MassifEnvironmentChannels::SnowAlbedo()};
 	Declaration.SupportedFidelities = {
 		EMassifFidelity::Cheap, EMassifFidelity::Standard, EMassifFidelity::Reference};
+
+	// The pack reads this temperature and writes the albedo read back above, so the
+	// two of them are one cycle and the scheduler has to be told it is meant.
+	Declaration.bParticipatesInFeedback = true;
 
 	FMassifChannelDescriptor Descriptor;
 	Descriptor.Name = MassifEnvironmentChannels::SeasonalTemperature();
@@ -298,29 +338,43 @@ FMassifProcessDeclaration FSeasonalTemperatureProcess::Declare() const
 	return Declaration;
 }
 
+double FSeasonalTemperatureProcess::CelsiusAt(
+	const FMassifEnvironmentState& State, const FSeasonalInputs& Inputs, FVector2d PositionMeters) const
+{
+	const double SeasonalCelsius =
+		State.SampleScalar(Inputs.MeanTemperature, PositionMeters) + Inputs.AnomalyCelsius;
+	if (!Inputs.SnowAlbedo.IsValid())
+	{
+		return SeasonalCelsius;
+	}
+
+	// Reads as zero until the round of the loop that writes it has run, which is the
+	// same thing as no snow lying and needs no special case for the first iteration.
+	const double Albedo = State.SampleScalar(Inputs.SnowAlbedo, PositionMeters, Inputs.TimeSlice);
+	return SeasonalCelsius + AlbedoAnomalyCelsius(Params, Albedo);
+}
+
 void FSeasonalTemperatureProcess::SolveRow(
-	const FMassifEnvironmentState& State, FMassifChannelHandle MeanTemperature, const FMassifChannelGrid& Grid,
-	int32 Row, double AnomalyCelsius, TArrayView<double> OutCelsius)
+	const FMassifEnvironmentState& State, const FSeasonalInputs& Inputs, const FMassifChannelGrid& Grid,
+	int32 Row, TArrayView<double> OutCelsius) const
 {
 	for (int32 Column = 0; Column < Grid.Width; ++Column)
 	{
-		const double MeanCelsius = State.SampleScalar(MeanTemperature, Grid.CellCentreMeters(Column, Row));
-		OutCelsius[Row * Grid.Width + Column] = MeanCelsius + AnomalyCelsius;
+		OutCelsius[Row * Grid.Width + Column] = CelsiusAt(State, Inputs, Grid.CellCentreMeters(Column, Row));
 	}
 }
 
 void FSeasonalTemperatureProcess::WriteSlice(
-	FMassifEnvironmentContext& Context, int32 TimeSlice, double AnomalyCelsius) const
+	FMassifEnvironmentContext& Context, const FSeasonalInputs& Inputs) const
 {
-	const FMassifChannelHandle MeanTemperature = Context.GetInput(MassifEnvironmentChannels::MeanTemperature());
 	const TUniquePtr<FMassifChannelWriteScope> Scope =
-		Context.OpenOutput(MassifEnvironmentChannels::SeasonalTemperature(), TimeSlice);
+		Context.OpenOutput(MassifEnvironmentChannels::SeasonalTemperature(), Inputs.TimeSlice);
 
 	const FMassifChannelGrid& Grid = Scope->GetGrid();
 	TArrayView<double> Celsius = Scope->GetComponent(0);
 	for (int32 Row = 0; Row < Grid.Height; ++Row)
 	{
-		SolveRow(Context.GetState(), MeanTemperature, Grid, Row, AnomalyCelsius, Celsius);
+		SolveRow(Context.GetState(), Inputs, Grid, Row, Celsius);
 	}
 
 	Scope->Commit();
@@ -328,9 +382,18 @@ void FSeasonalTemperatureProcess::WriteSlice(
 
 void FSeasonalTemperatureProcess::Execute(FMassifEnvironmentContext& Context, EMassifFidelity Fidelity) const
 {
+	FSeasonalInputs Inputs;
+	Inputs.MeanTemperature = Context.GetInput(MassifEnvironmentChannels::MeanTemperature());
+	if (Fidelity != EMassifFidelity::Off)
+	{
+		Inputs.SnowAlbedo = Context.FindOptionalInput(MassifEnvironmentChannels::SnowAlbedo());
+	}
+
 	for (int32 TimeSlice = 0; TimeSlice < SeasonalSliceCount; ++TimeSlice)
 	{
-		WriteSlice(Context, TimeSlice, SeasonalAnomalyForFidelity(Params, TimeSlice, Fidelity));
+		Inputs.TimeSlice = TimeSlice;
+		Inputs.AnomalyCelsius = SeasonalAnomalyForFidelity(Params, TimeSlice, Fidelity);
+		WriteSlice(Context, Inputs);
 	}
 }
 

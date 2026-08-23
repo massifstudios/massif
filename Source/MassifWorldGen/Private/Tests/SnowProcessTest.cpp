@@ -1,9 +1,12 @@
+#include "MassifClimateProcesses.h"
 #include "MassifElevationSource.h"
 #include "MassifEnvironmentGraph.h"
 #include "MassifEnvironmentScheduler.h"
 #include "MassifPrecipitationProcesses.h"
 #include "MassifSnowProcesses.h"
 #include "MassifSunProcesses.h"
+#include "MassifVegetationProcesses.h"
+#include "MassifWindProcesses.h"
 #include "Misc/AutomationTest.h"
 
 namespace
@@ -13,6 +16,10 @@ namespace
 
 	/** Slices the pack is written at, which is what every reduction here is counted against. */
 	constexpr int32 SnowTestSliceCount = 24;
+
+	/** The first half of January and the first half of July, as the sliced year counts them. */
+	constexpr int32 SnowTestMidwinterSlice = 0;
+	constexpr int32 SnowTestMidsummerSlice = 12;
 
 	constexpr double SnowTestQuantisationSteps = 65535.0;
 
@@ -53,6 +60,8 @@ namespace
 		FMassifSnowParams Snow;
 		EMassifFidelity SnowFidelity = EMassifFidelity::Standard;
 		EMassifFidelity PrecipitationFidelity = EMassifFidelity::Standard;
+		EMassifFidelity VegetationFidelity = EMassifFidelity::Standard;
+		EMassifFidelity WindFidelity = EMassifFidelity::Standard;
 		double SeaLevelMeanTemperatureCelsius = FMassifGeoreference().SeaLevelMeanTemperatureCelsius;
 	};
 
@@ -79,6 +88,8 @@ namespace
 		checkf(Scheduler->BuildSchedule(Error), TEXT("%s"), *Error);
 		Scheduler->SetFidelity(MassifEnvironmentProcesses::Precipitation(), TestCase.PrecipitationFidelity);
 		Scheduler->SetFidelity(MassifEnvironmentProcesses::Snowpack(), TestCase.SnowFidelity);
+		Scheduler->SetFidelity(MassifEnvironmentProcesses::Vegetation(), TestCase.VegetationFidelity);
+		Scheduler->SetFidelity(MassifEnvironmentProcesses::Wind(), TestCase.WindFidelity);
 		Scheduler->Execute();
 		return Scheduler;
 	}
@@ -102,9 +113,11 @@ namespace
 	}
 
 	double SampleSnowChannel(
-		const FMassifEnvironmentScheduler& Scheduler, const FName& ChannelName, FVector2d PositionMeters)
+		const FMassifEnvironmentScheduler& Scheduler, const FName& ChannelName, FVector2d PositionMeters,
+		int32 TimeSlice = 0)
 	{
-		return Scheduler.GetState().SampleScalar(SnowChannel(Scheduler, ChannelName), PositionMeters);
+		return Scheduler.GetState().SampleScalar(
+			SnowChannel(Scheduler, ChannelName), PositionMeters, TimeSlice);
 	}
 
 	/** All a uint16 channel can be asked to hold, so nothing here guesses a tolerance. */
@@ -129,6 +142,17 @@ namespace
 		return TotalMetres;
 	}
 
+	/** One cell's depth summed over every slice: how much pack the year held, not just its peak. */
+	double YearDepthMetresAtCell(const FMassifEnvironmentScheduler& Scheduler, int32 Column, int32 Row)
+	{
+		double TotalMetres = 0.0;
+		for (int32 TimeSlice = 0; TimeSlice < SnowTestSliceCount; ++TimeSlice)
+		{
+			TotalMetres += ReadSnowCell(Scheduler, MassifEnvironmentChannels::SnowDepth(), Column, Row, TimeSlice);
+		}
+		return TotalMetres;
+	}
+
 	/** Deepest cell minus shallowest, over one slice: how far apart the pack has been driven. */
 	double DepthSpreadMetres(const FMassifEnvironmentScheduler& Scheduler, int32 TimeSlice)
 	{
@@ -144,6 +168,25 @@ namespace
 			ShallowestMetres = FMath::Min(ShallowestMetres, DepthMetres);
 		}
 		return DeepestMetres - ShallowestMetres;
+	}
+
+	/**
+	 * Ground steepness at a cell of the snow grid, differenced exactly the way the
+	 * release reads it: the neighbouring cell centres of that same grid.
+	 */
+	double SnowSlopeDegrees(const FMassifEnvironmentScheduler& Scheduler, int32 Column, int32 Row)
+	{
+		const FMassifChannelGrid& Grid = SnowGrid(Scheduler);
+		const FName& Altitude = MassifEnvironmentChannels::Altitude();
+
+		const double East = SampleSnowChannel(Scheduler, Altitude, Grid.CellCentreMeters(Column + 1, Row));
+		const double West = SampleSnowChannel(Scheduler, Altitude, Grid.CellCentreMeters(Column - 1, Row));
+		const double North = SampleSnowChannel(Scheduler, Altitude, Grid.CellCentreMeters(Column, Row - 1));
+		const double South = SampleSnowChannel(Scheduler, Altitude, Grid.CellCentreMeters(Column, Row + 1));
+
+		const double SpanMeters = 2.0 * Grid.CellSizeMeters;
+		const FVector2d Gradient((East - West) / SpanMeters, (South - North) / SpanMeters);
+		return FMath::RadiansToDegrees(FMath::Atan(Gradient.Length()));
 	}
 
 	/**
@@ -185,6 +228,296 @@ namespace
 		TestCase.Environment.Precipitation.BaseAnnualMillimetres = 250.0;
 		TestCase.Environment.Precipitation.AltitudeGainMillimetresPerKilometre = 0.0;
 		return TestCase;
+	}
+
+	/** A world nothing ever melts in, so the pack only ever deepens and settles. */
+	FSnowTestCase MakeFrozenCase()
+	{
+		FSnowTestCase TestCase;
+		TestCase.SeaLevelMeanTemperatureCelsius = -20.0;
+		return TestCase;
+	}
+
+	/**
+	 * A world with a real winter and a short summer, level enough that the sun over
+	 * it carries the season and nothing else.
+	 *
+	 * The insolation channel is measured against an average growing-season day, so
+	 * on ground this flat a midwinter slice reads well below one and a midsummer
+	 * slice above it. Which of the two the melt reads is then legible in the pack it
+	 * leaves behind.
+	 */
+	FSnowTestCase MakeSeasonalMeltCase(double InsolationMeltGain)
+	{
+		FSnowTestCase TestCase;
+
+		// A hair off level rather than dead flat: enough tilt for the water solve to
+		// have a direction, far too little for the sun to tell the two ends apart.
+		TestCase.Terrain = MakeSnowTerrain(EMassifAnalyticTerrain::TiltedPlane, 90.0, 4.0);
+		TestCase.Snow.InsolationMeltGain = InsolationMeltGain;
+		TestCase.Snow.WindRedistributionStrength = 0.0;
+
+		// Cold enough that nothing melts outside high summer, so what melt there is
+		// happens squarely under the brightest slices of the year.
+		TestCase.SeaLevelMeanTemperatureCelsius = 6.0;
+
+		// The swing peaks at the solstice rather than a month after it, which puts the
+		// melt season on the slices whose sun stands furthest above the reference day.
+		TestCase.Environment.Climate.WarmestSlice = SnowTestMidsummerSlice;
+
+		TestCase.PrecipitationFidelity = EMassifFidelity::Cheap;
+		TestCase.Environment.Precipitation.BaseAnnualMillimetres = 1200.0;
+		TestCase.Environment.Precipitation.AltitudeGainMillimetresPerKilometre = 0.0;
+		return TestCase;
+	}
+
+	/**
+	 * A saddle steep enough to run out of release band at both ends of it.
+	 *
+	 * The shape carries every slope from level at its passes and summits to well
+	 * past vertical-enough-to-slough at its steepest, and the datum is cold enough
+	 * that every cell of it is loaded past the full-load depth — so the only thing
+	 * left that can move the release across the grid is the slope.
+	 */
+	FSnowTestCase MakeSlopeBandCase()
+	{
+		FSnowTestCase TestCase;
+		TestCase.Terrain = MakeSnowTerrain(EMassifAnalyticTerrain::Saddle, 0.0, 2400.0);
+		TestCase.Terrain.BaseAltitudeMeters = 1300.0;
+		TestCase.SeaLevelMeanTemperatureCelsius = -5.0;
+
+		// Nothing may leave a corner of this world short of a full load: no rain
+		// shadow to dry one flank out and no wind to scour a crest bare.
+		TestCase.PrecipitationFidelity = EMassifFidelity::Cheap;
+		TestCase.Snow.WindRedistributionStrength = 0.0;
+		return TestCase;
+	}
+
+	/**
+	 * A cone whose whole flank sits in the release band and whose corners lie
+	 * outside it, dead level at the base altitude: release everywhere on the hill,
+	 * nowhere on the ground around it, and a runout that has somewhere to stop.
+	 */
+	FSnowTestCase MakePathCase()
+	{
+		FSnowTestCase TestCase;
+		TestCase.Terrain = MakeSnowTerrain(EMassifAnalyticTerrain::Cone, 0.0, 900.0);
+		TestCase.Terrain.BaseAltitudeMeters = 1500.0;
+		TestCase.SeaLevelMeanTemperatureCelsius = -5.0;
+		TestCase.PrecipitationFidelity = EMassifFidelity::Cheap;
+		TestCase.Snow.WindRedistributionStrength = 0.0;
+		return TestCase;
+	}
+
+	/**
+	 * A wooded hill in the release band, solved with the wind off.
+	 *
+	 * The wind is what vegetation otherwise reaches the snowpack through, so with it
+	 * off the two solves lay down the same pack on the same ground and the canopy is
+	 * the only thing between their release areas.
+	 */
+	FSnowTestCase MakeForestAnchorCase(EMassifFidelity VegetationFidelity)
+	{
+		FSnowTestCase TestCase;
+		TestCase.Terrain = MakeSnowTerrain(EMassifAnalyticTerrain::Cone, 0.0, 700.0);
+		TestCase.Terrain.BaseAltitudeMeters = 1200.0;
+		TestCase.VegetationFidelity = VegetationFidelity;
+		TestCase.WindFidelity = EMassifFidelity::Off;
+
+		// Deep regolith and a forgiving moisture range, so what limits a stand here is
+		// the climate rather than whatever ground a short droplet run happened to leave.
+		TestCase.Environment.Water.BaseSoilDepthMeters = 0.8;
+		TestCase.Environment.Vegetation.WetnessTolerance = 1.0;
+		return TestCase;
+	}
+
+	/** Highest and lowest a channel reaches across every cell of every slice it holds. */
+	struct FChannelExtremes
+	{
+		double Lowest = TNumericLimits<double>::Max();
+		double Highest = -TNumericLimits<double>::Max();
+	};
+
+	FChannelExtremes SlicedChannelExtremes(
+		const FMassifEnvironmentScheduler& Scheduler, const FName& ChannelName)
+	{
+		const FMassifChannelGrid& Grid = SnowGrid(Scheduler);
+		FChannelExtremes Extremes;
+		for (int32 TimeSlice = 0; TimeSlice < SnowTestSliceCount; ++TimeSlice)
+		{
+			for (int32 CellIndex = 0; CellIndex < Grid.CellCount(); ++CellIndex)
+			{
+				const double Value = ReadSnowCell(
+					Scheduler, ChannelName, CellIndex % Grid.Width, CellIndex / Grid.Width, TimeSlice);
+				Extremes.Lowest = FMath::Min(Extremes.Lowest, Value);
+				Extremes.Highest = FMath::Max(Extremes.Highest, Value);
+			}
+		}
+		return Extremes;
+	}
+
+	/** The strongest release found on ground whose slope falls in a given range. */
+	struct FReleaseSample
+	{
+		bool bFound = false;
+		double Release = 0.0;
+		double SlopeDegrees = 0.0;
+	};
+
+	void ConsiderReleaseCell(
+		const FMassifEnvironmentScheduler& Scheduler, int32 Column, int32 Row, double MinSlopeDegrees,
+		double MaxSlopeDegrees, FReleaseSample& InOutStrongest)
+	{
+		const double SlopeDegrees = SnowSlopeDegrees(Scheduler, Column, Row);
+		if (SlopeDegrees < MinSlopeDegrees || SlopeDegrees > MaxSlopeDegrees)
+		{
+			return;
+		}
+
+		const double Release =
+			ReadSnowCell(Scheduler, MassifEnvironmentChannels::AvalancheRelease(), Column, Row);
+		if (InOutStrongest.bFound && Release <= InOutStrongest.Release)
+		{
+			return;
+		}
+
+		InOutStrongest.bFound = true;
+		InOutStrongest.Release = Release;
+		InOutStrongest.SlopeDegrees = SlopeDegrees;
+	}
+
+	/** Border cells are skipped: their slope is differenced against a clamped neighbour. */
+	FReleaseSample StrongestReleaseBetween(
+		const FMassifEnvironmentScheduler& Scheduler, double MinSlopeDegrees, double MaxSlopeDegrees)
+	{
+		const FMassifChannelGrid& Grid = SnowGrid(Scheduler);
+		FReleaseSample Strongest;
+		for (int32 Row = 1; Row < Grid.Height - 1; ++Row)
+		{
+			for (int32 Column = 1; Column < Grid.Width - 1; ++Column)
+			{
+				ConsiderReleaseCell(Scheduler, Column, Row, MinSlopeDegrees, MaxSlopeDegrees, Strongest);
+			}
+		}
+		return Strongest;
+	}
+
+	/** What the traced paths cover, against the release areas they came off. */
+	struct FPathExtent
+	{
+		double StrongestPath = 0.0;
+		double HighestPathAltitudeMetres = 0.0;
+		double HighestReleaseAltitudeMetres = 0.0;
+
+		/** Ground well beyond the foot of the hill, which nothing should still be running over. */
+		int32 FarFlatCellCount = 0;
+		double StrongestPathOnFarFlatGround = 0.0;
+	};
+
+	void ConsiderPathCell(
+		const FMassifEnvironmentScheduler& Scheduler, int32 Column, int32 Row, double MarkedThreshold,
+		double FarFlatRadiusMeters, FPathExtent& InOutExtent)
+	{
+		const FVector2d Position = SnowGrid(Scheduler).CellCentreMeters(Column, Row);
+		const double AltitudeMetres =
+			SampleSnowChannel(Scheduler, MassifEnvironmentChannels::Altitude(), Position);
+
+		const double Path = ReadSnowCell(Scheduler, MassifEnvironmentChannels::AvalanchePath(), Column, Row);
+		const double Release =
+			ReadSnowCell(Scheduler, MassifEnvironmentChannels::AvalancheRelease(), Column, Row);
+
+		InOutExtent.StrongestPath = FMath::Max(InOutExtent.StrongestPath, Path);
+		if (Release > MarkedThreshold)
+		{
+			InOutExtent.HighestReleaseAltitudeMetres =
+				FMath::Max(InOutExtent.HighestReleaseAltitudeMetres, AltitudeMetres);
+		}
+		if (Path > MarkedThreshold)
+		{
+			InOutExtent.HighestPathAltitudeMetres =
+				FMath::Max(InOutExtent.HighestPathAltitudeMetres, AltitudeMetres);
+		}
+		if (Position.Length() > FarFlatRadiusMeters)
+		{
+			++InOutExtent.FarFlatCellCount;
+			InOutExtent.StrongestPathOnFarFlatGround =
+				FMath::Max(InOutExtent.StrongestPathOnFarFlatGround, Path);
+		}
+	}
+
+	FPathExtent MeasurePathExtent(
+		const FMassifEnvironmentScheduler& Scheduler, double MarkedThreshold, double FarFlatRadiusMeters)
+	{
+		const FMassifChannelGrid& Grid = SnowGrid(Scheduler);
+		FPathExtent Extent;
+		for (int32 Row = 0; Row < Grid.Height; ++Row)
+		{
+			for (int32 Column = 0; Column < Grid.Width; ++Column)
+			{
+				ConsiderPathCell(Scheduler, Column, Row, MarkedThreshold, FarFlatRadiusMeters, Extent);
+			}
+		}
+		return Extent;
+	}
+
+	/** The cell where a stand and a release area overlap most strongly, which is where anchoring shows. */
+	struct FAnchorCell
+	{
+		int32 Column = 0;
+		int32 Row = 0;
+		double Canopy = 0.0;
+		double BareRelease = 0.0;
+
+		double Overlap() const
+		{
+			return Canopy * BareRelease;
+		}
+	};
+
+	void ConsiderAnchorCell(
+		const FMassifEnvironmentScheduler& Bare, const FMassifEnvironmentScheduler& Wooded, int32 Column,
+		int32 Row, FAnchorCell& InOutStrongest)
+	{
+		FAnchorCell Candidate;
+		Candidate.Column = Column;
+		Candidate.Row = Row;
+		Candidate.Canopy = SampleSnowChannel(
+			Wooded, MassifEnvironmentChannels::VegetationCanopy(), SnowGrid(Wooded).CellCentreMeters(Column, Row));
+		Candidate.BareRelease = ReadSnowCell(Bare, MassifEnvironmentChannels::AvalancheRelease(), Column, Row);
+
+		if (Candidate.Overlap() > InOutStrongest.Overlap())
+		{
+			InOutStrongest = Candidate;
+		}
+	}
+
+	FAnchorCell FindAnchorCell(
+		const FMassifEnvironmentScheduler& Bare, const FMassifEnvironmentScheduler& Wooded)
+	{
+		const FMassifChannelGrid& Grid = SnowGrid(Bare);
+		FAnchorCell Strongest;
+		for (int32 Row = 0; Row < Grid.Height; ++Row)
+		{
+			for (int32 Column = 0; Column < Grid.Width; ++Column)
+			{
+				ConsiderAnchorCell(Bare, Wooded, Column, Row, Strongest);
+			}
+		}
+		return Strongest;
+	}
+
+	/** Whether the scheduler put two processes in one relaxation group, which is what a declared cycle becomes. */
+	bool SharesFeedbackGroup(
+		const FMassifEnvironmentScheduler& Scheduler, const FName& FirstProcess, const FName& SecondProcess)
+	{
+		for (const TArray<FName>& Group : Scheduler.GetFeedbackGroups())
+		{
+			if (Group.Contains(FirstProcess) && Group.Contains(SecondProcess))
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 }
 
@@ -260,13 +593,10 @@ bool FSnowColdAndWarmWorldTest::RunTest(const FString& Parameters)
 	// The two ends of the model. A world that never rises above freezing is white
 	// all year everywhere; one that never falls below it never sees snow at all,
 	// whatever the terrain does.
-	FSnowTestCase Frozen;
-	Frozen.SeaLevelMeanTemperatureCelsius = -20.0;
-
 	FSnowTestCase Warm;
 	Warm.SeaLevelMeanTemperatureCelsius = 40.0;
 
-	const TUniquePtr<FMassifEnvironmentScheduler> FrozenWorld = SolveSnow(Frozen);
+	const TUniquePtr<FMassifEnvironmentScheduler> FrozenWorld = SolveSnow(MakeFrozenCase());
 	const TUniquePtr<FMassifEnvironmentScheduler> WarmWorld = SolveSnow(Warm);
 
 	const FMassifEnvironmentState& FrozenState = FrozenWorld->GetState();
@@ -285,6 +615,52 @@ bool FSnowColdAndWarmWorldTest::RunTest(const FString& Parameters)
 	TestEqual(
 		TEXT("Nor has any depth to show for the year"),
 		WarmState.GetChannelMaximum(SnowChannel(*WarmWorld, MassifEnvironmentChannels::PeakSnowDepth())), 0.0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSnowSeasonalMeltTest,
+	"Massif.WorldGen.Snow.MeltFollowsTheSeasonsSun",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSnowSeasonalMeltTest::RunTest(const FString& Parameters)
+{
+	// The melt used to read Sun.DirectInsolation without a slice index. That meant
+	// "the one slice" while the sun was a single surface; since the sun was sliced
+	// it means the first half of January, so every half-month of melt ran under a
+	// midwinter sun that no melt ever happens under.
+	const TUniquePtr<FMassifEnvironmentScheduler> Blind = SolveSnow(MakeSeasonalMeltCase(0.0));
+	const TUniquePtr<FMassifEnvironmentScheduler> Sunlit = SolveSnow(MakeSeasonalMeltCase(1.5));
+
+	const FMassifChannelGrid& Grid = SnowGrid(*Sunlit);
+	const int32 Column = Grid.Width / 2;
+	const int32 Row = Grid.Height / 2;
+	const FVector2d Position = Grid.CellCentreMeters(Column, Row);
+
+	// Read out of the sun channel rather than assumed: the whole claim rests on the
+	// two slices being different numbers on opposite sides of the reference day.
+	const double WinterInsolation = SampleSnowChannel(
+		*Sunlit, MassifEnvironmentChannels::DirectInsolation(), Position, SnowTestMidwinterSlice);
+	const double SummerInsolation = SampleSnowChannel(
+		*Sunlit, MassifEnvironmentChannels::DirectInsolation(), Position, SnowTestMidsummerSlice);
+	TestTrue(
+		FString::Printf(TEXT("January stands below the reference day and July above it (%.3f against %.3f)"),
+			WinterInsolation, SummerInsolation),
+		WinterInsolation < 1.0 && SummerInsolation > 1.0);
+
+	const double BlindMetres = YearDepthMetresAtCell(*Blind, Column, Row);
+	const double SunlitMetres = YearDepthMetresAtCell(*Sunlit, Column, Row);
+	TestTrue(
+		FString::Printf(TEXT("There is a pack for the sun to take (%.2f m summed over the year)"), BlindMetres),
+		BlindMetres > 0.0);
+
+	// Turning the sun term up has to melt more, because the slices the melt happens
+	// in are the ones standing above the reference day. A melt reading January would
+	// scale that same melt by well under one and leave a deeper pack, not a
+	// shallower one, so the sign of this comparison is the bug.
+	TestTrue(
+		FString::Printf(TEXT("The season's own sun melts more, not less (%.3f m against %.3f m over the year)"),
+			SunlitMetres, BlindMetres),
+		SunlitMetres < BlindMetres - SnowQuantisationStep(*Sunlit, MassifEnvironmentChannels::SnowDepth()));
 	return true;
 }
 
@@ -312,14 +688,15 @@ bool FSnowAspectTest::RunTest(const FString& Parameters)
 		SampleSnowChannel(*Ridge, MassifEnvironmentChannels::Altitude(), SouthPosition),
 		SampleSnowChannel(*Ridge, MassifEnvironmentChannels::Altitude(), NorthPosition));
 
-	// Read out of the sun channel rather than assumed: a shading claim is only worth
-	// making if the two flanks really are lit differently.
-	const double SouthInsolation =
-		SampleSnowChannel(*Ridge, MassifEnvironmentChannels::DirectInsolation(), SouthPosition);
-	const double NorthInsolation =
-		SampleSnowChannel(*Ridge, MassifEnvironmentChannels::DirectInsolation(), NorthPosition);
+	// Read out of the sun channel at the slice the melting is done in, rather than
+	// at whichever slice happened to be first: a shading claim about a summer melt
+	// is only worth making about the summer sun.
+	const double SouthInsolation = SampleSnowChannel(
+		*Ridge, MassifEnvironmentChannels::DirectInsolation(), SouthPosition, SnowTestMidsummerSlice);
+	const double NorthInsolation = SampleSnowChannel(
+		*Ridge, MassifEnvironmentChannels::DirectInsolation(), NorthPosition, SnowTestMidsummerSlice);
 	TestTrue(
-		FString::Printf(TEXT("The south flank takes the more sun of the two (%.3f against %.3f)"),
+		FString::Printf(TEXT("The south flank takes the more summer sun of the two (%.3f against %.3f)"),
 			SouthInsolation, NorthInsolation),
 		SouthInsolation > NorthInsolation);
 
@@ -386,6 +763,253 @@ bool FSnowReductionsTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSnowDensityTest,
+	"Massif.WorldGen.Snow.Density",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSnowDensityTest::RunTest(const FString& Parameters)
+{
+	// A pack under its own weight only ever goes one way. Through a winter that
+	// never melts out, each half-month mixes a little fresh snow into what is
+	// already lying and settles the result further, so the density at the end of the
+	// year stands above the density at the start of it.
+	const TUniquePtr<FMassifEnvironmentScheduler> Frozen = SolveSnow(MakeFrozenCase());
+
+	const FMassifChannelGrid& Grid = SnowGrid(*Frozen);
+	const int32 Column = Grid.Width / 2;
+	const int32 Row = Grid.Height / 2;
+
+	const FName& Density = MassifEnvironmentChannels::SnowDensity();
+	const double FirstSlice = ReadSnowCell(*Frozen, Density, Column, Row, 0);
+	const double LastSlice = ReadSnowCell(*Frozen, Density, Column, Row, SnowTestSliceCount - 1);
+	TestTrue(
+		FString::Printf(TEXT("The pack settles through the year (%.1f kg/m3 against %.1f kg/m3)"),
+			LastSlice, FirstSlice),
+		LastSlice > FirstSlice + SnowQuantisationStep(*Frozen, Density));
+
+	// Snow cannot fall lighter than fresh nor pack tighter than settled, whatever
+	// the year does to it — including the year that melts out and starts again.
+	const FMassifSnowParams Defaults;
+	const TUniquePtr<FMassifEnvironmentScheduler> Ridge = SolveSnow(MakeAspectCase());
+	const FChannelExtremes Extremes = SlicedChannelExtremes(*Ridge, Density);
+	const double ToleranceKilogramsPerCubicMetre = SnowQuantisationStep(*Ridge, Density);
+
+	TestTrue(
+		FString::Printf(TEXT("Nothing lies lighter than fresh snow (%.1f kg/m3)"), Extremes.Lowest),
+		Extremes.Lowest
+			>= Defaults.FreshSnowDensityKilogramsPerCubicMetre - ToleranceKilogramsPerCubicMetre);
+	TestTrue(
+		FString::Printf(TEXT("And nothing packs tighter than settled snow (%.1f kg/m3)"), Extremes.Highest),
+		Extremes.Highest
+			<= Defaults.SettledSnowDensityKilogramsPerCubicMetre + ToleranceKilogramsPerCubicMetre);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSnowAlbedoTest,
+	"Massif.WorldGen.Snow.Albedo",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSnowAlbedoTest::RunTest(const FString& Parameters)
+{
+	// Fresh snow is nearly white and a settled pack is not, so the same ground under
+	// the same depth throws back less light in April than it did in November.
+	const TUniquePtr<FMassifEnvironmentScheduler> Frozen = SolveSnow(MakeFrozenCase());
+
+	const FMassifChannelGrid& Grid = SnowGrid(*Frozen);
+	const int32 Column = Grid.Width / 2;
+	const int32 Row = Grid.Height / 2;
+
+	const FName& Albedo = MassifEnvironmentChannels::SnowAlbedo();
+	const double FirstSlice = ReadSnowCell(*Frozen, Albedo, Column, Row, 0);
+	const double LastSlice = ReadSnowCell(*Frozen, Albedo, Column, Row, SnowTestSliceCount - 1);
+	TestTrue(
+		FString::Printf(TEXT("The pack darkens as it settles (%.3f against %.3f)"), LastSlice, FirstSlice),
+		LastSlice < FirstSlice - SnowQuantisationStep(*Frozen, Albedo));
+
+	// And where nothing lies at all it is the ground itself being read, not a pack
+	// of no depth.
+	FSnowTestCase Warm;
+	Warm.SeaLevelMeanTemperatureCelsius = 40.0;
+	const TUniquePtr<FMassifEnvironmentScheduler> WarmWorld = SolveSnow(Warm);
+
+	const FMassifSnowParams Defaults;
+	const FChannelExtremes Extremes = SlicedChannelExtremes(*WarmWorld, Albedo);
+	const double Tolerance = SnowQuantisationStep(*WarmWorld, Albedo);
+	TestTrue(
+		FString::Printf(TEXT("Bare ground reads its own albedo throughout (%.3f to %.3f against %.3f)"),
+			Extremes.Lowest, Extremes.Highest, Defaults.BareGroundAlbedo),
+		FMath::Abs(Extremes.Lowest - Defaults.BareGroundAlbedo) <= Tolerance
+			&& FMath::Abs(Extremes.Highest - Defaults.BareGroundAlbedo) <= Tolerance);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSnowAlbedoFeedbackTest,
+	"Massif.WorldGen.Snow.AlbedoFeedback",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSnowAlbedoFeedbackTest::RunTest(const FString& Parameters)
+{
+	// Snow keeps its own ground cold: it throws back the sunlight that would have
+	// warmed the soil under it. That makes the seasonal temperature part of a cycle
+	// with the pack it decides, which the scheduler has to have solved as one group
+	// rather than refused to order.
+	FSnowTestCase Bare = MakeFrozenCase();
+	Bare.SnowFidelity = EMassifFidelity::Off;
+
+	const TUniquePtr<FMassifEnvironmentScheduler> Snowy = SolveSnow(MakeFrozenCase());
+	const TUniquePtr<FMassifEnvironmentScheduler> Unsolved = SolveSnow(Bare);
+
+	TestTrue(
+		TEXT("The temperature and the pack are solved as one loop"),
+		SharesFeedbackGroup(
+			*Snowy, MassifEnvironmentProcesses::SeasonalClimate(), MassifEnvironmentProcesses::Snowpack()));
+
+	const FMassifChannelGrid& Grid = SnowGrid(*Snowy);
+	const int32 Column = Grid.Width / 2;
+	const int32 Row = Grid.Height / 2;
+	const FVector2d Position = Grid.CellCentreMeters(Column, Row);
+
+	const double PeakDepthMetres =
+		ReadSnowCell(*Snowy, MassifEnvironmentChannels::PeakSnowDepth(), Column, Row);
+	TestTrue(
+		FString::Printf(TEXT("There is deep snow lying here to reflect anything (%.2f m)"), PeakDepthMetres),
+		PeakDepthMetres > 0.0);
+
+	// Read both back rather than assuming how far it moves: what is being asserted
+	// is that the loop closed at all, not what the gain of it is.
+	const FName& Seasonal = MassifEnvironmentChannels::SeasonalTemperature();
+	const double SnowyCelsius = SampleSnowChannel(*Snowy, Seasonal, Position, SnowTestMidwinterSlice);
+	const double UnsolvedCelsius = SampleSnowChannel(*Unsolved, Seasonal, Position, SnowTestMidwinterSlice);
+	TestTrue(
+		FString::Printf(TEXT("Ground under snow runs the colder of the two (%.3f C against %.3f C)"),
+			SnowyCelsius, UnsolvedCelsius),
+		SnowyCelsius < UnsolvedCelsius - SnowQuantisationStep(*Snowy, Seasonal));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSnowReleaseSlopeBandTest,
+	"Massif.WorldGen.Snow.ReleaseSlopeBand",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSnowReleaseSlopeBandTest::RunTest(const FString& Parameters)
+{
+	// A slab needs ground steep enough to slide and shallow enough to hold snow long
+	// enough to become one. Below the band snow simply sits where it fell; above it
+	// the ground sheds every load as it arrives and never builds a slab at all.
+	const TUniquePtr<FMassifEnvironmentScheduler> Saddle = SolveSnow(MakeSlopeBandCase());
+
+	const FMassifSnowParams Defaults;
+	const FMassifEnvironmentState& State = Saddle->GetState();
+	const double ShallowestPackMetres =
+		State.GetChannelMinimum(SnowChannel(*Saddle, MassifEnvironmentChannels::PeakSnowDepth()));
+	TestTrue(
+		FString::Printf(TEXT("Every cell of this world is loaded past the full-load depth (%.2f m)"),
+			ShallowestPackMetres),
+		ShallowestPackMetres > Defaults.ReleaseFullLoadDepthMetres);
+
+	const double Tolerance = SnowQuantisationStep(*Saddle, MassifEnvironmentChannels::AvalancheRelease());
+
+	const FReleaseSample Gentle = StrongestReleaseBetween(*Saddle, 0.0, Defaults.MinReleaseSlopeDegrees - 3.0);
+	TestTrue(TEXT("The world holds ground gentler than the band"), Gentle.bFound);
+	TestTrue(
+		FString::Printf(TEXT("Nothing releases below the band (%.4f at %.1f degrees)"),
+			Gentle.Release, Gentle.SlopeDegrees),
+		Gentle.Release <= Tolerance);
+
+	const FReleaseSample Cliff = StrongestReleaseBetween(*Saddle, Defaults.MaxReleaseSlopeDegrees + 3.0, 90.0);
+	TestTrue(TEXT("The world holds ground steeper than the band"), Cliff.bFound);
+	TestTrue(
+		FString::Printf(TEXT("Nor above it (%.4f at %.1f degrees)"), Cliff.Release, Cliff.SlopeDegrees),
+		Cliff.Release <= Tolerance);
+
+	const FReleaseSample Band = StrongestReleaseBetween(
+		*Saddle, Defaults.MinReleaseSlopeDegrees + 5.0, Defaults.MaxReleaseSlopeDegrees - 5.0);
+	TestTrue(TEXT("The world holds ground inside the band"), Band.bFound);
+	TestTrue(
+		FString::Printf(TEXT("And the band between them releases readily (%.3f at %.1f degrees)"),
+			Band.Release, Band.SlopeDegrees),
+		Band.Release > 0.5);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSnowForestAnchorTest,
+	"Massif.WorldGen.Snow.ForestAnchorsSnow",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSnowForestAnchorTest::RunTest(const FString& Parameters)
+{
+	// Trunks pin the layers of a slab to the ground they stand on, which is why an
+	// avalanche track is a stripe through a forest rather than over one. With the
+	// wind off, the canopy is the only thing vegetation can reach the pack through.
+	const TUniquePtr<FMassifEnvironmentScheduler> Bare =
+		SolveSnow(MakeForestAnchorCase(EMassifFidelity::Off));
+	const TUniquePtr<FMassifEnvironmentScheduler> Wooded =
+		SolveSnow(MakeForestAnchorCase(EMassifFidelity::Standard));
+
+	const FAnchorCell Anchor = FindAnchorCell(*Bare, *Wooded);
+	TestTrue(
+		FString::Printf(TEXT("A stand grows on ground that would otherwise release (%.3f canopy, %.3f release)"),
+			Anchor.Canopy, Anchor.BareRelease),
+		Anchor.Overlap() > 0.0);
+
+	// The two solves have to be laying down the same pack for the comparison to be
+	// about the trees: the wind is off, so nothing the vegetation does can reach it.
+	const FName& PeakDepth = MassifEnvironmentChannels::PeakSnowDepth();
+	const double BareDepthMetres = ReadSnowCell(*Bare, PeakDepth, Anchor.Column, Anchor.Row);
+	const double WoodedDepthMetres = ReadSnowCell(*Wooded, PeakDepth, Anchor.Column, Anchor.Row);
+	const double DepthToleranceMetres =
+		SnowQuantisationStep(*Bare, PeakDepth) + SnowQuantisationStep(*Wooded, PeakDepth);
+	TestTrue(
+		FString::Printf(TEXT("Both solves lie under the same pack (%.4f m against %.4f m)"),
+			WoodedDepthMetres, BareDepthMetres),
+		FMath::Abs(WoodedDepthMetres - BareDepthMetres) <= DepthToleranceMetres);
+
+	const FName& Release = MassifEnvironmentChannels::AvalancheRelease();
+	const double WoodedRelease = ReadSnowCell(*Wooded, Release, Anchor.Column, Anchor.Row);
+	TestTrue(
+		FString::Printf(TEXT("And the wooded one lets go the less readily (%.4f against %.4f)"),
+			WoodedRelease, Anchor.BareRelease),
+		WoodedRelease < Anchor.BareRelease - SnowQuantisationStep(*Wooded, Release));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSnowAvalanchePathTest,
+	"Massif.WorldGen.Snow.AvalanchePath",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSnowAvalanchePathTest::RunTest(const FString& Parameters)
+{
+	// A path is where the slabs above it went, so it lies below its release areas
+	// and it ends where the hill does. The corners of this cone are dead level, and
+	// nothing should still be running once it is out there.
+	const TUniquePtr<FMassifEnvironmentScheduler> Cone = SolveSnow(MakePathCase());
+
+	const FMassifChannelGrid& Grid = SnowGrid(*Cone);
+	const double MarkedThreshold = SnowQuantisationStep(*Cone, MassifEnvironmentChannels::AvalanchePath());
+
+	// Four cells clear of the foot of the cone, so the ring the runout stops in is
+	// not counted as ground it ran across.
+	const double FarFlatRadiusMeters = 0.5 * SnowTestWorldMeters + 4.0 * Grid.CellSizeMeters;
+	const FPathExtent Extent = MeasurePathExtent(*Cone, MarkedThreshold, FarFlatRadiusMeters);
+
+	TestTrue(
+		FString::Printf(TEXT("The release areas run somewhere (%.3f at the strongest)"), Extent.StrongestPath),
+		Extent.StrongestPath > MarkedThreshold);
+	TestTrue(
+		FString::Printf(TEXT("And every one of them runs downhill (%.1f m against a release at %.1f m)"),
+			Extent.HighestPathAltitudeMetres, Extent.HighestReleaseAltitudeMetres),
+		Extent.HighestPathAltitudeMetres < Extent.HighestReleaseAltitudeMetres);
+
+	TestTrue(
+		FString::Printf(TEXT("There is level ground beyond the foot of the hill (%d cells)"),
+			Extent.FarFlatCellCount),
+		Extent.FarFlatCellCount > 0);
+	TestTrue(
+		FString::Printf(TEXT("Nothing is still running over it (%.4f)"), Extent.StrongestPathOnFarFlatGround),
+		Extent.StrongestPathOnFarFlatGround <= MarkedThreshold);
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSnowOffTest,
 	"Massif.WorldGen.Snow.Off",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
@@ -393,7 +1017,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSnowOffTest,
 bool FSnowOffTest::RunTest(const FString& Parameters)
 {
 	// Off is bare ground all year, not an absent channel: nothing downstream has to
-	// ask whether the pack was solved before reading it.
+	// ask whether the pack was solved before reading it. Every channel reads empty
+	// rather than plausible, including the density and the albedo — a bare-ground
+	// albedo here would be a claim the temperature that reads it would act on.
 	FSnowTestCase Bare;
 	Bare.SnowFidelity = EMassifFidelity::Off;
 
@@ -406,7 +1032,9 @@ bool FSnowOffTest::RunTest(const FString& Parameters)
 
 	const FName Names[] = {
 		MassifEnvironmentChannels::SnowDepth(), MassifEnvironmentChannels::PeakSnowDepth(),
-		MassifEnvironmentChannels::SnowCoverDuration()};
+		MassifEnvironmentChannels::SnowCoverDuration(), MassifEnvironmentChannels::SnowDensity(),
+		MassifEnvironmentChannels::SnowAlbedo(), MassifEnvironmentChannels::AvalancheRelease(),
+		MassifEnvironmentChannels::AvalanchePath()};
 	for (const FName& Name : Names)
 	{
 		const FMassifChannelHandle Channel = State.FindChannel(Name);

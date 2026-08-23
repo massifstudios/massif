@@ -67,4 +67,22 @@ struct FMassifClimateParams
 	 * fortnight lags the brightest one.
 	 */
 	int32 WarmestSlice = 14;
+
+	/**
+	 * Degrees a half-month loses where a fresh pack throws back everything bare
+	 * ground would have absorbed.
+	 *
+	 * Snow keeps its own ground cold: sunlight that would have warmed the soil is
+	 * reflected instead, so a slope that has gone white stays white longer than the
+	 * air temperature alone would let it. This closes the loop from the snowpack
+	 * back onto the temperature that drives it.
+	 */
+	double SnowAlbedoCoolingCelsius = 4.0;
+
+	/**
+	 * Albedo the cooling is measured from: what the ground reflects with nothing
+	 * lying on it. Matches the snow model's own bare-ground figure, so ground the
+	 * pack has left reads no cooling rather than a little.
+	 */
+	double BareGroundAlbedo = 0.15;
 };
