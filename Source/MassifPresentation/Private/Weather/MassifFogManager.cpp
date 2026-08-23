@@ -1,54 +1,63 @@
 #include "Weather/MassifFogManager.h"
 
 #include "Components/LocalFogVolumeComponent.h"
-#include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "MassifEnvironmentState.h"
-#include "MassifSimClock.h"
-#include "MassifSimSubsystem.h"
 #include "MassifTerrainField.h"
 #include "MassifUnits.h"
+#include "Weather/MassifWorldTime.h"
 
 namespace
 {
-	/**
-	 * Time of day the fog is drawn at, overriding the wall clock. Negative to
-	 * follow the clock.
-	 *
-	 * Fog is a thing that happens at six in the morning, and waiting for six in the
-	 * morning is not a way to look at it.
-	 */
-	TAutoConsoleVariable<float> CVarFogTimeOfDay(
-		TEXT("massif.Fog.TimeOfDay"), -1.0f,
-		TEXT("Hour of day the fog is solved at, 0 to 24. Negative follows the wall clock."),
-		ECVF_Cheat);
-
 	TAutoConsoleVariable<int32> CVarFogVolumes(
 		TEXT("massif.Fog.Volumes"), 1,
 		TEXT("Whether the local fog volumes are drawn at all. The distance haze is unaffected."),
 		ECVF_Cheat);
 
-	/** Days into the year the world is played on, until a calendar exists to say otherwise. */
-	constexpr double MidwinterDayOfYear = 20.0;
+	/**
+	 * Ground one volume covers, and how far past its cell it reaches.
+	 *
+	 * The two together are what decide whether the layer reads as fog or as a row
+	 * of clouds. A volume is an ellipsoid, so one that is as tall as it is wide is
+	 * a ball; reach has to be several times the spacing for neighbours to merge
+	 * into a sheet instead of sitting beside one another.
+	 */
+	TAutoConsoleVariable<float> CVarFogCellMeters(
+		TEXT("massif.Fog.CellMeters"), 250.0f,
+		TEXT("Ground one fog volume covers, in metres."), ECVF_Cheat);
 
-	double SolveDayFraction(const UWorld* World)
-	{
-		const float ForcedHour = CVarFogTimeOfDay.GetValueOnGameThread();
-		if (ForcedHour >= 0.0f)
-		{
-			return FMath::Frac(ForcedHour / 24.0f);
-		}
+	TAutoConsoleVariable<float> CVarFogReach(
+		TEXT("massif.Fog.Reach"), 2.2f,
+		TEXT("Volume radius as a multiple of the cell. Above 1 the volumes overlap."), ECVF_Cheat);
 
-		const UGameInstance* GameInstance = World->GetGameInstance();
-		const UMassifSimSubsystem* Sim = GameInstance->GetSubsystem<UMassifSimSubsystem>();
-		if (Sim == nullptr)
-		{
-			return 0.0;
-		}
+	/**
+	 * Share of the density carried by the volume's radial falloff rather than its
+	 * height falloff.
+	 *
+	 * Zero by default, and this is the setting that decides whether fog looks like
+	 * fog: the radial term falls off from the centre of the ellipsoid in every
+	 * direction at once, which draws a sphere. The height term falls off upwards
+	 * only, which draws a layer.
+	 */
+	TAutoConsoleVariable<float> CVarFogRadialShare(
+		TEXT("massif.Fog.RadialShare"), 0.0f,
+		TEXT("Share of fog density from the radial falloff. Above zero draws spheres."), ECVF_Cheat);
 
-		return MassifWallClockAtTick(Sim->GetState().TickCount).DayFraction;
-	}
+	/** Higher packs the fog into the bottom of its column, which is what gives the lake a top. */
+	TAutoConsoleVariable<float> CVarFogFalloff(
+		TEXT("massif.Fog.Falloff"), 2000.0f,
+		TEXT("Height falloff inside each fog volume. Higher is a sharper top."), ECVF_Cheat);
+
+	TAutoConsoleVariable<float> CVarFogExtinction(
+		TEXT("massif.Fog.Extinction"), 0.6f,
+		TEXT("Scales the field's 0-1 density into fog extinction."), ECVF_Cheat);
+
+	/** Fog scatters forwards, which is what puts a halo round a low sun in it. */
+	TAutoConsoleVariable<float> CVarFogPhaseG(
+		TEXT("massif.Fog.PhaseG"), 0.4f,
+		TEXT("Scattering distribution, 0 even and 0.9 strongly forward."), ECVF_Cheat);
+
 }
 
 AMassifFogManager::AMassifFogManager()
@@ -115,7 +124,8 @@ void AMassifFogManager::Tick(float DeltaSeconds)
 void AMassifFogManager::SolveFog(FVector2d CameraPositionMeters)
 {
 	Conditions = MassifSolveFogConditions(
-		Params, FloorAltitudeMeters, LatitudeDegrees, MidwinterDayOfYear, SolveDayFraction(GetWorld()));
+		Params, FloorAltitudeMeters, LatitudeDegrees, MassifWorldTime::DayOfYear,
+		MassifWorldTime::GetDayFraction(GetWorld()));
 
 	if (!Conditions.IsAnyFog() || CVarFogVolumes.GetValueOnGameThread() == 0)
 	{
@@ -123,11 +133,11 @@ void AMassifFogManager::SolveFog(FVector2d CameraPositionMeters)
 		return;
 	}
 
-	const FMassifSunPosition Sun = MassifSunAtTimeOfDay(
-		LatitudeDegrees, MidwinterDayOfYear, SolveDayFraction(GetWorld()));
+	const FMassifSunPosition Sun = MassifWorldTime::GetSunPosition(GetWorld(), LatitudeDegrees);
 
 	// Snapped to the grid rather than centred on the camera, so a volume does not
 	// slide along under a camera that is panning.
+	const double CellMeters = FMath::Max(double(CVarFogCellMeters.GetValueOnGameThread()), 1.0);
 	const int32 CellRadius = FMath::CeilToInt32(VisibleRadiusMeters / CellMeters);
 	const FIntPoint CentreCell(
 		FMath::RoundToInt32(CameraPositionMeters.X / CellMeters),
@@ -164,6 +174,7 @@ int32 AMassifFogManager::PlaceRow(
 {
 	for (int32 OffsetX = -CellRadius; OffsetX <= CellRadius; ++OffsetX)
 	{
+		const double CellMeters = FMath::Max(double(CVarFogCellMeters.GetValueOnGameThread()), 1.0);
 		const FVector2d CellCentre(
 			(CentreCell.X + OffsetX) * CellMeters, (CentreCell.Y + OffsetY) * CellMeters);
 		VolumeIndex = PlaceCell(CellCentre, Sun, VolumeIndex);
@@ -202,18 +213,20 @@ int32 AMassifFogManager::PlaceCell(
 		CellCentreMeters.Y * MassifUnits::MetersToCentimeters,
 		CentreAltitude * MassifUnits::MetersToCentimeters));
 
+	const double CellMeters = FMath::Max(double(CVarFogCellMeters.GetValueOnGameThread()), 1.0);
 	const double HorizontalRadiusCentimeters =
-		0.5 * CellMeters * CellOverlap * MassifUnits::MetersToCentimeters;
+		CellMeters * CVarFogReach.GetValueOnGameThread() * MassifUnits::MetersToCentimeters;
 	const double VerticalRadiusCentimeters = 0.5 * ColumnMeters * MassifUnits::MetersToCentimeters;
 	const double BaseSize = ULocalFogVolumeComponent::GetBaseVolumeSize();
 	Volume->SetWorldScale3D(FVector(
 		HorizontalRadiusCentimeters / BaseSize, HorizontalRadiusCentimeters / BaseSize,
 		VerticalRadiusCentimeters / BaseSize));
 
-	Volume->SetHeightFogExtinction(ExtinctionScale * static_cast<float>(Density));
-	Volume->SetRadialFogExtinction(ExtinctionScale * RadialExtinctionShare * static_cast<float>(Density));
-	Volume->SetHeightFogFalloff(HeightFalloff);
-	Volume->SetFogPhaseG(PhaseG);
+	const float Extinction = CVarFogExtinction.GetValueOnGameThread() * static_cast<float>(Density);
+	Volume->SetHeightFogExtinction(Extinction);
+	Volume->SetRadialFogExtinction(Extinction * CVarFogRadialShare.GetValueOnGameThread());
+	Volume->SetHeightFogFalloff(CVarFogFalloff.GetValueOnGameThread());
+	Volume->SetFogPhaseG(CVarFogPhaseG.GetValueOnGameThread());
 	Volume->SetVisibility(true);
 	return VolumeIndex + 1;
 }

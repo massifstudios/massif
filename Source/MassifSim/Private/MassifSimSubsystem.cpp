@@ -15,6 +15,11 @@ void UMassifSimSubsystem::EnqueueCommand(const FMassifSimCommand& Command)
 	PendingCommands.Add(Command);
 }
 
+void UMassifSimSubsystem::SetTimeOfDayMinutes(int32 MinuteOfDay)
+{
+	EnqueueCommand(FMassifSimCommand(EMassifSimCommandType::SetTimeOfDayMinutes, MinuteOfDay));
+}
+
 void UMassifSimSubsystem::SetGameSpeed(EMassifGameSpeed Speed)
 {
 	Clock.Speed = Speed;

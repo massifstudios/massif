@@ -565,8 +565,12 @@ and destroyed by the sun reaching the ground (ARCHITECTURE §6.1).
   sun's current bearing tested against `Sun.Horizon` at that bearing.
 - `AMassifFogManager`: a coarse grid of `ULocalFogVolumeComponent`s around the
   camera, each sized to the column between the ground and the lid.
-- `massif.Fog.TimeOfDay` forces the hour, since waiting for six in the morning
-  is not a way to look at fog. `massif.Fog.Volumes` toggles them off.
+- `massif.TimeOfDay <hour>` winds the world's clock, as a sim command, so
+  everything reading the hour follows it together: the sun and sky move and the
+  fog moves with them. `AMassifDaylightManager` aims the light.
+- Shape knobs are cvars (`massif.Fog.CellMeters`, `.Reach`, `.RadialShare`,
+  `.Falloff`, `.Extinction`, `.PhaseG`), because fog is only judgeable by
+  looking at it and a rebuild per guess is no way to tune it.
 - Presentation-only, so it may read bake channels directly. Stateless, so every
   morning is the same morning.
 
@@ -580,8 +584,10 @@ and destroyed by the sun reaching the ground (ARCHITECTURE §6.1).
    morning is foggy" into "this morning is foggy".
 3. **Steam fog over open water** is not modelled: a term over
    `Hydrology.StandingWaterDepth` and the larger `SeasonalFlow`.
-4. **The volumes are placed, not tuned.** Falloff, phase and extinction are
-   first guesses and want a look.
+4. **The volumes are placed, not tuned.** The first pass read as separate
+   spheres, which was the radial falloff drawing balls; it now defaults to
+   height-only with the volumes reaching past their cells so neighbours merge.
+   Whether that reads as a fog layer is a look, not a measurement.
 
 ### M5f — Geological Refinement
 Erosion over the imported surface: smooth scanner artefacts, cut detail below

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "MassifSimClock.h"
 #include "MassifSimCommand.h"
 #include "Math/RandomStream.h"
 #include "MassifSimState.generated.h"
@@ -38,6 +39,16 @@ struct MASSIFSIM_API FMassifSimState
 	UPROPERTY()
 	FRandomStream RandomStream;
 
+	/**
+	 * Ticks the wall clock runs ahead of the tick count (ARCHITECTURE §6.1).
+	 *
+	 * Winding the time of day moves this rather than the tick count, so the sim's
+	 * measure of how much has happened is not rewritten by a change to what hour
+	 * it is.
+	 */
+	UPROPERTY()
+	int64 ClockOffsetTicks = 0;
+
 	/** What the placeholder command writes. Goes when the first real system lands. */
 	UPROPERTY()
 	int64 CommandCounter = 0;
@@ -69,3 +80,6 @@ MASSIFSIM_API void MassifAdvanceSimTick(
  * differ between two runs that simulated identically.
  */
 MASSIFSIM_API uint64 MassifComputeSimStateHash(const FMassifSimState& State);
+
+/** Where the wall clock stands for this state, offset included. */
+MASSIFSIM_API FMassifWallClock MassifWallClockOf(const FMassifSimState& State);

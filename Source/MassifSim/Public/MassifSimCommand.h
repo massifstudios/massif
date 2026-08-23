@@ -25,6 +25,20 @@ enum class EMassifSimCommandType : uint8
 	 * property a test can hold rather than an intention.
 	 */
 	AddToCounter,
+
+	/**
+	 * Moves the wall clock to a minute of the day, given in `Argument`.
+	 *
+	 * A command rather than a setter, because the time of day is sim state: every
+	 * system that reads the clock — fog now, melt and lift hours later — has to see
+	 * it move on a tick boundary along with everything else, or two of them
+	 * disagree about what hour it is within one frame.
+	 *
+	 * It moves the clock by an offset rather than the tick count, so the tick count
+	 * stays what it is: it is the sim's measure of how much has happened, and
+	 * winding the sun back should not unhappen any of it.
+	 */
+	SetTimeOfDayMinutes,
 };
 
 /**

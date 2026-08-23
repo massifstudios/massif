@@ -57,6 +57,16 @@ constexpr int32 MassifMaxSimTicksPerFrame = 20;
 MASSIFSIM_API double MassifGameSpeedMultiplier(EMassifGameSpeed Speed);
 
 /**
+ * Ticks in a day, which is exact: a day is 1440 minutes and a tick is an eighth
+ * of one. Day boundaries are therefore found in integers rather than by
+ * accumulating a double that would creep further off midnight every day.
+ */
+constexpr int64 MassifTicksPerDay()
+{
+	return static_cast<int64>(MassifGameMinutesPerDay / MassifGameMinutesPerSimTick);
+}
+
+/**
  * Where the wall clock stands, derived from the tick count and nothing else.
  *
  * Not stored: a second copy of the time would be one more thing a save could

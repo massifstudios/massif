@@ -5,6 +5,7 @@
 #include "MassifGameMode.generated.h"
 
 class AMassifDebugChannelView;
+class AMassifDaylightManager;
 class AMassifFogManager;
 class AMassifFoliageManager;
 class AMassifRiverManager;
@@ -14,6 +15,8 @@ class FMassifHeightmap;
 class FMassifRiverField;
 class FMassifRiverNetwork;
 class FMassifTerrainField;
+class ADirectionalLight;
+class ASkyLight;
 
 /**
  * New-game flow for the winter core: loads the elevation model named by
@@ -93,6 +96,16 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<AMassifFogManager> FogManager;
+
+	UPROPERTY()
+	TObjectPtr<AMassifDaylightManager> DaylightManager;
+
+	/** Kept so the daylight manager can aim them at the sun the clock says. */
+	UPROPERTY()
+	TObjectPtr<ADirectionalLight> SunLight;
+
+	UPROPERTY()
+	TObjectPtr<ASkyLight> SkyLightActor;
 
 	float SpawnAltitudeMeters = 0.0f;
 };

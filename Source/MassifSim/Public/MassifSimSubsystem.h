@@ -42,6 +42,15 @@ public:
 		return MassifComputeSimStateHash(State);
 	}
 
+	/** Winds the wall clock to a minute of the day. Queued like any other mutation. */
+	void SetTimeOfDayMinutes(int32 MinuteOfDay);
+
+	/** Where the clock stands right now, offset included. */
+	FMassifWallClock GetWallClock() const
+	{
+		return MassifWallClockOf(State);
+	}
+
 	void SetGameSpeed(EMassifGameSpeed Speed);
 
 	EMassifGameSpeed GetGameSpeed() const

@@ -44,40 +44,20 @@ private:
 	/** How far out the volumes are placed. Past it the distance haze carries the reading. */
 	static constexpr double VisibleRadiusMeters = 2400.0;
 
-	/** Ground one volume covers. Coarse: fog has no detail at the scale terrain does. */
-	static constexpr double CellMeters = 300.0;
-
-	/**
-	 * Volumes are overlapped by half a cell so neighbours blend into one another
-	 * rather than reading as a row of separate clouds.
-	 */
-	static constexpr double CellOverlap = 1.5;
-
 	/** Below this the cell is not worth a volume, and the haze covers what is left. */
-	static constexpr double MinimumDrawnDensity = 0.02;
+	static constexpr double MinimumDrawnDensity = 0.01;
 
 	/** Shallowest column worth drawing, so a cell just under the lid does not flicker. */
-	static constexpr double MinimumColumnMeters = 20.0;
+	static constexpr double MinimumColumnMeters = 15.0;
 
 	/**
-	 * Volumes kept alive. Tile culling admits 32 to a screen tile, and the grid
-	 * inside the radius is smaller than this, so the cap is a backstop.
+	 * Volumes kept alive. Tile culling admits 32 to a screen tile, so heavy overlap
+	 * is affordable, but the total still wants a backstop.
 	 */
-	static constexpr int32 MaxVolumeCount = 256;
+	static constexpr int32 MaxVolumeCount = 400;
 
 	/** Times a second the fog is re-solved. It moves on the hour, not on the frame. */
 	static constexpr double UpdatesPerSecond = 4.0;
-
-	/** Turns the field's 0-to-1 density into the component's extinction. */
-	static constexpr float ExtinctionScale = 0.6f;
-
-	/** Softens the boundary of each volume so the grid behind it does not show. */
-	static constexpr float RadialExtinctionShare = 0.35f;
-
-	static constexpr float HeightFalloff = 400.0f;
-
-	/** Fog scatters forwards, which is what puts a halo round a low sun in it. */
-	static constexpr float PhaseG = 0.4f;
 
 	void SolveFog(FVector2d CameraPositionMeters);
 	void LogSolve(int32 DrawnVolumeCount);

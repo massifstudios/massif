@@ -1,6 +1,7 @@
 #include "MassifGameMode.h"
 
 #include "MassifSimSubsystem.h"
+#include "Weather/MassifDaylightManager.h"
 #include "Weather/MassifFogManager.h"
 
 #include "Components/DirectionalLightComponent.h"
@@ -250,6 +251,9 @@ void AMassifGameMode::LoadTerrainAndSpawnManagers()
 
 	FogManager = GetWorld()->SpawnActor<AMassifFogManager>();
 	FogManager->Initialize(Environment, TerrainField, FMassifGeoreference().LatitudeDegrees);
+
+	DaylightManager = GetWorld()->SpawnActor<AMassifDaylightManager>();
+	DaylightManager->Initialize(SunLight, SkyLightActor, FMassifGeoreference().LatitudeDegrees);
 }
 
 void AMassifGameMode::BuildTerrainField(TSharedRef<const FMassifHeightmap> Heightmap)
@@ -380,6 +384,7 @@ void AMassifGameMode::SpawnSunAndSky()
 	UWorld* World = GetWorld();
 
 	ADirectionalLight* Sun = World->SpawnActor<ADirectionalLight>();
+	SunLight = Sun;
 	Sun->SetMobility(EComponentMobility::Movable);
 	Sun->SetActorRotation(SunRotation);
 	UDirectionalLightComponent* SunComponent = CastChecked<UDirectionalLightComponent>(Sun->GetLightComponent());
@@ -387,7 +392,9 @@ void AMassifGameMode::SpawnSunAndSky()
 
 	World->SpawnActor<ASkyAtmosphere>();
 
-	ASkyLight* SkyLight = World->SpawnActor<ASkyLight>();
+	ASkyLight* Sky = World->SpawnActor<ASkyLight>();
+	ASkyLight* SkyLight = Sky;
+	SkyLightActor = Sky;
 	SkyLight->GetLightComponent()->SetMobility(EComponentMobility::Movable);
 	SkyLight->GetLightComponent()->bRealTimeCapture = true;
 	SkyLight->GetLightComponent()->MarkRenderStateDirty();

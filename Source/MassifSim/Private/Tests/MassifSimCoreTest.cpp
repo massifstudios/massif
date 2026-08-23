@@ -258,3 +258,45 @@ bool FMassifSimWallClockTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("A quarter minute past, which reads as the minute"), QuarterPast.GetMinute(), 0);
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMassifSimTimeOfDayCommandTest,
+	"Massif.Sim.Core.TimeOfDayCommand",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMassifSimTimeOfDayCommandTest::RunTest(const FString& Parameters)
+{
+	// Winding the clock is a command like any other, so every system reading the
+	// hour sees it move on the same tick boundary rather than two of them
+	// disagreeing about what time it is inside one frame.
+	const TStrongObjectPtr<UMassifSimSubsystem> Subsystem = MakeStartedSubsystem(SimTestSeed);
+	AdvanceFrames(*Subsystem, 200, SimTestFramePerTick);
+
+	const int64 TickCountBefore = Subsystem->GetState().TickCount;
+	Subsystem->SetTimeOfDayMinutes(6 * 60);
+
+	TestEqual(TEXT("Enqueuing alone does not move the clock"), Subsystem->GetWallClock().GetHour(), 0);
+
+	AdvanceFrames(*Subsystem, 1, SimTestFramePerTick);
+	TestEqual(TEXT("The step that follows sets the hour"), Subsystem->GetWallClock().GetHour(), 6);
+	TestEqual(TEXT("On the hour"), Subsystem->GetWallClock().GetMinute(), 0);
+
+	// The tick count is the sim's measure of how much has happened, and winding the
+	// sun back must not unhappen any of it.
+	TestEqual(
+		TEXT("And the tick count has only advanced by the step itself"),
+		Subsystem->GetState().TickCount, TickCountBefore + 1);
+
+	// Setting a time twice must land on it twice rather than accumulating an offset.
+	Subsystem->SetTimeOfDayMinutes(14 * 60 + 30);
+	AdvanceFrames(*Subsystem, 1, SimTestFramePerTick);
+	TestEqual(TEXT("A second setting lands on its own hour"), Subsystem->GetWallClock().GetHour(), 14);
+	TestEqual(TEXT("And its own minute"), Subsystem->GetWallClock().GetMinute(), 30);
+
+	// The clock keeps running from wherever it was wound to.
+	AdvanceFrames(*Subsystem, 8 * 60, SimTestFramePerTick);
+	TestTrue(
+		FString::Printf(TEXT("And carries on from there (%02d:%02d)"),
+			Subsystem->GetWallClock().GetHour(), Subsystem->GetWallClock().GetMinute()),
+		Subsystem->GetWallClock().GetMinute() > 30 || Subsystem->GetWallClock().GetHour() > 14);
+	return true;
+}
