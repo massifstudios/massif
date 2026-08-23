@@ -15,10 +15,16 @@ void AMassifDaylightManager::Initialize(ADirectionalLight* InSunLight, double In
 	SunLight = InSunLight;
 	LatitudeDegrees = InLatitudeDegrees;
 
-	if (SunLight != nullptr)
+	// Loud rather than silent. Without a light this actor does nothing at all, and
+	// the one way that happens is being handed one before it has been spawned — in
+	// which case the sun sits wherever it was posed and nothing says why.
+	if (SunLight == nullptr)
 	{
-		FullIntensity = SunLight->GetLightComponent()->Intensity;
+		UE_LOG(LogTemp, Error, TEXT("Daylight: no sun light, so the sky will not follow the clock."));
+		return;
 	}
+
+	FullIntensity = SunLight->GetLightComponent()->Intensity;
 }
 
 void AMassifDaylightManager::Tick(float DeltaSeconds)
@@ -47,4 +53,21 @@ void AMassifDaylightManager::AimSun()
 		FVector2D(FadeEndAltitudeDegrees, FadeStartAltitudeDegrees), FVector2D(0.0, 1.0), AltitudeDegrees);
 
 	SunLight->GetLightComponent()->SetIntensity(FullIntensity * static_cast<float>(NightFade));
+	LogSun(AltitudeDegrees, Sun.GetAzimuthRadians());
+}
+
+void AMassifDaylightManager::LogSun(double AltitudeDegrees, double AzimuthRadians)
+{
+	// Where the sun stands is a thing only a look can judge, so what is logged is
+	// the number behind it: an hour that advances and an altitude that follows it.
+	const int32 WholeDegrees = FMath::FloorToInt32(AltitudeDegrees);
+	if (WholeDegrees == LastLoggedAltitudeDegrees)
+	{
+		return;
+	}
+	LastLoggedAltitudeDegrees = WholeDegrees;
+
+	const FMassifWallClock Clock = MassifWorldTime::GetWallClock(GetWorld());
+	UE_LOG(LogTemp, Display, TEXT("Daylight: %02d:%02d, sun %.1f degrees up, bearing %.0f"),
+		Clock.GetHour(), Clock.GetMinute(), AltitudeDegrees, FMath::RadiansToDegrees(AzimuthRadians));
 }

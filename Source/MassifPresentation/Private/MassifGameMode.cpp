@@ -252,8 +252,6 @@ void AMassifGameMode::LoadTerrainAndSpawnManagers()
 	FogManager = GetWorld()->SpawnActor<AMassifFogManager>();
 	FogManager->Initialize(Environment, TerrainField, FMassifGeoreference().LatitudeDegrees);
 
-	DaylightManager = GetWorld()->SpawnActor<AMassifDaylightManager>();
-	DaylightManager->Initialize(SunLight, FMassifGeoreference().LatitudeDegrees);
 }
 
 void AMassifGameMode::BuildTerrainField(TSharedRef<const FMassifHeightmap> Heightmap)
@@ -375,6 +373,11 @@ void AMassifGameMode::ScheduleDebugScreenshot()
 void AMassifGameMode::SpawnEnvironmentActors()
 {
 	SpawnSunAndSky();
+
+	// After the sun, not before it: the manager drives that light, and spawning it
+	// with the managers that read the environment handed it a null one.
+	DaylightManager = GetWorld()->SpawnActor<AMassifDaylightManager>();
+	DaylightManager->Initialize(SunLight, FMassifGeoreference().LatitudeDegrees);
 	SpawnAtmosphericHaze();
 	SpawnPostProcess();
 }

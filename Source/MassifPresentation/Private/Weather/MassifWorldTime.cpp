@@ -38,6 +38,28 @@ namespace
 
 namespace MassifWorldTime
 {
+	FMassifWallClock GetWallClock(const UWorld* World)
+	{
+		if (World == nullptr)
+		{
+			return FMassifWallClock();
+		}
+
+		const UGameInstance* GameInstance = World->GetGameInstance();
+		if (GameInstance == nullptr)
+		{
+			return FMassifWallClock();
+		}
+
+		const UMassifSimSubsystem* Sim = GameInstance->GetSubsystem<UMassifSimSubsystem>();
+		if (Sim == nullptr)
+		{
+			return FMassifWallClock();
+		}
+
+		return Sim->GetWallClock();
+	}
+
 	double GetDayFraction(const UWorld* World)
 	{
 		if (World == nullptr)

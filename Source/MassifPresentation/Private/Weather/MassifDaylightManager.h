@@ -49,6 +49,7 @@ private:
 	static constexpr double FadeEndAltitudeDegrees = -9.0;
 
 	void AimSun();
+	void LogSun(double AltitudeDegrees, double AzimuthRadians);
 
 	UPROPERTY()
 	TObjectPtr<ADirectionalLight> SunLight;
@@ -57,4 +58,5 @@ private:
 	float FullIntensity = 0.0f;
 
 	double LatitudeDegrees = 47.2;
+	int32 LastLoggedAltitudeDegrees = -1000;
 };

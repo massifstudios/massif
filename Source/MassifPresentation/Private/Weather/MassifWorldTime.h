@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "MassifSimClock.h"
 #include "MassifSunGeometry.h"
 
 class UWorld;
@@ -22,6 +23,9 @@ namespace MassifWorldTime
 	 * exists to advance one, at which point this comes off the wall clock's day.
 	 */
 	constexpr double DayOfYear = 20.0;
+
+	/** Where the simulation says the clock stands. Midnight of day zero where it is not running. */
+	FMassifWallClock GetWallClock(const UWorld* World);
 
 	/** 0 at midnight, rising to 1. Zero where the simulation is not running. */
 	double GetDayFraction(const UWorld* World);
