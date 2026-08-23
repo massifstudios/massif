@@ -217,6 +217,9 @@ bool FShallowWaterMeshTest::RunTest(const FString& Parameters)
 	TestEqual(
 		TEXT("Every vertex carries its depth and speed"), Mesh.DepthAndSpeed.Num(),
 		Mesh.PositionsMeters.Num());
+	TestEqual(
+		TEXT("Every vertex carries the direction it is running"), Mesh.FlowDirection.Num(),
+		Mesh.PositionsMeters.Num());
 
 	// The surface is drawn over the bed, never under it: a sheet below the ground
 	// it stands on is a sheet nobody can see.
@@ -229,5 +232,45 @@ bool FShallowWaterMeshTest::RunTest(const FString& Parameters)
 	}
 
 	TestEqual(TEXT("No part of the surface is under the bed"), VerticesUnderTheGround, 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FShallowWaterFlowDirectionTest,
+	"Massif.WorldGen.ShallowWater.FlowDirection",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * The direction the material lays its ripples along. Unit or nothing: anything
+ * between is a length the shader would divide by, and the sheet is drawn with
+ * whatever comes out of that.
+ */
+bool FShallowWaterFlowDirectionTest::RunTest(const FString& Parameters)
+{
+	const FPatchTestWorld World = SolvePatch(600);
+	const FMassifShallowWaterMesh Mesh = MassifBuildShallowWaterSurface(World.Field, World.Params);
+
+	int32 BadLengths = 0;
+	int32 RunningEast = 0;
+	int32 RunningWest = 0;
+	for (const FVector2f& Direction : Mesh.FlowDirection)
+	{
+		const double Length = FVector2d(Direction).Length();
+		if (Length >= 1.0e-4 && !FMath::IsNearlyEqual(Length, 1.0, 1.0e-3))
+		{
+			++BadLengths;
+		}
+		if (Direction.X > 0.5f)
+		{
+			++RunningEast;
+		}
+		if (Direction.X < -0.5f)
+		{
+			++RunningWest;
+		}
+	}
+
+	TestEqual(TEXT("Every direction is a unit vector or no direction at all"), BadLengths, 0);
+	// The channel falls east, so the water in it does.
+	TestTrue(TEXT("The water runs down the channel"), RunningEast > RunningWest);
 	return true;
 }

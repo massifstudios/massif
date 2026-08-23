@@ -114,8 +114,7 @@ FMassifRipple Fine = MassifSampleRipple(
 float2 Slope = Coarse.Slope + 0.55f * Medium.Slope + 0.3f * Fine.Slope;
 float RippleHeight = 0.5f * Coarse.Height + 0.3f * Medium.Height + 0.2f * Fine.Height;
 
-float3 AlongFlow = float3(FlowDirection, 0.0f);
-AlongFlow = normalize(AlongFlow - SurfaceNormal * dot(AlongFlow, SurfaceNormal));
+float3 AlongFlow = MassifAlongFlow(FlowDirection, SurfaceNormal);
 
 // Ripples flatten towards the bank, where the water is thin enough that the bed
 // under it is what shapes the surface.

@@ -155,6 +155,14 @@ struct FMassifShallowWaterMesh
 	/** Where across the channel and how fast, for the material: depth and speed as fractions. */
 	TArray<FVector2f> DepthAndSpeed;
 
+	/**
+	 * Unit vector the water at a node is running along, and zero where it is
+	 * standing still. The solve's own velocity rather than the channel's, which is
+	 * the point of the patch: water piles against the outside of a bend and turns
+	 * back in the eddy behind a rock, and neither is the direction of the reach.
+	 */
+	TArray<FVector2f> FlowDirection;
+
 	TArray<FIntVector> Triangles;
 	double BuildSeconds = 0.0;
 };

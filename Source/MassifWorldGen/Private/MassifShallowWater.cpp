@@ -487,6 +487,7 @@ namespace
 		double DepthMeters = 0.0;
 		double BedAltitudeMeters = 0.0;
 		double SpeedMetersPerSecond = 0.0;
+		FVector2d VelocityMetersPerSecond = FVector2d::ZeroVector;
 		int32 CellsCounted = 0;
 		int32 WetCellsCounted = 0;
 	};
@@ -512,6 +513,7 @@ namespace
 		InOutGather.SurfaceAltitudeMeters += Field.SurfaceAltitudeMeters(Cell);
 		InOutGather.DepthMeters += Field.DepthMeters[Cell];
 		InOutGather.SpeedMetersPerSecond += FVector2d(Field.VelocityMetersPerSecond[Cell]).Length();
+		InOutGather.VelocityMetersPerSecond += FVector2d(Field.VelocityMetersPerSecond[Cell]);
 		++InOutGather.WetCellsCounted;
 	}
 
@@ -563,6 +565,7 @@ namespace
 		const int32 NodesY = Field.CellCounts.Y + 1;
 		OutMesh.PositionsMeters.SetNumUninitialized(NodesX * NodesY);
 		OutMesh.DepthAndSpeed.SetNumUninitialized(NodesX * NodesY);
+		OutMesh.FlowDirection.SetNumUninitialized(NodesX * NodesY);
 
 		for (int32 NodeY = 0; NodeY < NodesY; ++NodeY)
 		{
@@ -583,6 +586,8 @@ namespace
 					static_cast<float>(FMath::Clamp(
 						Gather.SpeedMetersPerSecond / WetCellsCounted / SpeedReferenceMetersPerSecond,
 						0.0, 1.0)));
+				OutMesh.FlowDirection[NodeIndex] =
+					FVector2f(Gather.VelocityMetersPerSecond.GetSafeNormal());
 			}
 		}
 	}

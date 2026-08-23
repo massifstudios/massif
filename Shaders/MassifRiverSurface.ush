@@ -68,6 +68,33 @@ float2x2 MassifRippleOrientation(float AngleRadians)
 }
 
 /**
+ * The downstream direction laid into the surface.
+ *
+ * Water that is standing still has no direction at all, and the solved patch
+ * says so at every node in an eddy or a pool. Projecting that zero onto the
+ * surface and normalising it is a nought over nought that takes the normal, the
+ * shading and the whole sheet with it, so still water is given an arbitrary
+ * horizontal axis instead — which is all it needs, because the ripple layers
+ * are isotropic and there is no drift to point.
+ */
+float3 MassifAlongFlow(float2 FlowDirection, float3 SurfaceNormal)
+{
+	float3 Downstream = float3(FlowDirection, 0.0f);
+	float3 Tangent = Downstream - SurfaceNormal * dot(Downstream, SurfaceNormal);
+	if (length(Tangent) > 1e-4f)
+	{
+		return normalize(Tangent);
+	}
+
+	float3 Sideways = cross(SurfaceNormal, float3(0.0f, 0.0f, 1.0f));
+	if (length(Sideways) > 1e-4f)
+	{
+		return normalize(Sideways);
+	}
+	return float3(1.0f, 0.0f, 0.0f);
+}
+
+/**
  * Turns a slope in the channel's frame into a world normal. The surface is level,
  * so the across and along directions are both horizontal; the two of them with the
  * surface normal are the frame the ripple slope is expressed in.
