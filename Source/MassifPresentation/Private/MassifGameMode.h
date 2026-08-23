@@ -5,6 +5,7 @@
 #include "MassifGameMode.generated.h"
 
 class AMassifDebugChannelView;
+class AMassifFogManager;
 class AMassifFoliageManager;
 class AMassifRiverManager;
 class AMassifTerrainManager;
@@ -42,6 +43,9 @@ public:
 	}
 
 private:
+	/** Puts the simulation on the master seed and starts it ticking, so the wall clock runs. */
+	void StartSimulation();
+
 	void LoadTerrainAndSpawnManagers();
 
 	/**
@@ -86,6 +90,9 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<AMassifDebugChannelView> DebugChannelView;
+
+	UPROPERTY()
+	TObjectPtr<AMassifFogManager> FogManager;
 
 	float SpawnAltitudeMeters = 0.0f;
 };

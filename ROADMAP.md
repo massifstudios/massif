@@ -555,6 +555,34 @@ the wind/vegetation relaxation group so the iteration count does not multiply it
   same tick as a snow pass survives it; resident and non-resident depth agree
   across the boundary; bake and sim snowpack agree on a season within tolerance.
 
+### W5 — Dynamic Fog — first pass done
+The first system to read the environment simulation, and the reason `Sun.Horizon`
+exists. Radiation fog is a lake with a flat top, formed by an open sky overnight
+and destroyed by the sun reaching the ground (ARCHITECTURE §6.1).
+
+- `FMassifFogField`: static potential from `Hydrology.Wetness ×
+  `Sun.SkyViewFactor` × shelter from `Wind.Exposure`, and burn-off from the
+  sun's current bearing tested against `Sun.Horizon` at that bearing.
+- `AMassifFogManager`: a coarse grid of `ULocalFogVolumeComponent`s around the
+  camera, each sized to the column between the ground and the lid.
+- `massif.Fog.TimeOfDay` forces the hour, since waiting for six in the morning
+  is not a way to look at fog. `massif.Fog.Volumes` toggles them off.
+- Presentation-only, so it may read bake channels directly. Stateless, so every
+  morning is the same morning.
+
+**Open, in the order I would take them.**
+
+1. **The lid is global, measured from the world's lowest point.** Correct for a
+   main valley and wrong for a side valley two hundred metres higher, which
+   would have its own inversion and currently never fogs. Wants a height above
+   the local drainage base rather than above the world minimum.
+2. **No day-to-day variation** until W3. The weather state is what turns "every
+   morning is foggy" into "this morning is foggy".
+3. **Steam fog over open water** is not modelled: a term over
+   `Hydrology.StandingWaterDepth` and the larger `SeasonalFlow`.
+4. **The volumes are placed, not tuned.** Falloff, phase and extinction are
+   first guesses and want a look.
+
 ### M5f — Geological Refinement
 Erosion over the imported surface: smooth scanner artefacts, cut detail below
 the 2 m source resolution, age the ground. Runs once at import over a finite

@@ -1,5 +1,8 @@
 #include "MassifGameMode.h"
 
+#include "MassifSimSubsystem.h"
+#include "Weather/MassifFogManager.h"
+
 #include "Components/DirectionalLightComponent.h"
 #include "Components/ExponentialHeightFogComponent.h"
 #include "Components/SkyAtmosphereComponent.h"
@@ -175,10 +178,19 @@ void AMassifGameMode::BeginPlay()
 {
 	Super::BeginPlay();
 	ApplyEarthGravity();
+	StartSimulation();
 	LoadTerrainAndSpawnManagers();
 	SpawnEnvironmentActors();
 	ConfigureFlyPawn();
 	ScheduleDebugScreenshot();
+}
+
+void AMassifGameMode::StartSimulation()
+{
+	// The wall clock is derived from the tick count, so nothing that reads the time
+	// of day means anything until the simulation is running (ARCHITECTURE §6.1).
+	UMassifSimSubsystem* Sim = GetGameInstance()->GetSubsystem<UMassifSimSubsystem>();
+	Sim->StartNewGame(static_cast<int32>(GetMasterSeed()));
 }
 
 void AMassifGameMode::ApplyEarthGravity()
@@ -235,6 +247,9 @@ void AMassifGameMode::LoadTerrainAndSpawnManagers()
 
 	DebugChannelView = GetWorld()->SpawnActor<AMassifDebugChannelView>();
 	DebugChannelView->Initialize(HabitatField, TerrainManager);
+
+	FogManager = GetWorld()->SpawnActor<AMassifFogManager>();
+	FogManager->Initialize(Environment, TerrainField, FMassifGeoreference().LatitudeDegrees);
 }
 
 void AMassifGameMode::BuildTerrainField(TSharedRef<const FMassifHeightmap> Heightmap)
