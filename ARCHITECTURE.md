@@ -30,7 +30,7 @@ MassifPresentation ──► MassifSim ──► MassifCore
 
 | Module | Contents | Hard rules |
 |---|---|---|
-| `MassifCore` | Seeded RNG channels, fixed-tick driver, hashing, shared math/types. | No engine gameplay classes beyond basic types. |
+| `MassifCore` | Seeded RNG channels, fixed-tick driver, hashing, shared math/types, the response table type (§5.6.6). | No engine gameplay classes beyond basic types. |
 | `MassifSim` | All gameplay state and rules: resort graph, lifts, slopes, snow grid, guest agents, economy, sim commands, save data structs. | No rendering, no UI, no actor spawning, no `GetWorld()`-dependent logic paths in state updates. Must run headless (`-nullrhi`). |
 | `MassifWorldGen` | The terrain field (§5), hydrology graph, mask derivation, PCG input preparation. | Deterministic per seed. The terrain field is a pure function of world position with no global state, so any point at any resolution is evaluable without evaluating any other. |
 | `MassifPresentation` (primary game module) | Terrain mesh building, snow rendering/deformation visuals, NPC visuals, camera, input, UI, PCG spawning. | Reads sim state; never writes it except by enqueuing sim commands. |
@@ -81,12 +81,22 @@ and `MassifCore` tests must pass headless.
 - **The environment bake (§5.6) is not sim state.** Its channels — drainage,
   standing water, wetness, soil depth, insolation, wind, snow, vegetation — feed
   worldgen and presentation: what to plant, what the ground is made of, how the
-  terrain is shaded. Nothing in `MassifSim` reads them. The CPU implementation is
-  each algorithm's definition and the contract the tests hold. Where a process
-  later gains a GPU path it exists to make that process fast, and when a mask sim
-  does read (buildable, forest) needs a bake channel, it comes from the CPU path
-  — so the rule above stands unweakened however much of the bake moves to the
-  hardware.
+  terrain is shaded. The CPU implementation is each algorithm's definition and the
+  contract the tests hold. Where a process later gains a GPU path it exists to
+  make that process fast.
+- **`MassifSim` never reads a bake channel.** It reads the **response table**
+  (§5.6.6): a small, immutable, CPU-only snapshot of the handful of terrain
+  responses the sim needs, built at world load and handed to the sim subsystem.
+  Three things force this and any one of them would be enough. Bake fidelity is a
+  machine setting rather than save data (§9), so a sim reading channels directly
+  would give two players the same seed and different worlds — cold-air pooling
+  exists only at `Reference`, wind steering only above `Cheap`. The module
+  dependency graph (§2) has no `MassifSim` → `MassifWorldGen` edge and gains none.
+  And CPU and GPU paths are held only to agreeing *within a tolerance* (§5.6.3),
+  which is a fine contract for what a forest looks like and not one a state hash
+  can be built on. Routing sim through a pinned table is therefore also what frees
+  the bake to move to the hardware at all: the GPU path serves worldgen and
+  presentation, and nothing downstream of it is gameplay truth.
 - **Sim samples the terrain field only at fixed, named spacings.** The
   field is LOD-dependent by design, so sampling it at view LOD would make
   sim state depend on where the camera is. Sim therefore uses named
@@ -368,6 +378,7 @@ Current and planned channels:
 | `Hydrology.Wetness` | topographic wetness index, blended with standing water and climate | humidity, species density |
 | `Soil.Depth` | droplet erosion/deposition against a sediment capacity | rock vs scree vs earth |
 | `Sun.SkyViewFactor`, `Sun.DirectInsolation` | horizon sweep and a sampled sun path | temperature, treeline, snow retention |
+| `Sun.Horizon` | the sweep itself, kept per azimuth instead of reduced away | time of day: whether the sun is up *here*, now |
 | `Climate.Temperature` | datum temperature, lapse rate, insolation, cold-air pooling | treeline, freezing level, melt |
 | `Wind.Exposure`, `Wind.Field` | topographic exposure index, channeling, lee separation | snow redistribution, krummholz |
 | `Precip.Rate`, `Precip.SnowFraction` | orographic gain and shadow, phase split by temperature | water balance, snowfall |
@@ -378,6 +389,7 @@ Current and planned channels:
 | `Precip.Seasonal`, `Climate.Evapotranspiration` | the annual cycle, and what the air takes back | when water arrives, and the balance closing |
 | `Snow.Density`, `Snow.Albedo`, `Snow.AvalancheRelease`, `Snow.AvalanchePath` | settling, reflection, slope and loading | groomability, the albedo loop, avalanche tracks |
 | `Wind.KatabaticStrength`, `Wind.FoehnWarming` | drainage and trapping, descent from upwind | frost hollows, warm lee valleys |
+| `Wind.Response.<bearing>`, `Precip.LiftResponse.<bearing>` | the terrain's answer to a **unit** wind from each of 16 bearings | runtime weather (§6.1) |
 
 #### 5.6.3 Processes
 
@@ -431,9 +443,11 @@ to the CPU path rather than skipping, so every process is covered by tests on
 every machine, and the two are held to agreeing within a tolerance, which is what
 catches a GPU port that has drifted from its reference.
 
-**No process has a GPU path yet; every one of them runs on the CPU.** The whole
-bake is about 15 s over the 20 km world, and two processes are most of it: the
-horizon sweep and sun-path integration at 6.4 s, and the droplet erosion at 3.1 s.
+**No process has a GPU path yet; every one of them runs on the CPU.** The
+scheduler's switch is wired — `SetGpuEnabled` is read in `RunProcess` — but no
+process overrides `ExecuteOnGpu`, so it is inert. The whole bake is about 24 s
+over the 20 km world, and two processes are most of it: the horizon sweep and
+sun-path integration at 10.6 s, and the droplet erosion at 3.1 s.
 Both are the shape hardware is good at — the sweep is per-cell and reads a
 read-only surface, and the droplets already scatter through integer atomics on a
 fixed-point encoding precisely so the port would be reproducible. The two ordered
@@ -474,6 +488,47 @@ a lee deposition zone at exposure 0.2, and the sim moves actual snow into it.
 Keeping the split explicit is what keeps sim state out of presentation (§3) and
 the bake out of the save file (§9).
 
+#### 5.6.6 The response table
+
+The sim does not read that boundary condition out of the channels. It reads a
+**response table**: `FMassifSimEnvironmentTable`, a plain immutable grid of the
+few terrain responses the weather and snow systems actually need, built once at
+world load and handed to `UMassifSimSubsystem` by the presentation layer that
+owns the scheduler. Its type lives in `MassifCore`, so `MassifSim` can hold one
+without depending on `MassifWorldGen` (§2), and it is the *only* environment
+input the sim has.
+
+Three properties make it sim-safe where a channel is not:
+
+- **Pinned fidelity.** The table is solved at one fixed level named in code, not
+  at whatever the machine's environment settings say. A player who turns Wind
+  Simulation down gets a cheaper-looking mountain and the same snow.
+- **CPU only.** It never comes from a GPU path, however much of the bake moves
+  to the hardware, because tolerance agreement (§5.6.3) is not a basis for a
+  state hash.
+- **Hashed.** Its content hash goes into the save beside the elevation model's
+  (§9). A table that changed shape refuses the save rather than resuming the
+  resort onto a different climate.
+
+**Unit-normalised, not evaluated.** The table stores the terrain's answer to a
+*unit* forcing, and the sim multiplies by what the weather is doing. This is
+exact rather than approximate, and that is a property of the models rather than
+a hope about them. Wind is `FlowDirection × Speed × Exposure` with steering that
+is scale-invariant in magnitude, so the field is linear in speed by construction.
+The orographic lift integral is a mean of `max(0, dot(Wind, Gradient))`, and
+`max(0, ·)` is positively homogeneous, so the integral is `Speed × f(terrain,
+bearing)` identically — which matters because the rain shadow is `exp(−k ×
+integral)` and is therefore *exponential* in wind speed. A table holding a
+finished precipitation field would be correct at one wind speed and wrong at
+every other, and wrong worst in the storms the player notices.
+
+Direction-dependent entries are held per bearing, at **16 bearings**. Blending
+between them is done on the scalars only, never on a finished vector: the valley
+axis carries a sign that flips as flow crosses the perpendicular, and lerping two
+neighbouring bearings' vectors would collapse a valley wind to zero and then
+reverse it. The runtime rebuilds the vector from the blended scalars and the
+actual flow direction, the way the bake's own steering does.
+
 ### 5.7 Debug channel views
 
 Any channel can be painted onto the terrain in place of its material, with a
@@ -506,7 +561,71 @@ This is presentation-only debug, not a game mode: it reads the bake and draws
 it. It exists because every one of these channels is a simulation whose output
 is otherwise only visible as a second-order effect on where trees ended up.
 
-## 6. Snow System
+## 6. Weather and Snow
+
+### 6.1 Weather
+
+The bake holds the average year (§5.6.5). Weather is *this* year, and it is sim
+state: fixed tick, serialized, hashed.
+
+**Weather is not a grid.** A fluid solve over the world would be millions of
+cells several times a second, would not be reproducible once threaded, and is not
+what produces the structure a player sees anyway. Over a world only 20 km across
+essentially all of that structure is terrain-forced, so weather factors:
+
+```
+weather(position, t) = synoptic state(t) × terrain response(position)
+```
+
+The synoptic state is **global** — one air mass over a 20 km massif — and is a
+few dozen scalars. The terrain response is a property of the mountain, does not
+change, and is the response table (§5.6.6). Local values are then point
+functions with no neighbour reads and no iteration: temperature from datum,
+lapse, insolation and pooling; wind from the unit response scaled by speed;
+precipitation from the unit lift response, with the shadow exponentiated at the
+actual speed and the phase split against the freezing level.
+
+The limit is honest and out of scope: convective cells are 2–10 km and are
+*not* terrain-forced, so the factorization cannot represent a summer
+thunderstorm crossing half the map. Phase 1 is winter, and Alpine winter
+precipitation is stratiform and orographic — exactly what the factorization is.
+
+**Some of the state is stateful, and must be.** A formula in the current
+scalars cannot express an inversion: valley air decouples from the air aloft,
+builds overnight under clear calm skies, and breaks when wind or sun mixes it
+out. That is hysteresis, and it decides whether the valley run is skiable while
+the mid-station is above freezing. Inversion strength, the season's snowfall
+anomaly, the front's position along its axis, and the gust factor are therefore
+integrated scalars, not derived ones.
+
+**Time of day is first-class.** Morning refreeze, afternoon shade on a north
+slope, the spring corn cycle: the diurnal structure *is* the skiing conditions.
+It needs to be answerable per point — is the sun up *here*, now — which a
+day-integrated insolation channel cannot answer. `Sun.Horizon` (§5.6.2) keeps
+the sweep the bake already performs instead of reducing it away, and the sim
+tests the sun's current altitude against the horizon at that bearing.
+
+**Cadence is in sim ticks, never wall-clock.** Game speed changes how many ticks
+run per real second and never the tick delta (§3), so a weather step measured in
+seconds would advance at a different rate per simulated hour at 4× and stop
+meaning anything under pause. Weather advances every fixed *N* ticks. The clock
+advances `MassifGameMinutesPerSimTick` per tick — one constant every other
+quantity here is denominated in, from melt rates to how long a front takes to
+cross.
+
+> **Open:** the value of that constant is a game-feel decision, not a technical
+> one, and it is coupled to guest agents (§8): a clock fast enough to make a ski
+> day pass in minutes is faster than a guest can plausibly be animated skiing.
+> Recorded here so the two are decided together rather than one defaulting into
+> the other.
+
+**Snow off the resident tiles.** Non-resident ground is not simulated and stores
+nothing; it reads the baked climatological depth for the slice, scaled by the
+season anomaly scalar. That is what keeps the residency boundary invisible
+(§5.5) — resident tiles tracking a heavy season next to ground sitting at the
+average would be a visible line.
+
+### 6.2 Snow
 
 Two layers with a strict boundary:
 
@@ -514,7 +633,7 @@ Two layers with a strict boundary:
    grid (≈4 m/cell) held as resident tiles (§5.4) around resorts and
    player activity, not as one world-sized array, of
    `{SnowDepth, Compaction}` per cell. Untouched terrain derives its snow
-   from altitude and aspect analytically, and only becomes a resident tile
+   from the bake and the season anomaly (§6.1), and only becomes a resident tile
    once something writes to it. Updated on sim
    tick by weather (snowfall, melt by altitude/aspect/temperature), snow
    cannons, and grooming — all deterministic. Slope quality, cannon
@@ -530,6 +649,24 @@ Two layers with a strict boundary:
 
 The snow material blends depth (from a GPU copy of the sim grid, updated
 when cells change) with the deformation RT for close-range detail.
+
+**Residency is modification-driven, and permanent.** A tile becomes resident when
+a command writes to it and stays resident for the rest of the game. It is
+explicitly *not* driven by the camera: sim state that depended on where the
+player had been standing would break the determinism contract (§4) the same way
+sampling the terrain field at view LOD would, and a tile nobody has groomed or
+built on has no history worth keeping anyway. The resident set is therefore the
+resort footprint — bounded, player-authored, and exactly what §9 already saves.
+
+**The snow pass runs inside the tick, in parallel, not behind it.** Tiles are
+disjoint and each update reads only its own cells and the global weather scalars,
+so a `ParallelFor` over tiles is deterministic by construction: disjoint writes,
+no cross-tile reduction, no ordering. A deferred pipeline that applied results
+some ticks later would be both slower to reason about and wrong — a grooming
+command landing inside the deferral window is silently overwritten, and a
+determinism hash agrees across runs while the grooming disappears. Where the pass
+is still too expensive, it runs every fixed *N* ticks; never "when the job
+finishes", which is wall-clock entering sim state.
 
 ## 7. Resort Network & Buildables
 
@@ -566,9 +703,14 @@ when cells change) with the deformation RT for close-range detail.
 
 ## 9. Save Games
 
-- Save = master seed + elevation model name and content hash + engine version
-  tag + full `FMassifSimState` + modified resident tiles (§5.4, compressed) +
-  save format version.
+- Save = master seed + elevation model name and content hash + response table
+  content hash (§5.6.6) + engine version tag + full `FMassifSimState` + modified
+  resident tiles (§5.4, compressed) + save format version.
+- The response table hash is recorded for the same reason the elevation hash is:
+  the sim ran against it, it is not saved, and it is rebuilt at load. A build
+  whose table would come out different refuses the save rather than resuming the
+  resort onto a different climate. Bake *fidelity* stays out of the save because
+  the table is pinned (§5.6.6) and does not vary with it.
 - No heightfield is saved. The elevation model is a build asset that ships
   with the game; the save names it and records its hash, so a mismatch is
   refused rather than silently loading a resort onto different ground. Save
