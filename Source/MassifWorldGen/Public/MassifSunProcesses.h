@@ -35,6 +35,27 @@ namespace MassifEnvironmentChannels
 	 * with whichever half-month was asked.
 	 */
 	MASSIFWORLDGEN_API const FName& AnnualInsolation();
+
+	/**
+	 * Degrees the skyline stands above level, per compass bearing.
+	 *
+	 * The sweep behind `SkyViewFactor`, kept instead of averaged away. Sky view
+	 * answers how much sky a point has and cannot answer where it is: a cell under
+	 * a ridge to its south and open to the north reports the same fraction as one
+	 * shaded evenly all round, and only the first loses the winter sun.
+	 *
+	 * This is what makes time of day answerable. `DirectInsolation` is a whole
+	 * day's total for a half-month, so it cannot say whether the sun is up *here*,
+	 * now — which is the question behind morning refreeze, afternoon shade on a
+	 * north slope, and the spring corn cycle. Comparing the sun's current altitude
+	 * against the angle stored at its bearing does say.
+	 *
+	 * Slices are bearings, not dates: `MassifHorizonAzimuthCount` of them, slice 0
+	 * due north and running clockwise. The slice axis is reused because a bearing
+	 * indexes exactly the way a date does, and every consumer — sampling, the
+	 * scrubber, the transect — already handles it.
+	 */
+	MASSIFWORLDGEN_API const FName& Horizon();
 }
 
 namespace MassifEnvironmentProcesses

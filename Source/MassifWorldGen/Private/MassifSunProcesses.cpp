@@ -27,6 +27,12 @@ namespace MassifEnvironmentChannels
 		static const FName Name(TEXT("Sun.AnnualInsolation"));
 		return Name;
 	}
+
+	const FName& Horizon()
+	{
+		static const FName Name(TEXT("Sun.Horizon"));
+		return Name;
+	}
 }
 
 namespace MassifEnvironmentProcesses
@@ -345,6 +351,30 @@ namespace
 	}
 
 	/**
+	 * The swept skyline at one stored bearing, in degrees.
+	 *
+	 * The nearest swept sample rather than a blend of two: the sweep count is a
+	 * multiple of the stored count at every supported fidelity, so the nearest
+	 * sample *is* that bearing, and averaging two skyline angles would report a
+	 * ridge halfway between two that are actually there.
+	 *
+	 * An empty sweep is the cheap fidelity, which does not sweep at all. A level
+	 * skyline is the honest answer for it, and the same one Off writes.
+	 */
+	double HorizonDegreesAt(TArrayView<const double> SweptRadians, int32 BearingIndex)
+	{
+		if (SweptRadians.IsEmpty())
+		{
+			return 0.0;
+		}
+
+		const int32 SweptIndex =
+			FMath::RoundToInt32(double(BearingIndex) * SweptRadians.Num() / MassifHorizonAzimuthCount)
+			% SweptRadians.Num();
+		return FMath::RadiansToDegrees(SweptRadians[SweptIndex]);
+	}
+
+	/**
 	 * Everything the solve fills before any of it is committed.
 	 *
 	 * Held whole rather than written straight into channel slices because the
@@ -359,6 +389,7 @@ namespace
 			SkyView.SetNumZeroed(Grid.CellCount());
 			SurfaceSkyFraction.SetNumZeroed(Grid.CellCount());
 			DirectBySlice.SetNumZeroed(Grid.CellCount() * MassifSeasonalSliceCount);
+			HorizonByBearing.SetNumZeroed(Grid.CellCount() * MassifHorizonAzimuthCount);
 		}
 
 		TArrayView<double> SliceOfDirect(int32 TimeSlice)
@@ -372,6 +403,18 @@ namespace
 				DirectBySlice.GetData() + TimeSlice * Grid.CellCount(), Grid.CellCount());
 		}
 
+		TArrayView<double> SliceOfHorizon(int32 BearingIndex)
+		{
+			return TArrayView<double>(
+				HorizonByBearing.GetData() + BearingIndex * Grid.CellCount(), Grid.CellCount());
+		}
+
+		TArrayView<const double> SliceOfHorizon(int32 BearingIndex) const
+		{
+			return TArrayView<const double>(
+				HorizonByBearing.GetData() + BearingIndex * Grid.CellCount(), Grid.CellCount());
+		}
+
 		FMassifChannelGrid Grid;
 
 		TArray<double> SkyView;
@@ -381,6 +424,9 @@ namespace
 
 		/** Slice-major, so one slice is a contiguous run to commit. */
 		TArray<double> DirectBySlice;
+
+		/** Bearing-major, for the same reason. Degrees above level. */
+		TArray<double> HorizonByBearing;
 	};
 
 	/** Copies one solved surface into one slice of a channel, scaled by what that season is worth. */
@@ -395,6 +441,24 @@ namespace
 			Target[CellIndex] = Values[CellIndex] * Scale;
 		}
 		Scope->Commit();
+	}
+
+	/**
+	 * Every bearing level, which is what Off means for a skyline: open sky is
+	 * nothing standing above the horizontal, and that is zero rather than the one
+	 * the fraction channels write.
+	 */
+	void WriteLevelHorizon(FMassifEnvironmentContext& Context)
+	{
+		const FName& ChannelName = MassifEnvironmentChannels::Horizon();
+		const FMassifChannelHandle Channel = Context.GetOutput(ChannelName);
+
+		TArray<double> Level;
+		Level.SetNumZeroed(Context.GetState().GetGrid(Channel).CellCount());
+		for (int32 BearingIndex = 0; BearingIndex < MassifHorizonAzimuthCount; ++BearingIndex)
+		{
+			WriteSlice(Context, ChannelName, BearingIndex, Level, 1.0);
+		}
 	}
 
 	/** Every slice of one channel as open sky over level ground, which is what Off means. */
@@ -476,6 +540,8 @@ private:
 	FMassifChannelDescriptor MakeFractionChannel(
 		const FName& Name, EMassifChannelColorMap ColorMap, int32 TimeSliceCount) const;
 
+	FMassifChannelDescriptor MakeHorizonChannel() const;
+
 	void WriteUnlit(FMassifEnvironmentContext& Context) const;
 
 	void SolveCell(
@@ -508,6 +574,24 @@ FMassifChannelDescriptor FInsolationProcess::MakeFractionChannel(
 	return Descriptor;
 }
 
+FMassifChannelDescriptor FInsolationProcess::MakeHorizonChannel() const
+{
+	FMassifChannelDescriptor Descriptor;
+	Descriptor.Name = MassifEnvironmentChannels::Horizon();
+	Descriptor.Type = EMassifChannelType::Scalar;
+	Descriptor.Encoding = EMassifChannelEncoding::Uint16;
+	Descriptor.CellSizeMeters = Params.CellSizeMeters;
+	Descriptor.TimeSliceCount = MassifHorizonAzimuthCount;
+	Descriptor.Unit = TEXT("degrees");
+	Descriptor.Description = TEXT("Skyline elevation per bearing. Slices are bearings from north, not dates.");
+	Descriptor.ColorMap = EMassifChannelColorMap::Viridis;
+
+	// A skyline steeper than sixty degrees needs a wall directly overhead, so the
+	// legend spends its range on the angles a massif actually produces.
+	Descriptor.DisplayRange = FVector2d(0.0, 60.0);
+	return Descriptor;
+}
+
 FMassifProcessDeclaration FInsolationProcess::Declare() const
 {
 	FMassifProcessDeclaration Declaration;
@@ -527,6 +611,7 @@ FMassifProcessDeclaration FInsolationProcess::Declare() const
 		MassifEnvironmentChannels::DiffuseInsolation(), EMassifChannelColorMap::Magma, MassifSeasonalSliceCount));
 	Declaration.OutputChannels.Add(
 		MakeFractionChannel(MassifEnvironmentChannels::AnnualInsolation(), EMassifChannelColorMap::Magma, 1));
+	Declaration.OutputChannels.Add(MakeHorizonChannel());
 	return Declaration;
 }
 
@@ -542,6 +627,8 @@ void FInsolationProcess::WriteUnlit(FMassifEnvironmentContext& Context) const
 	{
 		WriteOpenSky(Context, Name);
 	}
+
+	WriteLevelHorizon(Context);
 }
 
 void FInsolationProcess::SolveCell(
@@ -566,6 +653,11 @@ void FInsolationProcess::SolveCell(
 	// Isotropic sky: a tilted surface sees less of it, and a hemmed-in one less again.
 	Field.SurfaceSkyFraction[CellIndex] = Field.SkyView[CellIndex] * 0.5 * (1.0 + Normal.Z);
 
+	for (int32 BearingIndex = 0; BearingIndex < MassifHorizonAzimuthCount; ++BearingIndex)
+	{
+		Field.SliceOfHorizon(BearingIndex)[CellIndex] = HorizonDegreesAt(HorizonScratch, BearingIndex);
+	}
+
 	for (int32 TimeSlice = 0; TimeSlice < Year.Num(); ++TimeSlice)
 	{
 		Field.SliceOfDirect(TimeSlice)[CellIndex] = ReceivedDayEnergy(Year[TimeSlice], Normal, HorizonScratch);
@@ -589,6 +681,13 @@ void FInsolationProcess::CommitField(
 	const TArray<double> AnnualMean = GrowingSeasonMean(Field, GrowingSeasonSlices(Params));
 	WriteSlice(Context, MassifEnvironmentChannels::SkyViewFactor(), 0, Field.SkyView, 1.0);
 	WriteSlice(Context, MassifEnvironmentChannels::AnnualInsolation(), 0, AnnualMean, 1.0);
+
+	for (int32 BearingIndex = 0; BearingIndex < MassifHorizonAzimuthCount; ++BearingIndex)
+	{
+		WriteSlice(
+			Context, MassifEnvironmentChannels::Horizon(), BearingIndex, Field.SliceOfHorizon(BearingIndex),
+			1.0);
+	}
 
 	for (int32 TimeSlice = 0; TimeSlice < Year.Num(); ++TimeSlice)
 	{

@@ -422,3 +422,181 @@ bool FSunOffTest::RunTest(const FString& Parameters)
 	}
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSunHorizonBearingsTest,
+	"Massif.WorldGen.Sun.HorizonBearings",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSunHorizonBearingsTest::RunTest(const FString& Parameters)
+{
+	// What Sun.Horizon adds over Sun.SkyViewFactor is *where* the skyline stands,
+	// and a channel that got the compass wrong would still report a plausible sky
+	// view while putting every shadow at the wrong hour. A tilted plane pins the
+	// convention: it descends towards its bearing, so the ground rises towards the
+	// opposite one, and the skyline is the plane's own slope there and nothing at
+	// all behind it.
+	const TUniquePtr<FMassifEnvironmentScheduler> Plane = SolveSun(
+		MakeSunTerrain(EMassifAnalyticTerrain::TiltedPlane, 0.0), EMassifFidelity::Standard);
+
+	// Along a constant gradient every sample on the ray returns the same tangent,
+	// so the swept maximum is the slope itself rather than an artefact of where the
+	// steps happened to land.
+	const double SlopeDegrees =
+		FMath::RadiansToDegrees(FMath::Atan(900.0 / SunTestWorldMeters));
+
+	const int32 DownhillBearing = 0;
+	const int32 UphillBearing = MassifHorizonAzimuthCount / 2;
+	const double Uphill = SampleSunChannel(
+		*Plane, MassifEnvironmentChannels::Horizon(), FVector2d::ZeroVector, UphillBearing);
+	const double Downhill = SampleSunChannel(
+		*Plane, MassifEnvironmentChannels::Horizon(), FVector2d::ZeroVector, DownhillBearing);
+
+	TestTrue(
+		FString::Printf(TEXT("The skyline uphill is the plane's slope (%.3f against %.3f degrees)"),
+			Uphill, SlopeDegrees),
+		FMath::Abs(Uphill - SlopeDegrees) <= 0.05);
+	TestTrue(
+		FString::Printf(TEXT("And downhill there is no skyline at all (%.3f degrees)"), Downhill),
+		Downhill <= 0.05);
+
+	// The two extremes must be the antipodal pair, not merely far apart: a bearing
+	// axis rotated by a few bins would still separate them.
+	int32 HighestBearing = 0;
+	int32 LowestBearing = 0;
+	double HighestDegrees = -TNumericLimits<double>::Max();
+	double LowestDegrees = TNumericLimits<double>::Max();
+	for (int32 BearingIndex = 0; BearingIndex < MassifHorizonAzimuthCount; ++BearingIndex)
+	{
+		const double Degrees = SampleSunChannel(
+			*Plane, MassifEnvironmentChannels::Horizon(), FVector2d::ZeroVector, BearingIndex);
+		if (Degrees > HighestDegrees)
+		{
+			HighestDegrees = Degrees;
+			HighestBearing = BearingIndex;
+		}
+		if (Degrees < LowestDegrees)
+		{
+			LowestDegrees = Degrees;
+			LowestBearing = BearingIndex;
+		}
+	}
+
+	TestEqual(TEXT("The highest skyline is the uphill bearing"), HighestBearing, UphillBearing);
+	TestEqual(TEXT("The lowest is the one opposite it"), LowestBearing, DownhillBearing);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSunHorizonPitWallTest,
+	"Massif.WorldGen.Sun.HorizonPitWall",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSunHorizonPitWallTest::RunTest(const FString& Parameters)
+{
+	// A conical pit rises at one angle in every direction, so its floor is the one
+	// shape whose whole skyline has a closed form. That pins the magnitude against
+	// trigonometry rather than against the code, and cross-checks the sky view
+	// factor the same sweep produces.
+	constexpr double PitReliefMeters = 900.0;
+	const TUniquePtr<FMassifEnvironmentScheduler> Pit = SolveSun(
+		MakeSunTerrain(EMassifAnalyticTerrain::Pit, 0.0, PitReliefMeters), EMassifFidelity::Standard);
+
+	const double WallDegrees =
+		FMath::RadiansToDegrees(FMath::Atan(PitReliefMeters / (0.5 * SunTestWorldMeters)));
+
+	double LargestError = 0.0;
+	for (int32 BearingIndex = 0; BearingIndex < MassifHorizonAzimuthCount; ++BearingIndex)
+	{
+		const double Degrees = SampleSunChannel(
+			*Pit, MassifEnvironmentChannels::Horizon(), FVector2d::ZeroVector, BearingIndex);
+		LargestError = FMath::Max(LargestError, FMath::Abs(Degrees - WallDegrees));
+	}
+
+	// The floor sits at the world origin and the cells do not, so each bearing
+	// sweeps from up to half a cell off centre and reads a wall a little nearer or
+	// further than the closed form assumes. That is worth about half a degree here
+	// against a signal of twenty-four.
+	TestTrue(
+		FString::Printf(TEXT("Every bearing off the pit floor reads the wall angle %.3f (worst off by %.3f)"),
+			WallDegrees, LargestError),
+		LargestError <= 0.75);
+
+	// The sky view is a reduction of the same swept angles, so agreeing with it is
+	// what says the two are reading one sweep and not two.
+	const double SkyView =
+		SampleSunChannel(*Pit, MassifEnvironmentChannels::SkyViewFactor(), FVector2d::ZeroVector);
+	const double ExpectedSkyView = ExpectedPitSkyViewFactor(PitReliefMeters);
+	TestTrue(
+		FString::Printf(TEXT("And the sky view reduces to the same wall (%.4f against %.4f)"),
+			SkyView, ExpectedSkyView),
+		FMath::Abs(SkyView - ExpectedSkyView) <= 0.05);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSunHorizonUnsweptIsLevelTest,
+	"Massif.WorldGen.Sun.HorizonUnsweptIsLevel",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSunHorizonUnsweptIsLevelTest::RunTest(const FString& Parameters)
+{
+	// Off and Cheap both skip the sweep, and both must still write the channel, so
+	// that nothing downstream has to ask whether the sun was solved (ARCHITECTURE
+	// §5.6.3). The trivial value here is zero rather than the one the fraction
+	// channels write: an open sky is nothing standing above level.
+	const FMassifAnalyticElevationSource::FParams Terrain =
+		MakeSunTerrain(EMassifAnalyticTerrain::Pit, 0.0, 2400.0);
+	const EMassifFidelity Unswept[] = {EMassifFidelity::Off, EMassifFidelity::Cheap};
+
+	for (EMassifFidelity Fidelity : Unswept)
+	{
+		const TUniquePtr<FMassifEnvironmentScheduler> Scheduler = SolveSun(Terrain, Fidelity);
+		const FMassifEnvironmentState& State = Scheduler->GetState();
+		const FMassifChannelHandle Channel = State.FindChannel(MassifEnvironmentChannels::Horizon());
+
+		TestTrue(TEXT("The horizon is written even where it is not swept"), State.IsChannelWritten(Channel));
+		TestEqual(TEXT("Its deepest cell is level"), State.GetChannelMinimum(Channel), 0.0);
+		TestEqual(TEXT("And so is its highest"), State.GetChannelMaximum(Channel), 0.0);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSunHorizonBearingsSurviveRefinementTest,
+	"Massif.WorldGen.Sun.HorizonBearingsSurviveRefinement",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSunHorizonBearingsSurviveRefinementTest::RunTest(const FString& Parameters)
+{
+	// Reference sweeps twice as many azimuths, but a channel's slice count is fixed
+	// when the process declares itself, before any fidelity is known. The stored
+	// bearings are therefore a subset of the swept ones at both levels: refining
+	// sharpens each angle without moving where the bearings sit. If that ever
+	// stopped holding, the same bearing index would mean two different compass
+	// directions at two fidelities.
+	const FMassifAnalyticElevationSource::FParams Terrain =
+		MakeSunTerrain(EMassifAnalyticTerrain::Ridge, 90.0, 1800.0);
+	const TUniquePtr<FMassifEnvironmentScheduler> Standard = SolveSun(Terrain, EMassifFidelity::Standard);
+	const TUniquePtr<FMassifEnvironmentScheduler> Reference = SolveSun(Terrain, EMassifFidelity::Reference);
+
+	TestEqual(
+		TEXT("Both hold one slice per stored bearing"),
+		SunSliceCount(*Standard, MassifEnvironmentChannels::Horizon()), MassifHorizonAzimuthCount);
+	TestEqual(
+		TEXT("However finely the sweep ran"),
+		SunSliceCount(*Reference, MassifEnvironmentChannels::Horizon()), MassifHorizonAzimuthCount);
+
+	const FVector2d Flank(0.0, -SunTestWorldMeters * 0.25);
+	double LargestDifference = 0.0;
+	for (int32 BearingIndex = 0; BearingIndex < MassifHorizonAzimuthCount; ++BearingIndex)
+	{
+		LargestDifference = FMath::Max(
+			LargestDifference,
+			FMath::Abs(
+				SampleSunChannel(*Standard, MassifEnvironmentChannels::Horizon(), Flank, BearingIndex)
+				- SampleSunChannel(*Reference, MassifEnvironmentChannels::Horizon(), Flank, BearingIndex)));
+	}
+
+	TestTrue(
+		FString::Printf(TEXT("And the stored bearings agree across fidelity (worst off by %.4f degrees)"),
+			LargestDifference),
+		LargestDifference <= 1.0);
+	return true;
+}

@@ -469,19 +469,27 @@ solve.
 
 W0 stands alone against the bake. Everything from W1 on is blocked on M2.
 
-### W0 — Sun.Horizon and Time of Day (open)
+### W0 — Sun.Horizon — done
 The bake already sweeps the horizon per cell and throws it away, reducing it to
 a sky view factor. Keeping it is what lets anything ask whether the sun is up
 *here*, now — the question `Sun.DirectInsolation` cannot answer, because it is a
 half-monthly *daily total*. Morning refreeze, afternoon shade on a north slope
 and the spring corn cycle are all downstream of it.
 
-- `Sun.Horizon`: horizon elevation per azimuth, 16 azimuths on the slice axis,
-  `Uint16`, 32 m cells. No new sweep — the existing one stops being discarded.
-- A sun-position function shared by the bake and the runtime clock.
-- **Verify:** tests — a cone shades its own polar flank and a tilted plane never
-  shades itself; the swept angles bracket the sky view factor the same cell
-  already reports; the channel is unchanged by fidelity where the sweep is.
+- `Sun.Horizon`: skyline elevation in degrees per bearing, 16 bearings on the
+  slice axis, `Uint16`, at the sun's own 32 m cells. No new sweep — the existing
+  one stops being discarded, so the bake time is unchanged.
+- **Verified:** a tilted plane reads its own slope at the uphill bearing and
+  nothing at the downhill one, and those two are the antipodal pair, which pins
+  the compass convention the whole feature rests on; a conical pit reads its
+  closed-form wall angle at every bearing and reduces to the sky view factor the
+  same sweep produces; Off and Cheap both write a level skyline rather than
+  leaving the channel absent; the stored bearings do not move when `Reference`
+  sweeps twice as finely.
+
+The sun-position function the runtime clock needs is **deferred to W3**, where
+the consumer appears. It belongs in `MassifCore` so `MassifSim` can reach it, and
+writing it now would be an unused API against a sim that does not exist yet.
 
 ### W1 — The Response Table (blocked on M2)
 `FMassifSimEnvironmentTable` in `MassifCore` (ARCHITECTURE §5.6.6): the pinned,

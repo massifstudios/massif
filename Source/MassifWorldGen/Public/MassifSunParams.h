@@ -3,6 +3,17 @@
 #include "CoreMinimal.h"
 
 /**
+ * Bearings the horizon is *stored* at, evenly spaced from north.
+ *
+ * Fixed, and deliberately not the same number as the sweep: `Reference` sweeps
+ * twice as finely, and a channel's slice count is settled when the process
+ * declares itself, before any fidelity is known. The stored bearings are a
+ * subset of the swept ones at every supported fidelity, so refining the sweep
+ * sharpens each stored angle without moving where they sit.
+ */
+constexpr int32 MassifHorizonAzimuthCount = 16;
+
+/**
  * What the insolation solve is tuned by.
  *
  * Everything here is a count or a fixed sample, never a convergence test: the
