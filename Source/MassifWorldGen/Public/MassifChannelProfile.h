@@ -109,6 +109,33 @@ struct FMassifChannelSolveParams
 	double MinProfileSpanMeters = 6.0;
 
 	/**
+	 * Passes of the centreline snap, how far one of them may move a station across
+	 * its own section, and how far the whole snap may carry it off the traced line.
+	 *
+	 * The trace is routed on the hydrology grid, whose cells are wider than a
+	 * headwater channel, so a station can come to rest on the valley side rather
+	 * than in the channel. Every measure the solve takes from a section laid across
+	 * a hillside is a measure of the hillside.
+	 *
+	 * Bounded per pass and in total, because ground with no channel in it has its
+	 * lowest offset at the section's own edge however far the section is moved, and
+	 * an unbounded snap walks the station down the slope for as long as it is let.
+	 */
+	int32 CentrelineSnapPasses = 4;
+	double CentrelineSnapStepFraction = 0.5;
+	double MaxCentrelineDriftMeters = 12.0;
+
+	/**
+	 * Share of its neighbours' mean each station is drawn back towards after a snap.
+	 *
+	 * Each station finds its own low ground, and two of them a few metres apart on a
+	 * rough bed routinely find it on opposite sides. Left alone that draws a channel
+	 * that zigzags from one bank to the other between every pair of stations, which
+	 * is longer than the valley it runs down and is not a line water would take.
+	 */
+	double CentrelineSnapSmoothing = 0.5;
+
+	/**
 	 * Manning's n: a steep alpine gravel bed with boulders standing in it.
 	 *
 	 * One figure for every channel in the world for now. It belongs on the bed

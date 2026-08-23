@@ -91,30 +91,74 @@ namespace
 		const FMassifRiverNode& Node, const FMassifChannelFlowParams& Params, double DownstreamSurfaceMeters,
 		double DownstreamFrictionSlope, double SpanMeters, double NormalMeters)
 	{
-		const double MeanSlope = 0.5 * (FrictionSlope(Node, DownstreamSurfaceMeters) + DownstreamFrictionSlope);
+		// Measured at this station's own normal depth where the station below stands
+		// lower than this bed, which on a steep reach is most of them. Read at a
+		// surface under its own bed the section is dry and has no friction slope to
+		// give, and the reach slope it falls back to belongs to the whole window
+		// rather than to the ground here: over a level step in a steep reach the
+		// water then climbs at the reach's gradient while the bed climbs at the
+		// step's, and the difference accumulates upstream into a pool tens of metres
+		// deep.
+		const double MeasuredAtMeters = FMath::Max(DownstreamSurfaceMeters, NormalMeters);
+		const double MeanSlope = 0.5 * (FrictionSlope(Node, MeasuredAtMeters) + DownstreamFrictionSlope);
 		const double PondedMeters = FMath::Max(NormalMeters, DownstreamSurfaceMeters + MeanSlope * SpanMeters);
 
-		// A pool fills to its own bank and no further, unless what is below it stands
-		// higher still — at which point the water is over the bank because the reach
-		// downstream cannot take it, which is what a flood is.
-		const double CeilingMeters = FMath::Max(
-			MassifChannelHydraulics::SurfaceCeilingMeters(Node.Profile, Params.MinDepthMeters),
-			DownstreamSurfaceMeters);
+		// A pool fills to its own bank and no further. A station whose bank cannot
+		// hold the level the one below it reached spills over it, and nothing here
+		// dams the water back up: letting the level below raise this ceiling carries
+		// one station's bank crest up the whole reach and fills the valley behind it.
+		const double CeilingMeters =
+			MassifChannelHydraulics::SurfaceCeilingMeters(Node.Profile, Params.MinDepthMeters);
 		return FMath::Min(PondedMeters, CeilingMeters);
 	}
 
+	/** Shallowest the surface may be put at a station, which is its own invert plus the floor depth. */
+	double SurfaceFloorMeters(const FMassifRiverNode& Node, double MinDepthMeters)
+	{
+		const int32 ThalwegOffset = MassifChannelHydraulics::FindThalwegOffset(Node.Profile);
+		return Node.Profile.BedAltitudeMeters[ThalwegOffset] + MinDepthMeters;
+	}
+
+	/**
+	 * Holds the surface falling downstream by lowering the station below, never by
+	 * raising the one above.
+	 *
+	 * Raising upstream is what a dam does, and nothing along a reach dams it: a
+	 * station that cannot hold the level of the one below it spills over its own
+	 * bank. Taking the maximum instead carries one station's level the length of the
+	 * reach and stands a headwater brook fifteen metres deep.
+	 *
+	 * Falling rather than merely not rising. A stretch clamped to one level is
+	 * bit-identical station to station, and a surface built from it draws as a
+	 * horizontal slab with a wall down to the next slab below. The floor slope is
+	 * the smallest gradient the reach is solved against anywhere, so holding the
+	 * surface to it costs nothing a station's own solve had asked for.
+	 */
+	void HoldSurfaceFallingDownstream(
+		TArray<FMassifRiverNode>& InOutNodes, const FMassifChannelFlowParams& Params,
+		TArrayView<const double> SpanMeters)
+	{
+		for (int32 NodeIndex = 1; NodeIndex < InOutNodes.Num(); ++NodeIndex)
+		{
+			FMassifRiverNode& Node = InOutNodes[NodeIndex];
+			const double CeilingMeters = InOutNodes[NodeIndex - 1].WaterSurfaceMeters
+				- Params.MinEnergySlope * SpanMeters[NodeIndex];
+			const double HeldMeters = FMath::Min(Node.WaterSurfaceMeters, CeilingMeters);
+			Node.WaterSurfaceMeters =
+				FMath::Max(HeldMeters, SurfaceFloorMeters(Node, Params.MinDepthMeters));
+		}
+	}
+
 	/** Every station at its own normal depth, with none of them left standing over the one below. */
-	void SolveNormalDepth(TArray<FMassifRiverNode>& InOutNodes, const FMassifChannelFlowParams& Params)
+	void SolveNormalDepth(
+		TArray<FMassifRiverNode>& InOutNodes, const FMassifChannelFlowParams& Params,
+		TArrayView<const double> SpanMeters)
 	{
 		for (FMassifRiverNode& Node : InOutNodes)
 		{
 			Node.WaterSurfaceMeters = NormalSurfaceMeters(Node, Params);
 		}
-		for (int32 NodeIndex = InOutNodes.Num() - 2; NodeIndex >= 0; --NodeIndex)
-		{
-			InOutNodes[NodeIndex].WaterSurfaceMeters = FMath::Max(
-				InOutNodes[NodeIndex].WaterSurfaceMeters, InOutNodes[NodeIndex + 1].WaterSurfaceMeters);
-		}
+		HoldSurfaceFallingDownstream(InOutNodes, Params, SpanMeters);
 	}
 
 	/** The outlet at normal depth, then upstream against friction from there. */
@@ -137,6 +181,7 @@ namespace
 			DownstreamFrictionSlope = FrictionSlope(Node, SurfaceMeters);
 			DownstreamSurfaceMeters = SurfaceMeters;
 		}
+		HoldSurfaceFallingDownstream(InOutNodes, Params, SpanMeters);
 	}
 
 	void SolveReachFlow(FMassifRiverReach& InOutReach, const FMassifChannelFlowParams& Params)
@@ -154,7 +199,7 @@ namespace
 			}
 			if (Params.Fidelity == EMassifFidelity::Cheap)
 			{
-				SolveNormalDepth(InOutReach.Nodes, Params);
+				SolveNormalDepth(InOutReach.Nodes, Params, SpanMeters);
 				continue;
 			}
 			SolveBackwater(InOutReach.Nodes, Params, SpanMeters);

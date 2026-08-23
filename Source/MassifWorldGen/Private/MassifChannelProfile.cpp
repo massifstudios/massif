@@ -346,10 +346,159 @@ namespace
 		return FMath::Max(DropMeters / RunMeters, Params.MinEnergySlope);
 	}
 
+	// -----------------------------------------------------------------------
+	// Putting the centreline on the channel
+	// -----------------------------------------------------------------------
+
+	/** Where the lowest ground across a section sits, as a distance along that section. */
+	double LowGroundOffsetMeters(const FMassifChannelProfile& Profile)
+	{
+		int32 LowestOffset = 0;
+		for (int32 OffsetIndex = 1; OffsetIndex < MassifChannelProfileOffsetCount; ++OffsetIndex)
+		{
+			if (Profile.GroundAltitudeMeters[OffsetIndex] < Profile.GroundAltitudeMeters[LowestOffset])
+			{
+				LowestOffset = OffsetIndex;
+			}
+		}
+		return Profile.OffsetMeters(LowestOffset);
+	}
+
+	/** The spacing a station's own section is read at. */
+	double SectionSpacingMeters(
+		const IMassifElevationSource& Elevation, const FMassifChannelSolveParams& Params,
+		const FMassifRiverNode& Node)
+	{
+		const double SpanMeters = 2.0 * ProfileHalfSpanMeters(Params, Node);
+		return FMath::Max(
+			SpanMeters / (MassifChannelProfileOffsetCount - 1), Elevation.GetFinestSpacingMeters());
+	}
+
+	/** One station moved across its own section towards the low ground, within both bounds. */
+	FVector2d SnappedPositionMeters(
+		const IMassifElevationSource& Elevation, const FMassifChannelSolveParams& Params,
+		const FMassifRiverNode& Node, FVector2d FlowDirection, FVector2d TracedPositionMeters)
+	{
+		FMassifChannelProfile Profile;
+		Profile.HalfSpanMeters = ProfileHalfSpanMeters(Params, Node);
+		SampleSection(Elevation, Node, FlowDirection, Profile);
+
+		const double StepLimitMeters = Params.CentrelineSnapStepFraction * Profile.HalfSpanMeters;
+		const double ShiftMeters =
+			FMath::Clamp(LowGroundOffsetMeters(Profile), -StepLimitMeters, StepLimitMeters);
+		const FVector2d AcrossFlow(FlowDirection.Y, -FlowDirection.X);
+
+		const FVector2d DriftMeters =
+			Node.PositionMeters + AcrossFlow * ShiftMeters - TracedPositionMeters;
+		if (DriftMeters.Length() <= Params.MaxCentrelineDriftMeters)
+		{
+			return TracedPositionMeters + DriftMeters;
+		}
+		return TracedPositionMeters + DriftMeters.GetSafeNormal() * Params.MaxCentrelineDriftMeters;
+	}
+
+	/** Draws each station back towards the line between its neighbours, both ends held. */
+	void SmoothCentrelinePass(
+		const FMassifChannelSolveParams& Params, TArray<FMassifRiverNode>& InOutNodes,
+		TArray<FVector2d>& InOutSmoothedMeters)
+	{
+		const int32 LastIndex = InOutNodes.Num() - 1;
+		for (int32 NodeIndex = 1; NodeIndex < LastIndex; ++NodeIndex)
+		{
+			const FVector2d BetweenMeters = 0.5
+				* (InOutNodes[NodeIndex - 1].PositionMeters + InOutNodes[NodeIndex + 1].PositionMeters);
+			InOutSmoothedMeters[NodeIndex] = FMath::Lerp(
+				InOutNodes[NodeIndex].PositionMeters, BetweenMeters, Params.CentrelineSnapSmoothing);
+		}
+		for (int32 NodeIndex = 1; NodeIndex < LastIndex; ++NodeIndex)
+		{
+			InOutNodes[NodeIndex].PositionMeters = InOutSmoothedMeters[NodeIndex];
+		}
+	}
+
+	/**
+	 * One pass of the snap over a reach.
+	 *
+	 * Every station is measured against the line the pass started from before any of
+	 * them moves, so the result does not depend on the order they are walked in. The
+	 * two ends stay where the trace left them: they are where this reach meets the
+	 * ones above and below it, and a confluence that moved would come apart.
+	 */
+	void SnapCentrelinePass(
+		const IMassifElevationSource& Elevation, const FMassifChannelSolveParams& Params,
+		TArrayView<const FVector2d> TracedPositionMeters, TArray<FMassifRiverNode>& InOutNodes,
+		TArray<FVector2d>& InOutSnappedMeters)
+	{
+		for (int32 NodeIndex = 0; NodeIndex < InOutNodes.Num(); ++NodeIndex)
+		{
+			InOutSnappedMeters[NodeIndex] = SnappedPositionMeters(
+				Elevation, Params, InOutNodes[NodeIndex], FlowDirectionAt(InOutNodes, NodeIndex),
+				TracedPositionMeters[NodeIndex]);
+		}
+		for (int32 NodeIndex = 1; NodeIndex < InOutNodes.Num() - 1; ++NodeIndex)
+		{
+			InOutNodes[NodeIndex].PositionMeters = InOutSnappedMeters[NodeIndex];
+		}
+		SmoothCentrelinePass(Params, InOutNodes, InOutSnappedMeters);
+	}
+
+	/**
+	 * The water surface at the stations the snap moved.
+	 *
+	 * Along a channel the elevation model's own altitude is the top of the water, so
+	 * a station that has moved onto lower ground is under a lower surface. Taken as
+	 * a minimum against what it already carried and then held non-rising downstream,
+	 * so the pass only ever lowers a station: a surface this raised would be a pond
+	 * that nothing in the terrain is holding up.
+	 */
+	void LowerSurfaceToSnappedGround(
+		const IMassifElevationSource& Elevation, const FMassifChannelSolveParams& Params,
+		TArray<FMassifRiverNode>& InOutNodes)
+	{
+		for (int32 NodeIndex = 1; NodeIndex < InOutNodes.Num() - 1; ++NodeIndex)
+		{
+			FMassifRiverNode& Node = InOutNodes[NodeIndex];
+			const double GroundMeters = Elevation.SampleAltitudeMeters(
+				Node.PositionMeters, SectionSpacingMeters(Elevation, Params, Node));
+			Node.WaterSurfaceMeters = FMath::Min(Node.WaterSurfaceMeters, GroundMeters);
+		}
+		for (int32 NodeIndex = 1; NodeIndex < InOutNodes.Num(); ++NodeIndex)
+		{
+			InOutNodes[NodeIndex].WaterSurfaceMeters = FMath::Min(
+				InOutNodes[NodeIndex].WaterSurfaceMeters, InOutNodes[NodeIndex - 1].WaterSurfaceMeters);
+		}
+	}
+
+	void SnapCentrelineToChannel(
+		const IMassifElevationSource& Elevation, const FMassifChannelSolveParams& Params,
+		TArray<FMassifRiverNode>& InOutNodes)
+	{
+		if (InOutNodes.Num() < 3 || Params.CentrelineSnapPasses <= 0)
+		{
+			return;
+		}
+
+		TArray<FVector2d> TracedPositionMeters;
+		TracedPositionMeters.Reserve(InOutNodes.Num());
+		for (const FMassifRiverNode& Node : InOutNodes)
+		{
+			TracedPositionMeters.Add(Node.PositionMeters);
+		}
+
+		TArray<FVector2d> SnappedMeters;
+		SnappedMeters.SetNumUninitialized(InOutNodes.Num());
+		for (int32 Pass = 0; Pass < Params.CentrelineSnapPasses; ++Pass)
+		{
+			SnapCentrelinePass(Elevation, Params, TracedPositionMeters, InOutNodes, SnappedMeters);
+		}
+		LowerSurfaceToSnappedGround(Elevation, Params, InOutNodes);
+	}
+
 	void SolveReachProfiles(
 		const IMassifElevationSource& Elevation, const FMassifChannelSolveParams& Params,
 		FMassifRiverReach& InOutReach)
 	{
+		SnapCentrelineToChannel(Elevation, Params, InOutReach.Nodes);
 		for (int32 NodeIndex = 0; NodeIndex < InOutReach.Nodes.Num(); ++NodeIndex)
 		{
 			SolveNodeProfile(

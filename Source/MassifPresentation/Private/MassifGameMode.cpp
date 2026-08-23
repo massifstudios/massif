@@ -62,26 +62,144 @@ namespace
 		double MaxStepMeters = 0.0;
 		double MaxStepSpanMeters = 0.0;
 		double IncisionLimitFraction = 0.0;
+		double MaxVoidMeters = 0.0;
+		double MeanVoidMeters = 0.0;
+		double VoidFraction = 0.0;
+		double EdgeThalwegFraction = 0.0;
+		double LevelRunFraction = 0.0;
+		int32 LongestLevelRun = 0;
+		double MeanSectionReliefMeters = 0.0;
+		double MeanCentrelineOffsetMeters = 0.0;
+		double MaxCentrelineOffsetMeters = 0.0;
 	};
 
 	/** Within this of the backstop counts as having reached it. */
 	constexpr double IncisionLimitToleranceMeters = 0.05;
 
+	/** Void this deep under the water is what reads as a plate standing over open air. */
+	constexpr double VoidToleranceMeters = 1.0;
+
+	/** Running tallies over stations, kept apart from the metres the summary reports. */
+	struct FMassifRiverBedCounts
+	{
+		int32 StationCount = 0;
+		int32 LimitedCount = 0;
+		int32 VoidCount = 0;
+		int32 EdgeThalwegCount = 0;
+		int32 LevelRunCount = 0;
+		int32 RunLength = 0;
+	};
+
+	/** Two surfaces this close together draw as one level slab. */
+	constexpr double LevelRunToleranceMeters = 0.01;
+
+	int32 ProbeThalwegOffset(const FMassifChannelProfile& Profile)
+	{
+		int32 ThalwegOffset = 0;
+		for (int32 OffsetIndex = 1; OffsetIndex < MassifChannelProfileOffsetCount; ++OffsetIndex)
+		{
+			if (Profile.BedAltitudeMeters[OffsetIndex] < Profile.BedAltitudeMeters[ThalwegOffset])
+			{
+				ThalwegOffset = OffsetIndex;
+			}
+		}
+		return ThalwegOffset;
+	}
+
+	/**
+	 * How far off the section's own low ground the traced centreline sits. A trace
+	 * that followed the channel puts it near the middle whatever the terrain does.
+	 */
+	double CentrelineOffsetMeters(const FMassifChannelProfile& Profile)
+	{
+		int32 LowestOffset = 0;
+		for (int32 OffsetIndex = 1; OffsetIndex < MassifChannelProfileOffsetCount; ++OffsetIndex)
+		{
+			if (Profile.GroundAltitudeMeters[OffsetIndex] < Profile.GroundAltitudeMeters[LowestOffset])
+			{
+				LowestOffset = OffsetIndex;
+			}
+		}
+		return FMath::Abs(Profile.OffsetMeters(LowestOffset));
+	}
+
+	/**
+	 * How far the ground under a station falls past the bottom of its own water,
+	 * across the width the water is drawn over.
+	 *
+	 * The terrain carve only ever cuts ground down, so ground already lower than the
+	 * channel the solve settled on keeps its own level and the water drawn over it
+	 * spans a void rather than a bed.
+	 */
+	double VoidUnderWaterMeters(const FMassifRiverNode& Node)
+	{
+		const FMassifChannelProfile& Profile = Node.Profile;
+		const double HalfWidthMeters = 0.5 * Profile.WettedWidthMeters;
+		double LowestMeters = Node.WaterSurfaceMeters;
+		for (int32 OffsetIndex = 0; OffsetIndex < MassifChannelProfileOffsetCount; ++OffsetIndex)
+		{
+			if (FMath::Abs(Profile.OffsetMeters(OffsetIndex)) <= HalfWidthMeters)
+			{
+				LowestMeters = FMath::Min(
+					LowestMeters, static_cast<double>(Profile.GroundAltitudeMeters[OffsetIndex]));
+			}
+		}
+		return (Node.WaterSurfaceMeters - LowestMeters) - Node.DepthMeters;
+	}
+
+	/** Ground fall from the highest offset in a section to the lowest. */
+	double SectionReliefMeters(const FMassifChannelProfile& Profile)
+	{
+		double LowestMeters = Profile.GroundAltitudeMeters[0];
+		double HighestMeters = Profile.GroundAltitudeMeters[0];
+		for (int32 OffsetIndex = 1; OffsetIndex < MassifChannelProfileOffsetCount; ++OffsetIndex)
+		{
+			LowestMeters = FMath::Min(LowestMeters, static_cast<double>(Profile.GroundAltitudeMeters[OffsetIndex]));
+			HighestMeters = FMath::Max(HighestMeters, static_cast<double>(Profile.GroundAltitudeMeters[OffsetIndex]));
+		}
+		return HighestMeters - LowestMeters;
+	}
+
+	/** A section whose lowest ground is at either end has no bank on that side, so it is a slope and not a channel. */
+	bool HasEdgeThalweg(const FMassifChannelProfile& Profile)
+	{
+		const int32 ThalwegOffset = ProbeThalwegOffset(Profile);
+		return ThalwegOffset == 0 || ThalwegOffset == MassifChannelProfileOffsetCount - 1;
+	}
+
 	void AccumulateReachBed(
 		const FMassifRiverReach& Reach, double IncisionLimitMeters, FMassifRiverBedSummary& InOutSummary,
-		int32& InOutStationCount, int32& InOutLimitedCount)
+		FMassifRiverBedCounts& InOutCounts)
 	{
 		for (int32 NodeIndex = 0; NodeIndex < Reach.Nodes.Num(); ++NodeIndex)
 		{
 			const FMassifRiverNode& Node = Reach.Nodes[NodeIndex];
 			InOutSummary.MeanDepthMeters += Node.DepthMeters;
 			InOutSummary.MaxDepthMeters = FMath::Max(InOutSummary.MaxDepthMeters, Node.DepthMeters);
-			++InOutStationCount;
+			++InOutCounts.StationCount;
+
+			InOutSummary.MeanSectionReliefMeters += SectionReliefMeters(Node.Profile);
+			const double CentrelineMeters = CentrelineOffsetMeters(Node.Profile);
+			InOutSummary.MeanCentrelineOffsetMeters += CentrelineMeters;
+			InOutSummary.MaxCentrelineOffsetMeters =
+				FMath::Max(InOutSummary.MaxCentrelineOffsetMeters, CentrelineMeters);
+			if (HasEdgeThalweg(Node.Profile))
+			{
+				++InOutCounts.EdgeThalwegCount;
+			}
+
+			const double VoidMeters = FMath::Max(VoidUnderWaterMeters(Node), 0.0);
+			InOutSummary.MaxVoidMeters = FMath::Max(InOutSummary.MaxVoidMeters, VoidMeters);
+			InOutSummary.MeanVoidMeters += VoidMeters;
+			if (VoidMeters > VoidToleranceMeters)
+			{
+				++InOutCounts.VoidCount;
+			}
 
 			const double IncisionMeters = Node.GroundAltitudeMeters - Node.BedAltitudeMeters;
 			if (IncisionMeters >= IncisionLimitMeters - IncisionLimitToleranceMeters)
 			{
-				++InOutLimitedCount;
+				++InOutCounts.LimitedCount;
 			}
 			if (NodeIndex == 0)
 			{
@@ -89,6 +207,20 @@ namespace
 			}
 
 			const FMassifRiverNode& Above = Reach.Nodes[NodeIndex - 1];
+			const double SurfaceStepMeters =
+				FMath::Abs(Above.WaterSurfaceMeters - Node.WaterSurfaceMeters);
+			if (SurfaceStepMeters <= LevelRunToleranceMeters)
+			{
+				++InOutCounts.LevelRunCount;
+				++InOutCounts.RunLength;
+				InOutSummary.LongestLevelRun =
+					FMath::Max(InOutSummary.LongestLevelRun, InOutCounts.RunLength);
+			}
+			else
+			{
+				InOutCounts.RunLength = 0;
+			}
+
 			const double StepMeters = FMath::Abs(Above.BedAltitudeMeters - Node.BedAltitudeMeters);
 			if (StepMeters > InOutSummary.MaxStepMeters)
 			{
@@ -99,23 +231,99 @@ namespace
 		}
 	}
 
+	FString FormatProfileRow(const float* AltitudeMeters)
+	{
+		FString Row;
+		for (int32 OffsetIndex = 0; OffsetIndex < MassifChannelProfileOffsetCount; ++OffsetIndex)
+		{
+			Row += FString::Printf(TEXT("%.1f "), AltitudeMeters[OffsetIndex]);
+		}
+		return Row;
+	}
+
+	void ProbeStationSection(const FMassifRiverNode& Node, int32 NodeIndex)
+	{
+		const FMassifChannelProfile& Profile = Node.Profile;
+		UE_LOG(LogTemp, Display,
+			TEXT("  section [%4d] halfspan %.1f m, spacing %.2f m, max wetted %.1f m, thalweg offset %d"),
+			NodeIndex, Profile.HalfSpanMeters, Profile.OffsetSpacingMeters(),
+			FMath::Min(Profile.MaxWettedWidthMeters, 9999.0), ProbeThalwegOffset(Profile));
+		UE_LOG(LogTemp, Display, TEXT("    ground %s"), *FormatProfileRow(Profile.GroundAltitudeMeters));
+		UE_LOG(LogTemp, Display, TEXT("    bed    %s"), *FormatProfileRow(Profile.BedAltitudeMeters));
+	}
+
+	void ProbeWorstVoid(const FMassifRiverNetwork& Rivers)
+	{
+		int32 WorstReach = INDEX_NONE;
+		int32 WorstNode = INDEX_NONE;
+		double WorstMeters = 0.0;
+		const TArray<FMassifRiverReach>& Reaches = Rivers.GetReaches();
+		for (int32 ReachIndex = 0; ReachIndex < Reaches.Num(); ++ReachIndex)
+		{
+			for (int32 NodeIndex = 0; NodeIndex < Reaches[ReachIndex].Nodes.Num(); ++NodeIndex)
+			{
+				const FMassifRiverNode& Node = Reaches[ReachIndex].Nodes[NodeIndex];
+				const double VoidMeters = VoidUnderWaterMeters(Node);
+				if (VoidMeters <= WorstMeters)
+				{
+					continue;
+				}
+				WorstMeters = VoidMeters;
+				WorstReach = ReachIndex;
+				WorstNode = NodeIndex;
+			}
+		}
+		if (WorstReach == INDEX_NONE)
+		{
+			return;
+		}
+
+		const TArray<FMassifRiverNode>& Nodes = Reaches[WorstReach].Nodes;
+		UE_LOG(LogTemp, Display, TEXT("Worst void: reach %d node %d of %d, %.2f m"),
+			WorstReach, WorstNode, Nodes.Num(), WorstMeters);
+		const int32 FirstIndex = FMath::Max(WorstNode - 6, 0);
+		const int32 LastIndex = FMath::Min(WorstNode + 6, Nodes.Num() - 1);
+		for (int32 NodeIndex = FirstIndex; NodeIndex <= LastIndex; ++NodeIndex)
+		{
+			const FMassifRiverNode& Node = Nodes[NodeIndex];
+			UE_LOG(LogTemp, Display,
+				TEXT("  [%4d] ground %8.2f bed %8.2f surface %8.2f depth %6.2f Q %6.2f slope %.5f"),
+				NodeIndex, Node.GroundAltitudeMeters, Node.BedAltitudeMeters, Node.WaterSurfaceMeters,
+				Node.DepthMeters, Node.DischargeCubicMetersPerSecond, Node.Profile.EnergySlope);
+		}
+
+		const int32 FirstSection = FMath::Max(WorstNode - 2, 0);
+		const int32 LastSection = FMath::Min(WorstNode + 2, Nodes.Num() - 1);
+		for (int32 NodeIndex = FirstSection; NodeIndex <= LastSection; ++NodeIndex)
+		{
+			ProbeStationSection(Nodes[NodeIndex], NodeIndex);
+		}
+	}
+
 	FMassifRiverBedSummary MeasureRiverBed(const FMassifRiverNetwork& Rivers)
 	{
 		FMassifRiverBedSummary Summary;
-		int32 StationCount = 0;
-		int32 LimitedCount = 0;
+		FMassifRiverBedCounts Counts;
 		const double IncisionLimitMeters = FMassifChannelCarveParams().MaxIncisionBelowGroundMeters;
 		for (const FMassifRiverReach& Reach : Rivers.GetReaches())
 		{
-			AccumulateReachBed(Reach, IncisionLimitMeters, Summary, StationCount, LimitedCount);
+			AccumulateReachBed(Reach, IncisionLimitMeters, Summary, Counts);
 		}
 
-		if (StationCount == 0)
+		if (Counts.StationCount == 0)
 		{
 			return Summary;
 		}
-		Summary.MeanDepthMeters /= StationCount;
-		Summary.IncisionLimitFraction = static_cast<double>(LimitedCount) / StationCount;
+		Summary.MeanDepthMeters /= Counts.StationCount;
+		Summary.IncisionLimitFraction =
+			static_cast<double>(Counts.LimitedCount) / Counts.StationCount;
+		Summary.VoidFraction = static_cast<double>(Counts.VoidCount) / Counts.StationCount;
+		Summary.MeanVoidMeters /= Counts.StationCount;
+		Summary.LevelRunFraction = static_cast<double>(Counts.LevelRunCount) / Counts.StationCount;
+		Summary.EdgeThalwegFraction =
+			static_cast<double>(Counts.EdgeThalwegCount) / Counts.StationCount;
+		Summary.MeanSectionReliefMeters /= Counts.StationCount;
+		Summary.MeanCentrelineOffsetMeters /= Counts.StationCount;
 		return Summary;
 	}
 
@@ -400,6 +608,20 @@ void AMassifGameMode::LogRiverSummary(const FMassifRiverNetwork& Rivers) const
 			"%.1f%% of stations at the incision limit"),
 		Bed.MeanDepthMeters, Bed.MaxDepthMeters, Bed.MaxStepMeters, Bed.MaxStepSpanMeters,
 		100.0 * Bed.IncisionLimitFraction);
+
+	UE_LOG(LogTemp, Display,
+		TEXT("River surface: %.1f%% of stations span a void over a metre deep, %.2f m mean and %.2f m worst"),
+		100.0 * Bed.VoidFraction, Bed.MeanVoidMeters, Bed.MaxVoidMeters);
+
+	UE_LOG(LogTemp, Display,
+		TEXT("River sections: %.1f%% have no bank on one side, %.2f m of ground fall across the mean section, "
+			"centreline %.2f m off the low ground on average and %.2f m at worst"),
+		100.0 * Bed.EdgeThalwegFraction, Bed.MeanSectionReliefMeters,
+		Bed.MeanCentrelineOffsetMeters, Bed.MaxCentrelineOffsetMeters);
+	UE_LOG(LogTemp, Display,
+		TEXT("River terracing: %.1f%% of spans are level, longest level run %d stations"),
+		100.0 * Bed.LevelRunFraction, Bed.LongestLevelRun);
+	ProbeWorstVoid(Rivers);
 }
 
 void AMassifGameMode::SchedulePosedScreenshot(
