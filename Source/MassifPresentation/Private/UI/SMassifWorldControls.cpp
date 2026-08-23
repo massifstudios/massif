@@ -214,11 +214,11 @@ void SMassifWorldControls::Construct(const FArguments& InArgs)
 				]
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, ControlsRowPadding)
 				[
-					MakeVariableRow(TEXT("Extinction"), TEXT("massif.Fog.Extinction"), 0.0f, 3.0f)
+					MakeVariableRow(TEXT("Extinction"), TEXT("massif.Fog.Extinction"), 0.0f, 1.5f)
 				]
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, ControlsRowPadding)
 				[
-					MakeVariableRow(TEXT("Reach"), TEXT("massif.Fog.Reach"), 1.0f, 6.0f)
+					MakeVariableRow(TEXT("Reach"), TEXT("massif.Fog.Reach"), 1.0f, 12.0f)
 				]
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, ControlsRowPadding)
 				[
@@ -230,7 +230,7 @@ void SMassifWorldControls::Construct(const FArguments& InArgs)
 				]
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, ControlsRowPadding)
 				[
-					MakeVariableRow(TEXT("Cell (m)"), TEXT("massif.Fog.CellMeters"), 60.0f, 600.0f)
+					MakeVariableRow(TEXT("Cell (m)"), TEXT("massif.Fog.CellMeters"), 60.0f, 1200.0f)
 				]
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, ControlsRowPadding)
 				[

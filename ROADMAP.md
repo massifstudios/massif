@@ -584,10 +584,11 @@ and destroyed by the sun reaching the ground (ARCHITECTURE §6.1).
    morning is foggy" into "this morning is foggy".
 3. **Steam fog over open water** is not modelled: a term over
    `Hydrology.StandingWaterDepth` and the larger `SeasonalFlow`.
-4. **The volumes are placed, not tuned.** The first pass read as separate
-   spheres, which was the radial falloff drawing balls; it now defaults to
-   height-only with the volumes reaching past their cells so neighbours merge.
-   Whether that reads as a fog layer is a look, not a measurement.
+4. **The volumes are tuned.** The first pass read as separate spheres, which was
+   the radial falloff drawing balls. The defaults now come from a look: reach 6
+   over a 300 m cell, which is heavy overlap, with extinction at 0.2 to match —
+   with that many layers stacked each contributes little, so the two are tuned
+   against each other and moving one alone will not hold it.
 
 ### M5f — Geological Refinement
 Erosion over the imported surface: smooth scanner artefacts, cut detail below
