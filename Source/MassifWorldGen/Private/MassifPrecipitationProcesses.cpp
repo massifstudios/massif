@@ -43,9 +43,6 @@ namespace MassifEnvironmentProcesses
 
 namespace
 {
-	/** Half-monthly slices of a representative year (ARCHITECTURE §5.6.4). */
-	constexpr int32 SeasonalSliceCount = 24;
-
 	/** The channels the solve reads, resolved once and sampled by world position. */
 	class FPrecipitationInputs
 	{
@@ -163,7 +160,7 @@ namespace
 	double SeasonalWeight(const FMassifPrecipitationParams& Params, int32 TimeSlice)
 	{
 		const double Amplitude = FMath::Clamp(Params.SeasonalAmplitude, 0.0, 1.0);
-		const double PhaseRadians = UE_DOUBLE_TWO_PI * (TimeSlice - Params.WettestSlice) / SeasonalSliceCount;
+		const double PhaseRadians = UE_DOUBLE_TWO_PI * (TimeSlice - Params.WettestSlice) / MassifSeasonalSliceCount;
 		return 1.0 + Amplitude * FMath::Cos(PhaseRadians);
 	}
 
@@ -178,7 +175,7 @@ namespace
 	double SeasonalShare(const FMassifPrecipitationParams& Params, int32 TimeSlice)
 	{
 		double YearWeight = 0.0;
-		for (int32 Slice = 0; Slice < SeasonalSliceCount; ++Slice)
+		for (int32 Slice = 0; Slice < MassifSeasonalSliceCount; ++Slice)
 		{
 			YearWeight += SeasonalWeight(Params, Slice);
 		}
@@ -191,7 +188,7 @@ namespace
 	{
 		if (Fidelity == EMassifFidelity::Off || Fidelity == EMassifFidelity::Cheap)
 		{
-			return 1.0 / SeasonalSliceCount;
+			return 1.0 / MassifSeasonalSliceCount;
 		}
 		return SeasonalShare(Params, TimeSlice);
 	}
@@ -242,17 +239,6 @@ namespace
 		{
 			OutValues[CellIndex] = Values[CellIndex] * Scale;
 		}
-	}
-
-	void FillSlice(FMassifEnvironmentContext& Context, const FName& ChannelName, int32 TimeSlice, double Value)
-	{
-		const TUniquePtr<FMassifChannelWriteScope> Scope = Context.OpenOutput(ChannelName, TimeSlice);
-		TArrayView<double> Values = Scope->GetComponent(0);
-		for (int32 CellIndex = 0; CellIndex < Values.Num(); ++CellIndex)
-		{
-			Values[CellIndex] = Value;
-		}
-		Scope->Commit();
 	}
 
 	FMassifChannelDescriptor MakeChannel(
@@ -363,14 +349,14 @@ FMassifProcessDeclaration FPrecipitationProcess::Declare() const
 	FMassifChannelDescriptor Seasonal = MakeChannel(
 		MassifEnvironmentChannels::SeasonalPrecipitation(), TEXT("mm"), Params.CellSizeMeters,
 		EMassifChannelColorMap::BlueWhite);
-	Seasonal.TimeSliceCount = SeasonalSliceCount;
+	Seasonal.TimeSliceCount = MassifSeasonalSliceCount;
 	Seasonal.Description = TEXT("Millimetres falling in one half-month");
 	Declaration.OutputChannels.Add(Seasonal);
 
 	FMassifChannelDescriptor Snow = MakeChannel(
 		MassifEnvironmentChannels::SnowFraction(), TEXT("0-1"), Params.CellSizeMeters,
 		EMassifChannelColorMap::BlueWhite);
-	Snow.TimeSliceCount = SeasonalSliceCount;
+	Snow.TimeSliceCount = MassifSeasonalSliceCount;
 	Snow.DisplayRange = FVector2d(0.0, 1.0);
 	Snow.Description = TEXT("Share of one half-month's fall arriving as snow");
 	Declaration.OutputChannels.Add(Snow);
@@ -387,13 +373,13 @@ void FPrecipitationProcess::WriteUniform(FMassifEnvironmentContext& Context) con
 {
 	// Off is flat weather: the same rain every half-month, everywhere, and none of
 	// it going back into the air.
-	FillSlice(Context, MassifEnvironmentChannels::AnnualPrecipitation(), 0, Params.BaseAnnualMillimetres);
-	FillSlice(Context, MassifEnvironmentChannels::Evapotranspiration(), 0, 0.0);
+	MassifFillChannelSlice(Context, MassifEnvironmentChannels::AnnualPrecipitation(), 0, Params.BaseAnnualMillimetres);
+	MassifFillChannelSlice(Context, MassifEnvironmentChannels::Evapotranspiration(), 0, 0.0);
 
-	const double SliceMillimetres = Params.BaseAnnualMillimetres / SeasonalSliceCount;
-	for (int32 TimeSlice = 0; TimeSlice < SeasonalSliceCount; ++TimeSlice)
+	const double SliceMillimetres = Params.BaseAnnualMillimetres / MassifSeasonalSliceCount;
+	for (int32 TimeSlice = 0; TimeSlice < MassifSeasonalSliceCount; ++TimeSlice)
 	{
-		FillSlice(Context, MassifEnvironmentChannels::SeasonalPrecipitation(), TimeSlice, SliceMillimetres);
+		MassifFillChannelSlice(Context, MassifEnvironmentChannels::SeasonalPrecipitation(), TimeSlice, SliceMillimetres);
 	}
 
 	// The phase is not part of what Off switches off. Writing "none of it is
@@ -468,7 +454,7 @@ void FPrecipitationProcess::WriteSeasonal(
 {
 	// Every channel here is solved on the same grid, so a slice is the annual field
 	// scaled cell by cell and nothing has to be resampled to write one.
-	for (int32 TimeSlice = 0; TimeSlice < SeasonalSliceCount; ++TimeSlice)
+	for (int32 TimeSlice = 0; TimeSlice < MassifSeasonalSliceCount; ++TimeSlice)
 	{
 		const double Share = SeasonalShareForFidelity(Params, TimeSlice, Fidelity);
 		const TUniquePtr<FMassifChannelWriteScope> Scope =
@@ -514,7 +500,7 @@ void FPrecipitationProcess::WriteSnowFraction(
 	// Off the half-monthly temperature rather than the annual mean: the phase is a
 	// property of the day it fell on, and a slope that takes rain in July takes
 	// snow in January.
-	for (int32 TimeSlice = 0; TimeSlice < SeasonalSliceCount; ++TimeSlice)
+	for (int32 TimeSlice = 0; TimeSlice < MassifSeasonalSliceCount; ++TimeSlice)
 	{
 		WriteSnowFractionSlice(Context, Inputs, TimeSlice, Fidelity);
 	}

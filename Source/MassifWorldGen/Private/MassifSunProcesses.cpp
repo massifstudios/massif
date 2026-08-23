@@ -40,9 +40,6 @@ namespace MassifEnvironmentProcesses
 
 namespace
 {
-	/** Half-monthly slices of a representative year (ARCHITECTURE §5.6.4). */
-	constexpr int32 SeasonalSliceCount = 24;
-
 	/** Where the sun stands, in the frame the terrain is in: X east, Y north, Z up. */
 	struct FSunPosition
 	{
@@ -58,7 +55,7 @@ namespace
 	/** Middle of a half-month, which is the day that half-month's sun path is taken on. */
 	double SliceMidDayOfYear(int32 TimeSlice)
 	{
-		return (TimeSlice + 0.5) * 365.0 / SeasonalSliceCount;
+		return (TimeSlice + 0.5) * 365.0 / MassifSeasonalSliceCount;
 	}
 
 	double SolarDeclinationRadians(double DayOfYear)
@@ -130,7 +127,7 @@ namespace
 	struct FSliceRange
 	{
 		int32 FirstSlice = 0;
-		int32 LastSlice = SeasonalSliceCount - 1;
+		int32 LastSlice = MassifSeasonalSliceCount - 1;
 
 		int32 Count() const
 		{
@@ -141,8 +138,8 @@ namespace
 	FSliceRange GrowingSeasonSlices(const FMassifSunParams& Params)
 	{
 		FSliceRange Range;
-		Range.FirstSlice = FMath::Clamp(Params.GrowingSeasonFirstSlice, 0, SeasonalSliceCount - 1);
-		Range.LastSlice = FMath::Clamp(Params.GrowingSeasonLastSlice, Range.FirstSlice, SeasonalSliceCount - 1);
+		Range.FirstSlice = FMath::Clamp(Params.GrowingSeasonFirstSlice, 0, MassifSeasonalSliceCount - 1);
+		Range.LastSlice = FMath::Clamp(Params.GrowingSeasonLastSlice, Range.FirstSlice, MassifSeasonalSliceCount - 1);
 		return Range;
 	}
 
@@ -247,8 +244,8 @@ namespace
 		const double LatitudeRadians = FMath::DegreesToRadians(LatitudeDegrees);
 
 		TArray<FSunDay> Year;
-		Year.Reserve(SeasonalSliceCount);
-		for (int32 TimeSlice = 0; TimeSlice < SeasonalSliceCount; ++TimeSlice)
+		Year.Reserve(MassifSeasonalSliceCount);
+		for (int32 TimeSlice = 0; TimeSlice < MassifSeasonalSliceCount; ++TimeSlice)
 		{
 			Year.Add(SampleSunDay(LatitudeRadians, SliceMidDayOfYear(TimeSlice), Params));
 		}
@@ -361,7 +358,7 @@ namespace
 		{
 			SkyView.SetNumZeroed(Grid.CellCount());
 			SurfaceSkyFraction.SetNumZeroed(Grid.CellCount());
-			DirectBySlice.SetNumZeroed(Grid.CellCount() * SeasonalSliceCount);
+			DirectBySlice.SetNumZeroed(Grid.CellCount() * MassifSeasonalSliceCount);
 		}
 
 		TArrayView<double> SliceOfDirect(int32 TimeSlice)
@@ -524,9 +521,9 @@ FMassifProcessDeclaration FInsolationProcess::Declare() const
 	Declaration.OutputChannels.Add(
 		MakeFractionChannel(MassifEnvironmentChannels::SkyViewFactor(), EMassifChannelColorMap::Viridis, 1));
 	Declaration.OutputChannels.Add(MakeFractionChannel(
-		MassifEnvironmentChannels::DirectInsolation(), EMassifChannelColorMap::Magma, SeasonalSliceCount));
+		MassifEnvironmentChannels::DirectInsolation(), EMassifChannelColorMap::Magma, MassifSeasonalSliceCount));
 	Declaration.OutputChannels.Add(MakeFractionChannel(
-		MassifEnvironmentChannels::DiffuseInsolation(), EMassifChannelColorMap::Magma, SeasonalSliceCount));
+		MassifEnvironmentChannels::DiffuseInsolation(), EMassifChannelColorMap::Magma, MassifSeasonalSliceCount));
 	Declaration.OutputChannels.Add(
 		MakeFractionChannel(MassifEnvironmentChannels::AnnualInsolation(), EMassifChannelColorMap::Magma, 1));
 	return Declaration;

@@ -63,17 +63,6 @@ namespace
 		double FoehnWarmingCelsius = 0.0;
 	};
 
-	/** Nothing where no process in this graph writes the channel, which is what an optional input means. */
-	double SampleOptional(
-		const FMassifEnvironmentState& State, FMassifChannelHandle Channel, FVector2d PositionMeters)
-	{
-		if (!Channel.IsValid())
-		{
-			return 0.0;
-		}
-		return State.SampleScalar(Channel, PositionMeters);
-	}
-
 	/**
 	 * The channels the wind reads where the graph has them.
 	 *
@@ -91,18 +80,18 @@ namespace
 
 		double CanopyAt(FVector2d PositionMeters) const
 		{
-			return SampleOptional(State, Canopy, PositionMeters);
+			return MassifSampleOptional(State, Canopy, PositionMeters);
 		}
 
 		double AccumulationSquareMetersAt(FVector2d PositionMeters) const
 		{
-			return SampleOptional(State, FlowAccumulation, PositionMeters);
+			return MassifSampleOptional(State, FlowAccumulation, PositionMeters);
 		}
 
 		/** Filled surface less measured: how deep a hollow the air has no way out of. */
 		double BasinDepthMetersAt(FVector2d PositionMeters) const
 		{
-			return SampleOptional(State, StandingWaterDepth, PositionMeters);
+			return MassifSampleOptional(State, StandingWaterDepth, PositionMeters);
 		}
 	};
 

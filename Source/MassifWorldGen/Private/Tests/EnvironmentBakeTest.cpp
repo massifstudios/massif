@@ -137,17 +137,6 @@ namespace
 		return Descriptor;
 	}
 
-	void FillSlice(FMassifEnvironmentContext& Context, const FName& ChannelName, int32 TimeSlice, double Value)
-	{
-		const TUniquePtr<FMassifChannelWriteScope> Scope = Context.OpenOutput(ChannelName, TimeSlice);
-		TArrayView<double> Values = Scope->GetComponent(0);
-		for (int32 CellIndex = 0; CellIndex < Values.Num(); ++CellIndex)
-		{
-			Values[CellIndex] = Value;
-		}
-		Scope->Commit();
-	}
-
 	/**
 	 * A catchment reading the same everywhere, standing in for the routed drainage.
 	 *
@@ -169,7 +158,7 @@ namespace
 
 		void Execute(FMassifEnvironmentContext& Context, EMassifFidelity) const override
 		{
-			FillSlice(
+			MassifFillChannelSlice(
 				Context, MassifEnvironmentChannels::FlowAccumulation(), 0, WaterBalanceCatchmentSquareMeters);
 		}
 	};
@@ -256,9 +245,9 @@ namespace
 		{
 			for (int32 TimeSlice = 0; TimeSlice < 24; ++TimeSlice)
 			{
-				FillSlice(
+				MassifFillChannelSlice(
 					Context, MassifEnvironmentChannels::SnowDepth(), TimeSlice, TestSnowDepthMeters(TimeSlice));
-				FillSlice(Context, MassifEnvironmentChannels::SnowFraction(), TimeSlice, 1.0);
+				MassifFillChannelSlice(Context, MassifEnvironmentChannels::SnowFraction(), TimeSlice, 1.0);
 			}
 		}
 	};
@@ -655,7 +644,13 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FEnvironmentBakeSpringTest,
 
 bool FEnvironmentBakeSpringTest::RunTest(const FString& Parameters)
 {
-	const FMassifEnvironmentBakeParams Params = MakeTestParams();
+	FMassifEnvironmentBakeParams Params = MakeTestParams();
+
+	// A reach this test's world can hold, and the one its expected figures are
+	// written against: the assertion below reads the infiltration exactly 24 m
+	// upslope, so the comparison has to be taken from there. What the default reach
+	// finds in rock the graph lays down itself is EnvironmentBake.SpringsBreakOut.
+	Params.SpringComparisonRadiusMeters = 24.0;
 
 	// Permeable rock upslope of the northing zero line, tight rock below it: one
 	// contact, on a plane where uphill is due north and nothing else.
@@ -761,5 +756,134 @@ bool FEnvironmentBakeWaterBalanceOffTest::RunTest(const FString& Parameters)
 	TestTrue(FString::Printf(TEXT("Every half-month carries the whole catchment (worst gap %.4f m2)"),
 		WorstDifference),
 		WorstDifference <= BakeQuantisationStep(State, MassifEnvironmentChannels::SeasonalFlow()));
+	return true;
+}
+
+namespace
+{
+	constexpr int32 RockTestSide = 256;
+	constexpr double RockTestSpacingMeters = 32.0;
+	constexpr double RockTestHalfWorldMeters = 0.5 * RockTestSide * RockTestSpacingMeters;
+
+	/**
+	 * A world wide enough for the rock to change across it.
+	 *
+	 * The bands the lithology lays down are kilometres wide and the lenses inside
+	 * them hundreds of metres. A test world smaller than that is cut from one
+	 * formation, and everything that keys off a change in the rock reads zero for a
+	 * reason that has nothing to do with whether it works.
+	 */
+	TSharedRef<const FMassifHeightmap> MakeRockTestTerrain()
+	{
+		TArray<double> Altitudes;
+		Altitudes.Reserve(RockTestSide * RockTestSide);
+		for (int32 Row = 0; Row < RockTestSide; ++Row)
+		{
+			for (int32 Column = 0; Column < RockTestSide; ++Column)
+			{
+				const double X = -RockTestHalfWorldMeters + (Column + 0.5) * RockTestSpacingMeters;
+				const double Y = RockTestHalfWorldMeters - (Row + 0.5) * RockTestSpacingMeters;
+				Altitudes.Add(
+					1500.0 + 600.0 * FMath::Sin(X / 1800.0) + 400.0 * FMath::Cos(Y / 1300.0) + Y * 0.05);
+			}
+		}
+		return FMassifHeightmap::FromAltitudes(
+			Altitudes, RockTestSide, RockTestSide, RockTestSpacingMeters);
+	}
+
+	/** Share of a channel's cells carrying more than nothing. */
+	double SharePositive(const FMassifEnvironmentState& State, const FName& ChannelName)
+	{
+		const FMassifChannelHandle Channel = State.FindChannel(ChannelName);
+		const FMassifChannelGrid& Grid = State.GetGrid(Channel);
+
+		int32 Positive = 0;
+		for (int32 CellIndex = 0; CellIndex < Grid.CellCount(); ++CellIndex)
+		{
+			Positive += static_cast<int32>(
+				State.ReadCell(Channel, CellIndex % Grid.Width, CellIndex / Grid.Width) > 0.0);
+		}
+		return static_cast<double>(Positive) / Grid.CellCount();
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FEnvironmentBakeSpringsBreakOutTest,
+	"Massif.WorldGen.EnvironmentBake.SpringsBreakOut",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FEnvironmentBakeSpringsBreakOutTest::RunTest(const FString& Parameters)
+{
+	// Against the rock the graph actually lays down rather than against a stepped
+	// stub. The mechanism can be exercised by a contact of any width; whether the
+	// comparison reaches far enough to find the ones the lithology produces is a
+	// separate claim, and it is the one that decides whether any world has springs
+	// in it at all.
+	FMassifEnvironmentBakeParams Params;
+	Params.CellSizeMeters = RockTestSpacingMeters;
+	const TUniquePtr<FMassifEnvironmentScheduler> Scheduler =
+		MassifSolveTestEnvironment(MakeRockTestTerrain(), BakeTestSeed, Params);
+	const FMassifEnvironmentState& State = Scheduler->GetState();
+
+	const double Largest = State.GetChannelMaximum(
+		State.FindChannel(MassifEnvironmentChannels::SpringDischarge()));
+	TestTrue(
+		FString::Printf(TEXT("Water comes back out somewhere in a world of real rock (%.1f m2)"), Largest),
+		Largest > 0.0);
+
+	// Springs are places, not a property of the whole massif: a solve that wets
+	// everything is as wrong as one that wets nothing.
+	const double Share = SharePositive(State, MassifEnvironmentChannels::SpringDischarge());
+	TestTrue(
+		FString::Printf(TEXT("And not everywhere: %.1f%% of the ground springs"), 100.0 * Share),
+		Share > 0.0 && Share < 0.5);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FEnvironmentBakeSeasonalFlowAlignmentTest,
+	"Massif.WorldGen.EnvironmentBake.SeasonalFlowAlignment",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FEnvironmentBakeSeasonalFlowAlignmentTest::RunTest(const FString& Parameters)
+{
+	// The seasonal discharge is stored on a coarser grid than the water is routed
+	// on, so every reading it takes has to be reduced onto its own grid rather than
+	// indexed by cell. Indexing across two grids does not fail, it smears: the
+	// river turns up wherever the row stride puts it.
+	const TUniquePtr<FMassifEnvironmentScheduler> Scheduler =
+		MassifSolveTestEnvironment(MakeValley(), BakeTestSeed, MakeTestParams());
+	const FMassifEnvironmentState& State = Scheduler->GetState();
+
+	const FMassifChannelHandle Channel = State.FindChannel(MassifEnvironmentChannels::SeasonalFlow());
+	TestTrue(TEXT("The seasonal channel is coarser than the water it reads"),
+		State.GetGrid(Channel).CellSizeMeters > MakeTestParams().CellSizeMeters);
+
+	const FVector2d OnTheValleyFloor(0.0, -300.0);
+	const FVector2d OnTheWestFlank(-200.0, -300.0);
+	const FVector2d OnTheEastFlank(200.0, -300.0);
+
+	// Over the year rather than per slice for the size of it: a deep-winter
+	// half-month moves almost nothing anywhere, and a ratio between two numbers
+	// that are both nearly zero says nothing about where the river is.
+	const double YearOnTheFloor = SumOverYear(State, MassifEnvironmentChannels::SeasonalFlow(), OnTheValleyFloor);
+	const double YearOnTheWest = SumOverYear(State, MassifEnvironmentChannels::SeasonalFlow(), OnTheWestFlank);
+	const double YearOnTheEast = SumOverYear(State, MassifEnvironmentChannels::SeasonalFlow(), OnTheEastFlank);
+	TestTrue(
+		FString::Printf(
+			TEXT("The year's water runs down the valley floor (%.0f against %.0f and %.0f on the flanks)"),
+			YearOnTheFloor, YearOnTheWest, YearOnTheEast),
+		YearOnTheFloor > 4.0 * FMath::Max(YearOnTheWest, YearOnTheEast));
+
+	// And it never sits on a flank in any half-month, which is what indexing one
+	// grid with another's cell numbers would do: the trunk turns up wherever the
+	// difference in row stride carries it.
+	int32 SlicesWithTheRiverOnAFlank = 0;
+	for (int32 TimeSlice = 0; TimeSlice < State.GetDescriptor(Channel).TimeSliceCount; ++TimeSlice)
+	{
+		const double Floor = State.SampleScalar(Channel, OnTheValleyFloor, TimeSlice);
+		const double West = State.SampleScalar(Channel, OnTheWestFlank, TimeSlice);
+		const double East = State.SampleScalar(Channel, OnTheEastFlank, TimeSlice);
+		SlicesWithTheRiverOnAFlank += static_cast<int32>(FMath::Max(West, East) > Floor);
+	}
+	TestEqual(TEXT("The trunk is never out on a flank"), SlicesWithTheRiverOnAFlank, 0);
 	return true;
 }

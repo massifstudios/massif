@@ -36,9 +36,6 @@ namespace MassifEnvironmentProcesses
 
 namespace
 {
-	/** Half-monthly slices of a representative year (ARCHITECTURE §5.6.4). */
-	constexpr int32 SeasonalSliceCount = 24;
-
 	/** The surfaces the temperature is read off, sampled at whatever grid is being solved. */
 	class FClimateInputs
 	{
@@ -113,7 +110,7 @@ namespace
 	double SeasonalAnomalyCelsius(const FMassifClimateParams& Params, int32 TimeSlice)
 	{
 		const double PhaseRadians =
-			UE_DOUBLE_TWO_PI * (TimeSlice - Params.WarmestSlice) / SeasonalSliceCount;
+			UE_DOUBLE_TWO_PI * (TimeSlice - Params.WarmestSlice) / MassifSeasonalSliceCount;
 		return 0.5 * Params.AnnualTemperatureRangeCelsius * FMath::Cos(PhaseRadians);
 	}
 
@@ -330,7 +327,7 @@ FMassifProcessDeclaration FSeasonalTemperatureProcess::Declare() const
 	Descriptor.Type = EMassifChannelType::Scalar;
 	Descriptor.Encoding = EMassifChannelEncoding::Uint16;
 	Descriptor.CellSizeMeters = Params.CellSizeMeters;
-	Descriptor.TimeSliceCount = SeasonalSliceCount;
+	Descriptor.TimeSliceCount = MassifSeasonalSliceCount;
 	Descriptor.Unit = TEXT("C");
 	Descriptor.Description = TEXT("Half-monthly air temperature at the ground");
 	Descriptor.ColorMap = EMassifChannelColorMap::Magma;
@@ -389,7 +386,7 @@ void FSeasonalTemperatureProcess::Execute(FMassifEnvironmentContext& Context, EM
 		Inputs.SnowAlbedo = Context.FindOptionalInput(MassifEnvironmentChannels::SnowAlbedo());
 	}
 
-	for (int32 TimeSlice = 0; TimeSlice < SeasonalSliceCount; ++TimeSlice)
+	for (int32 TimeSlice = 0; TimeSlice < MassifSeasonalSliceCount; ++TimeSlice)
 	{
 		Inputs.TimeSlice = TimeSlice;
 		Inputs.AnomalyCelsius = SeasonalAnomalyForFidelity(Params, TimeSlice, Fidelity);

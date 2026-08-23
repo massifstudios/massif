@@ -220,17 +220,39 @@ namespace
 		return Grid.CellCentreMeters(CellIndex % Grid.Width, CellIndex / Grid.Width);
 	}
 
-	/** Nothing where no process in this graph writes the channel, which is what an optional input means. */
-	double SampleOptional(
-		const FMassifEnvironmentState& State, FMassifChannelHandle Channel, FVector2d PositionMeters,
-		int32 TimeSlice = 0)
+	/** Cell of a grid a world position falls in, clamped to its edges. */
+	int32 CellIndexAt(const FMassifChannelGrid& Grid, FVector2d PositionMeters)
 	{
-		if (!Channel.IsValid())
+		const double FromWestMeters = PositionMeters.X + 0.5 * Grid.WorldSizeXMeters;
+		const double FromNorthMeters = 0.5 * Grid.WorldSizeYMeters - PositionMeters.Y;
+		const int32 Column =
+			FMath::Clamp(FMath::FloorToInt32(FromWestMeters / Grid.CellSizeMeters), 0, Grid.Width - 1);
+		const int32 Row =
+			FMath::Clamp(FMath::FloorToInt32(FromNorthMeters / Grid.CellSizeMeters), 0, Grid.Height - 1);
+		return Row * Grid.Width + Column;
+	}
+
+	/**
+	 * A channel read onto a coarser grid by the largest value covering each cell.
+	 *
+	 * The reduction a river survives. Flow accumulation is one cell wide wherever it
+	 * matters, so a mean would divide the stream away over the dry ground beside it
+	 * and a point sample would miss it wherever the thread does not run through the
+	 * coarse cell's centre.
+	 */
+	void ReadLargestPerCell(
+		const FMassifEnvironmentState& State, FMassifChannelHandle Channel, const FMassifChannelGrid& OutGrid,
+		TArray<double>& OutValues)
+	{
+		const FMassifChannelGrid& InGrid = State.GetGrid(Channel);
+		OutValues.Init(0.0, OutGrid.CellCount());
+		for (int32 CellIndex = 0; CellIndex < InGrid.CellCount(); ++CellIndex)
 		{
-			return 0.0;
+			const int32 Column = CellIndex % InGrid.Width;
+			const int32 Row = CellIndex / InGrid.Width;
+			const int32 OutIndex = CellIndexAt(OutGrid, InGrid.CellCentreMeters(Column, Row));
+			OutValues[OutIndex] = FMath::Max(OutValues[OutIndex], State.ReadCell(Channel, Column, Row));
 		}
-		const int32 SliceCount = State.GetDescriptor(Channel).TimeSliceCount;
-		return State.SampleScalar(Channel, PositionMeters, FMath::Clamp(TimeSlice, 0, SliceCount - 1));
 	}
 
 	void FillWithConstant(FMassifChannelWriteScope& Scope, double Value)
@@ -640,8 +662,8 @@ namespace
 			{
 				const FVector2d Position = CellCentre(Grid, CellIndex);
 				Scratch[CellIndex] = ShareSoakingIn(
-					SampleOptional(Context.GetState(), Soil, Position),
-					SampleOptional(Context.GetState(), Bedrock, Position));
+					MassifSampleOptional(Context.GetState(), Soil, Position),
+					MassifSampleOptional(Context.GetState(), Bedrock, Position));
 			}
 			Scope->Commit();
 		}
@@ -697,7 +719,7 @@ namespace
 		{
 			return;
 		}
-		InOutMeans.SoilYield += SampleOptional(Inputs.State, Inputs.SoilYield, Grid.CellCentreMeters(Column, Row));
+		InOutMeans.SoilYield += MassifSampleOptional(Inputs.State, Inputs.SoilYield, Grid.CellCentreMeters(Column, Row));
 		InOutMeans.Infiltration += Inputs.Infiltration[CellIndex];
 		++InOutMeans.SampleCount;
 	}
@@ -737,22 +759,35 @@ namespace
 		}
 
 		const double LocalYield =
-			SampleOptional(Inputs.State, Inputs.SoilYield, Grid.CellCentreMeters(Column, Row));
+			MassifSampleOptional(Inputs.State, Inputs.SoilYield, Grid.CellCentreMeters(Column, Row));
 		const double Span = FMath::Max(Params.SpringYieldDropSpan, UE_DOUBLE_SMALL_NUMBER);
 		const double Contrast = FMath::Clamp(
 			(Uphill.SoilYield - LocalYield - Params.SpringYieldDropThreshold) / Span, 0.0, 1.0);
 		return Inputs.AccumulationSquareMeters[CellIndex] * Uphill.Infiltration * Contrast;
 	}
 
-	/** Cheap compares a point against the cells touching it; Standard reaches a fixed distance out. */
+	/**
+	 * Cheap reaches half as far as Standard, so it finds the strong contacts and
+	 * misses the gradual ones. Both are distances in metres: a reach counted in
+	 * cells would mean a different thing at every resolution, and at any resolution
+	 * the water is routed at it would fall well inside the rock it is comparing.
+	 */
 	int32 SpringRadiusInCells(
 		const FMassifEnvironmentBakeParams& Params, const FMassifChannelGrid& Grid, EMassifFidelity Fidelity)
 	{
+		double RadiusMeters = Params.SpringComparisonRadiusMeters;
 		if (Fidelity == EMassifFidelity::Cheap)
 		{
-			return 1;
+			RadiusMeters *= 0.5;
 		}
-		return FMath::Max(1, FMath::RoundToInt32(Params.SpringComparisonRadiusMeters / Grid.CellSizeMeters));
+
+		// Never further than the world can answer over. Reaching past every edge at
+		// once leaves each point with nothing to compare against, and a world smaller
+		// than the reach would come back with no springs anywhere rather than with a
+		// complaint.
+		const int32 LongestUsefulReach = FMath::Max(1, FMath::Min(Grid.Width, Grid.Height) / 4);
+		return FMath::Clamp(
+			FMath::RoundToInt32(RadiusMeters / Grid.CellSizeMeters), 1, LongestUsefulReach);
 	}
 
 	/**
@@ -842,17 +877,17 @@ namespace
 			{
 				return 1.0;
 			}
-			return SampleOptional(State, SeasonalPrecipitation, PositionMeters, TimeSlice);
+			return MassifSampleOptional(State, SeasonalPrecipitation, PositionMeters, TimeSlice);
 		}
 
 		double SnowShareAt(FVector2d PositionMeters, int32 TimeSlice) const
 		{
-			return SampleOptional(State, SnowFraction, PositionMeters, TimeSlice);
+			return MassifSampleOptional(State, SnowFraction, PositionMeters, TimeSlice);
 		}
 
 		double SnowDepthMetersAt(FVector2d PositionMeters, int32 TimeSlice) const
 		{
-			return SampleOptional(State, SnowDepth, PositionMeters, TimeSlice);
+			return MassifSampleOptional(State, SnowDepth, PositionMeters, TimeSlice);
 		}
 	};
 
@@ -971,9 +1006,16 @@ namespace
 
 		void Execute(FMassifEnvironmentContext& Context, EMassifFidelity Fidelity) const override
 		{
+			// The water is routed at the hydrology's resolution and stored at a coarser
+			// one, because a year of half-monthly slices at 8 m is a quarter of a
+			// gigabyte. Everything read here is therefore reduced onto the output's own
+			// grid before a cell index means anything.
+			const FMassifChannelGrid& Grid =
+				Context.GetState().GetGrid(Context.GetOutput(MassifEnvironmentChannels::SeasonalFlow()));
+
 			TArray<double> FlowSquareMeters;
-			ReadCells(
-				Context.GetState(), Context.GetInput(MassifEnvironmentChannels::FlowAccumulation()),
+			ReadLargestPerCell(
+				Context.GetState(), Context.GetInput(MassifEnvironmentChannels::FlowAccumulation()), Grid,
 				FlowSquareMeters);
 
 			if (Fidelity == EMassifFidelity::Off)
@@ -982,7 +1024,7 @@ namespace
 				return;
 			}
 
-			TakeInfiltrationOff(Context, FlowSquareMeters);
+			TakeInfiltrationOff(Context, Grid, FlowSquareMeters);
 			WriteSeasons(Context, Fidelity, FlowSquareMeters);
 		}
 
@@ -1009,14 +1051,16 @@ namespace
 		 * and is exact wherever a catchment is of one piece.
 		 */
 		static void TakeInfiltrationOff(
-			const FMassifEnvironmentContext& Context, TArray<double>& InOutFlowSquareMeters)
+			const FMassifEnvironmentContext& Context, const FMassifChannelGrid& Grid,
+			TArray<double>& InOutFlowSquareMeters)
 		{
-			TArray<double> Infiltration;
-			ReadCells(
-				Context.GetState(), Context.GetInput(MassifEnvironmentChannels::Infiltration()), Infiltration);
+			const FMassifChannelHandle Infiltration =
+				Context.GetInput(MassifEnvironmentChannels::Infiltration());
 			for (int32 CellIndex = 0; CellIndex < InOutFlowSquareMeters.Num(); ++CellIndex)
 			{
-				InOutFlowSquareMeters[CellIndex] *= 1.0 - Infiltration[CellIndex];
+				const double Share =
+					Context.GetState().SampleScalar(Infiltration, CellCentre(Grid, CellIndex));
+				InOutFlowSquareMeters[CellIndex] *= 1.0 - Share;
 			}
 		}
 

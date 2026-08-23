@@ -168,3 +168,22 @@ private:
 	TMap<FName, int32> ChannelIndexByName;
 	FVector2d WorldSizeMeters = FVector2d::ZeroVector;
 };
+
+/**
+ * A channel no process in this graph writes, sampled as zero.
+ *
+ * What an optional input means: the couplings are shaped so that zero is no
+ * effect, so an absent producer and a producer that has not run yet read the
+ * same, and no reader needs a branch for either.
+ */
+inline double MassifSampleOptional(
+	const FMassifEnvironmentState& State, FMassifChannelHandle Channel, FVector2d PositionMeters,
+	int32 TimeSlice = 0)
+{
+	if (!Channel.IsValid())
+	{
+		return 0.0;
+	}
+	const int32 SliceCount = State.GetDescriptor(Channel).TimeSliceCount;
+	return State.SampleScalar(Channel, PositionMeters, FMath::Clamp(TimeSlice, 0, SliceCount - 1));
+}

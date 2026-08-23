@@ -114,7 +114,7 @@ namespace
 	}
 
 	/** Ground no warmth reaches, so every channel the solve writes is the empty end of itself. */
-	FVegetationTestCase MakeFrozenCase()
+	FVegetationTestCase MakeFrozenVegetationCase()
 	{
 		FVegetationTestCase TestCase = MakeVariedCase();
 		TestCase.SeaLevelMeanTemperatureCelsius = -20.0;
@@ -422,7 +422,7 @@ bool FVegetationInterceptionTest::RunTest(const FString& Parameters)
 			ClosedInterception, Params.MaxInterceptionFraction * ClosedCanopy),
 		FMath::Abs(ClosedInterception - Params.MaxInterceptionFraction * ClosedCanopy) <= ClosedTolerance);
 
-	const TUniquePtr<FMassifEnvironmentScheduler> Frozen = SolveVegetation(MakeFrozenCase());
+	const TUniquePtr<FMassifEnvironmentScheduler> Frozen = SolveVegetation(MakeFrozenVegetationCase());
 	TestEqual(
 		TEXT("Ground too cold to carry anything intercepts nothing"),
 		HighestCell(*Frozen, MassifEnvironmentChannels::Interception()), 0.0);

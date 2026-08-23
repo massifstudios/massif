@@ -231,7 +231,7 @@ namespace
 	}
 
 	/** A world nothing ever melts in, so the pack only ever deepens and settles. */
-	FSnowTestCase MakeFrozenCase()
+	FSnowTestCase MakeFrozenSnowCase()
 	{
 		FSnowTestCase TestCase;
 		TestCase.SeaLevelMeanTemperatureCelsius = -20.0;
@@ -596,7 +596,7 @@ bool FSnowColdAndWarmWorldTest::RunTest(const FString& Parameters)
 	FSnowTestCase Warm;
 	Warm.SeaLevelMeanTemperatureCelsius = 40.0;
 
-	const TUniquePtr<FMassifEnvironmentScheduler> FrozenWorld = SolveSnow(MakeFrozenCase());
+	const TUniquePtr<FMassifEnvironmentScheduler> FrozenWorld = SolveSnow(MakeFrozenSnowCase());
 	const TUniquePtr<FMassifEnvironmentScheduler> WarmWorld = SolveSnow(Warm);
 
 	const FMassifEnvironmentState& FrozenState = FrozenWorld->GetState();
@@ -773,7 +773,7 @@ bool FSnowDensityTest::RunTest(const FString& Parameters)
 	// never melts out, each half-month mixes a little fresh snow into what is
 	// already lying and settles the result further, so the density at the end of the
 	// year stands above the density at the start of it.
-	const TUniquePtr<FMassifEnvironmentScheduler> Frozen = SolveSnow(MakeFrozenCase());
+	const TUniquePtr<FMassifEnvironmentScheduler> Frozen = SolveSnow(MakeFrozenSnowCase());
 
 	const FMassifChannelGrid& Grid = SnowGrid(*Frozen);
 	const int32 Column = Grid.Width / 2;
@@ -813,7 +813,7 @@ bool FSnowAlbedoTest::RunTest(const FString& Parameters)
 {
 	// Fresh snow is nearly white and a settled pack is not, so the same ground under
 	// the same depth throws back less light in April than it did in November.
-	const TUniquePtr<FMassifEnvironmentScheduler> Frozen = SolveSnow(MakeFrozenCase());
+	const TUniquePtr<FMassifEnvironmentScheduler> Frozen = SolveSnow(MakeFrozenSnowCase());
 
 	const FMassifChannelGrid& Grid = SnowGrid(*Frozen);
 	const int32 Column = Grid.Width / 2;
@@ -853,10 +853,10 @@ bool FSnowAlbedoFeedbackTest::RunTest(const FString& Parameters)
 	// warmed the soil under it. That makes the seasonal temperature part of a cycle
 	// with the pack it decides, which the scheduler has to have solved as one group
 	// rather than refused to order.
-	FSnowTestCase Bare = MakeFrozenCase();
+	FSnowTestCase Bare = MakeFrozenSnowCase();
 	Bare.SnowFidelity = EMassifFidelity::Off;
 
-	const TUniquePtr<FMassifEnvironmentScheduler> Snowy = SolveSnow(MakeFrozenCase());
+	const TUniquePtr<FMassifEnvironmentScheduler> Snowy = SolveSnow(MakeFrozenSnowCase());
 	const TUniquePtr<FMassifEnvironmentScheduler> Unsolved = SolveSnow(Bare);
 
 	TestTrue(

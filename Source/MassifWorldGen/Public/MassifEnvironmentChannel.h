@@ -2,6 +2,15 @@
 
 #include "CoreMinimal.h"
 
+/**
+ * Slices a seasonal channel covers a year in: half-monthly, slice 0 the first
+ * half of January.
+ *
+ * One number for every process that resolves a year, so the sun, the climate
+ * and the weather cannot disagree about what slice 14 means.
+ */
+constexpr int32 MassifSeasonalSliceCount = 24;
+
 enum class EMassifChannelType : uint8
 {
 	Scalar,      // one component

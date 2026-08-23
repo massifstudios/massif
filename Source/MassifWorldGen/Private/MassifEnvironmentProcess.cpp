@@ -105,3 +105,15 @@ uint32 FMassifEnvironmentContext::MakeSeed(const TCHAR* Purpose) const
 {
 	return FMassifSeed(MasterSeed).MakeChannelSeed(*MakeStreamName(Purpose));
 }
+
+void MassifFillChannelSlice(
+	const FMassifEnvironmentContext& Context, FName ChannelName, int32 TimeSlice, double Value)
+{
+	const TUniquePtr<FMassifChannelWriteScope> Scope = Context.OpenOutput(ChannelName, TimeSlice);
+	TArrayView<double> Values = Scope->GetComponent(0);
+	for (int32 CellIndex = 0; CellIndex < Values.Num(); ++CellIndex)
+	{
+		Values[CellIndex] = Value;
+	}
+	Scope->Commit();
+}

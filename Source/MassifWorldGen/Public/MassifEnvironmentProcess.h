@@ -139,6 +139,10 @@ private:
 	uint32 MasterSeed = 0;
 };
 
+/** Writes one value over every cell of one slice of a declared output. */
+MASSIFWORLDGEN_API void MassifFillChannelSlice(
+	const FMassifEnvironmentContext& Context, FName ChannelName, int32 TimeSlice, double Value);
+
 /**
  * One simulated system in the environment graph (ARCHITECTURE §5.6.3).
  *

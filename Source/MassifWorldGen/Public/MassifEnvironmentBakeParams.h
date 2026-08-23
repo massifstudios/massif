@@ -113,10 +113,13 @@ struct FMassifEnvironmentBakeParams
 	/**
 	 * How far upslope a point's rock is compared against its own, in metres.
 	 *
-	 * A spring sits at a contact, and the contact has a width: comparing against
-	 * the cell next door finds only the sharpest of them.
+	 * Must span the distance the rock actually changes over, which the lithology
+	 * puts at hundreds of metres: its finest structure is the 900 m patches inside
+	 * a band, solved on 64 m cells. Reaching a short way finds nothing at all
+	 * rather than finding only sharp contacts — over 24 m the yield moves by under
+	 * a hundredth anywhere in a world, against a threshold of five.
 	 */
-	double SpringComparisonRadiusMeters = 24.0;
+	double SpringComparisonRadiusMeters = 400.0;
 
 	/**
 	 * Fall in soil yield across that reach before any water comes back out, and
