@@ -17,6 +17,18 @@ namespace MassifEnvironmentChannels
 		static const FName Name(TEXT("Wind.Field"));
 		return Name;
 	}
+
+	const FName& KatabaticStrength()
+	{
+		static const FName Name(TEXT("Wind.KatabaticStrength"));
+		return Name;
+	}
+
+	const FName& FoehnWarming()
+	{
+		static const FName Name(TEXT("Wind.FoehnWarming"));
+		return Name;
+	}
 }
 
 namespace MassifEnvironmentProcesses
@@ -47,6 +59,61 @@ namespace
 	{
 		double Exposure = 1.0;
 		FVector2d FieldMetersPerSecond = FVector2d::ZeroVector;
+		double KatabaticStrength = 0.0;
+		double FoehnWarmingCelsius = 0.0;
+	};
+
+	/** Nothing where no process in this graph writes the channel, which is what an optional input means. */
+	double SampleOptional(
+		const FMassifEnvironmentState& State, FMassifChannelHandle Channel, FVector2d PositionMeters)
+	{
+		if (!Channel.IsValid())
+		{
+			return 0.0;
+		}
+		return State.SampleScalar(Channel, PositionMeters);
+	}
+
+	/**
+	 * The channels the wind reads where the graph has them.
+	 *
+	 * Both are optional: the wind is solved in graphs with no vegetation and in
+	 * graphs with no water, and neither arrangement is a broken version of the
+	 * other. An absent channel reads zero, which is the same as no canopy and no
+	 * catchment.
+	 */
+	struct FWindInputs
+	{
+		const FMassifEnvironmentState& State;
+		FMassifChannelHandle Canopy;
+		FMassifChannelHandle FlowAccumulation;
+		FMassifChannelHandle StandingWaterDepth;
+
+		double CanopyAt(FVector2d PositionMeters) const
+		{
+			return SampleOptional(State, Canopy, PositionMeters);
+		}
+
+		double AccumulationSquareMetersAt(FVector2d PositionMeters) const
+		{
+			return SampleOptional(State, FlowAccumulation, PositionMeters);
+		}
+
+		/** Filled surface less measured: how deep a hollow the air has no way out of. */
+		double BasinDepthMetersAt(FVector2d PositionMeters) const
+		{
+			return SampleOptional(State, StandingWaterDepth, PositionMeters);
+		}
+	};
+
+	/** Scratch for the four channels one pass over the grid fills. */
+	struct FWindOutputs
+	{
+		TArrayView<double> Exposure;
+		TArrayView<double> Eastward;
+		TArrayView<double> Northward;
+		TArrayView<double> KatabaticStrength;
+		TArrayView<double> FoehnWarmingCelsius;
 	};
 
 	/** Horizontal direction of a compass bearing, in the frame the terrain is in: X east, Y north. */
@@ -106,16 +173,26 @@ namespace
 		FMassifChannelHandle Altitude;
 	};
 
-	/**
-	 * Sx, the topographic exposure index: the steepest angle anything within the
-	 * upwind fetch subtends at the point.
-	 *
-	 * Positive means ground upwind stands above the point and takes the flow off
-	 * it; negative means the point stands above everything it faces into, and the
-	 * flow is compressed over it. This is the whole difference between a crest and
-	 * the pocket behind it, and no local measure of slope can tell them apart.
-	 */
-	double UpwindExposureAngle(
+	/** What one march up the fetch measures. Both readings come off the same samples. */
+	struct FUpwindFetch
+	{
+		/**
+		 * Sx, the topographic exposure index: the steepest angle anything within
+		 * the fetch subtends at the point.
+		 *
+		 * Positive means ground upwind stands above the point and takes the flow
+		 * off it; negative means the point stands above everything it faces into,
+		 * and the flow is compressed over it. This is the whole difference between
+		 * a crest and the pocket behind it, and no local measure of slope can tell
+		 * them apart.
+		 */
+		double ExposureAngleRadians = 0.0;
+
+		/** Highest ground the flow crossed to get here, which is what it has descended from. */
+		double HighestAltitudeMeters = 0.0;
+	};
+
+	FUpwindFetch SweepUpwindFetch(
 		const FWindTerrain& Terrain, FVector2d PositionMeters, const FSynopticWind& Wind,
 		const FMassifWindParams& Params)
 	{
@@ -123,14 +200,20 @@ namespace
 		const int32 StepCount = FMath::Max(1, Params.ExposureStepCount);
 
 		double HighestTangent = TNumericLimits<double>::Lowest();
+		double HighestAltitudeMeters = TNumericLimits<double>::Lowest();
 		for (int32 StepIndex = 1; StepIndex <= StepCount; ++StepIndex)
 		{
 			const double DistanceMeters = Params.ExposureReachMeters * StepIndex / StepCount;
-			const double RiseMeters =
-				Terrain.AltitudeAt(PositionMeters + Wind.UpwindDirection * DistanceMeters) - GroundAltitudeMeters;
-			HighestTangent = FMath::Max(HighestTangent, RiseMeters / DistanceMeters);
+			const double AltitudeMeters =
+				Terrain.AltitudeAt(PositionMeters + Wind.UpwindDirection * DistanceMeters);
+			HighestAltitudeMeters = FMath::Max(HighestAltitudeMeters, AltitudeMeters);
+			HighestTangent = FMath::Max(HighestTangent, (AltitudeMeters - GroundAltitudeMeters) / DistanceMeters);
 		}
-		return FMath::Atan(HighestTangent);
+
+		FUpwindFetch Fetch;
+		Fetch.ExposureAngleRadians = FMath::Atan(HighestTangent);
+		Fetch.HighestAltitudeMeters = HighestAltitudeMeters;
+		return Fetch;
 	}
 
 	/** Level open ground is 1; the clamp keeps a cliff edge from multiplying the wind without limit. */
@@ -198,6 +281,16 @@ namespace
 	}
 
 	/**
+	 * How far behind the skyline the point lies: nothing on ground facing an open
+	 * fetch, one where the fetch has taken the wind off it entirely. Ground the
+	 * flow meets head-on reads above 1 for exposure and so gets exactly zero here.
+	 */
+	double ShelterFraction(double Exposure)
+	{
+		return FMath::Clamp(1.0 - Exposure, 0.0, 1.0);
+	}
+
+	/**
 	 * How completely the flow has left the ground here: steep ground falling away
 	 * downwind, and a point already in shelter. Either alone is a slope, not a
 	 * separation.
@@ -212,8 +305,62 @@ namespace
 		const double SeparationSlope = FMath::Max(Params.LeeSeparationSlope, UE_DOUBLE_KINDA_SMALL_NUMBER);
 
 		const double Fall = FMath::Clamp(FallSlope / SeparationSlope, 0.0, 1.0);
-		const double Shelter = FMath::Clamp(1.0 - Exposure, 0.0, 1.0);
-		return Fall * Shelter;
+		return Fall * ShelterFraction(Exposure);
+	}
+
+	/**
+	 * Cold air drains like water and pools where it can settle.
+	 *
+	 * The slope area above a point says how much arrives, which is the same shape
+	 * the water solve already routed, so this reads that rather than routing a
+	 * second time. The ground under the point says whether it stays: a steep gully
+	 * has the air moving through it on its way down, and the floor below has it
+	 * sitting. Both have to be true, so a crest with nothing above it reads zero
+	 * however flat it is.
+	 */
+	double DrainageStrength(
+		double AccumulationSquareMeters, double BasinDepthMeters, double SlopeTangent,
+		const FMassifWindParams& Params)
+	{
+		const double ReferenceArea =
+			FMath::Max(Params.DrainageReferenceAreaSquareMeters, UE_DOUBLE_KINDA_SMALL_NUMBER);
+		const double MaxSlopeTangent = FMath::Max(
+			FMath::Tan(FMath::DegreesToRadians(Params.DrainageMaxSlopeDegrees)), UE_DOUBLE_KINDA_SMALL_NUMBER);
+
+		const double Collected = FMath::Clamp(AccumulationSquareMeters / ReferenceArea, 0.0, 1.0);
+		const double Settling = 1.0 - FMath::Clamp(SlopeTangent / MaxSlopeTangent, 0.0, 1.0);
+
+		// Two different places hold cold air, and one of them the routed water cannot
+		// find. An open valley floor collects what drains off the slopes above it,
+		// which is the accumulation term. A closed hollow holds air because the air
+		// has nowhere to leave - and on a filled surface that hollow is an
+		// accumulation *minimum*, since the fill routes everything out over its rim.
+		// Basin depth is what says so, and a frost hollow is exactly the case.
+		const double Trapped = FMath::Clamp(
+			BasinDepthMeters / FMath::Max(Params.TrappingDepthMeters, UE_DOUBLE_KINDA_SMALL_NUMBER), 0.0, 1.0);
+
+		// Settling applies to both: a hollow's steep flank is below the spill level
+		// too, but the air there is on its way to the floor rather than lying on it.
+		return FMath::Max(Collected, Trapped) * Settling;
+	}
+
+	/**
+	 * Warming a descending lee flow brings, measured from the highest ground the
+	 * upwind sweep crossed.
+	 *
+	 * Air that was forced over that ground left its water on the far side, so it
+	 * comes down dry and warms at the dry adiabatic rate over the whole descent
+	 * rather than at the moist rate it climbed at. The shelter scales it because a
+	 * point the flow has not descended onto is not in a foehn at all, whatever
+	 * stands upwind of it.
+	 */
+	double FoehnWarmingCelsius(
+		const FUpwindFetch& Fetch, double GroundAltitudeMeters, double Exposure, const FMassifWindParams& Params)
+	{
+		const double DescentMeters = FMath::Max(0.0, Fetch.HighestAltitudeMeters - GroundAltitudeMeters);
+		const double WarmingCelsius = FMath::Min(
+			Params.DryAdiabaticLapseCelsiusPerMeter * DescentMeters, Params.MaxFoehnWarmingCelsius);
+		return WarmingCelsius * ShelterFraction(Exposure);
 	}
 
 	/**
@@ -233,9 +380,8 @@ namespace
 	/** Channeling and lee separation: the two things that move the direction, not just the strength. */
 	FVector2d SteerByTerrain(
 		const FWindTerrain& Terrain, FVector2d PositionMeters, const FSynopticWind& Wind, const FWindSample& Sample,
-		double SpacingMeters, const FMassifWindParams& Params)
+		FVector2d Gradient, double SpacingMeters, const FMassifWindParams& Params)
 	{
-		const FVector2d Gradient = Terrain.GradientAt(PositionMeters, SpacingMeters);
 		const FVector2d Channeled = BlendDirection(
 			Sample.FieldMetersPerSecond.GetSafeNormal(), ValleyAxis(Gradient, Wind.FlowDirection),
 			ChannelingWeight(Gradient, Params));
@@ -245,19 +391,34 @@ namespace
 		return SeparateInLee(Channeled * Sample.FieldMetersPerSecond.Length(), Wind, Separation, Params);
 	}
 
+	/**
+	 * Everything the terrain adds once the synoptic wind is known: where it steers
+	 * the flow, where cold air pools on a still night, and where a descending flow
+	 * arrives warm. All three need terrain, so all three are skipped together at
+	 * the fidelity that does not steer.
+	 */
 	FWindSample SolveWindAt(
 		const FWindTerrain& Terrain, FVector2d PositionMeters, const FSynopticWind& Wind, double SpacingMeters,
-		bool bTerrainSteers, const FMassifWindParams& Params)
+		bool bTerrainSteers, double AccumulationSquareMeters, double BasinDepthMeters,
+		const FMassifWindParams& Params)
 	{
+		const FUpwindFetch Fetch = SweepUpwindFetch(Terrain, PositionMeters, Wind, Params);
+
 		FWindSample Sample;
-		Sample.Exposure = ExposureFromAngle(UpwindExposureAngle(Terrain, PositionMeters, Wind, Params), Params);
+		Sample.Exposure = ExposureFromAngle(Fetch.ExposureAngleRadians, Params);
 		Sample.FieldMetersPerSecond = Wind.FlowDirection * (Wind.SpeedMetersPerSecond * Sample.Exposure);
 		if (!bTerrainSteers)
 		{
 			return Sample;
 		}
 
-		Sample.FieldMetersPerSecond = SteerByTerrain(Terrain, PositionMeters, Wind, Sample, SpacingMeters, Params);
+		const FVector2d Gradient = Terrain.GradientAt(PositionMeters, SpacingMeters);
+		Sample.FieldMetersPerSecond =
+			SteerByTerrain(Terrain, PositionMeters, Wind, Sample, Gradient, SpacingMeters, Params);
+		Sample.KatabaticStrength =
+			DrainageStrength(AccumulationSquareMeters, BasinDepthMeters, Gradient.Length(), Params);
+		Sample.FoehnWarmingCelsius =
+			FoehnWarmingCelsius(Fetch, Terrain.AltitudeAt(PositionMeters), Sample.Exposure, Params);
 		return Sample;
 	}
 
@@ -285,6 +446,12 @@ namespace
  * and separated into a slow recirculating pocket where the ground drops away
  * downwind. Exposure is a multiplier on level open ground, so a reading stays
  * meaningful without believing any absolute wind speed.
+ *
+ * The two mountain wind systems the synoptic wind does not drive at all are
+ * solved here as well, because both are read off work this pass already does:
+ * the nightly cold-air drainage off the local slope and the catchment above it,
+ * and the foehn warming off the same upwind sweep and the same shelter term the
+ * lee separation needs. Splitting them out would mean marching the fetch twice.
  */
 class FWindFieldProcess final : public IMassifEnvironmentProcess
 {
@@ -300,14 +467,15 @@ public:
 private:
 	FMassifChannelDescriptor MakeExposureChannel() const;
 	FMassifChannelDescriptor MakeFieldChannel() const;
+	FMassifChannelDescriptor MakeKatabaticChannel() const;
+	FMassifChannelDescriptor MakeFoehnChannel() const;
 
 	void WriteSynoptic(FMassifEnvironmentContext& Context, const FSynopticWind& Wind) const;
 
 	void SolveRow(
 		const FWindTerrain& Terrain, const FSynopticWind& Wind, const FMassifWindParams& RunParams,
-		const FMassifChannelGrid& Grid, int32 Row, EMassifFidelity Fidelity, TArrayView<double> OutExposure,
-		TArrayView<double> OutEastward, TArrayView<double> OutNorthward,
-		TFunctionRef<double(FVector2d)> CanopyAt) const;
+		const FMassifChannelGrid& Grid, int32 Row, EMassifFidelity Fidelity, const FWindInputs& Inputs,
+		FWindOutputs& Outputs) const;
 
 	FMassifWindParams Params;
 };
@@ -337,12 +505,44 @@ FMassifChannelDescriptor FWindFieldProcess::MakeFieldChannel() const
 	return Descriptor;
 }
 
+FMassifChannelDescriptor FWindFieldProcess::MakeKatabaticChannel() const
+{
+	FMassifChannelDescriptor Descriptor;
+	Descriptor.Name = MassifEnvironmentChannels::KatabaticStrength();
+	Descriptor.Type = EMassifChannelType::Scalar;
+	Descriptor.Encoding = EMassifChannelEncoding::Uint16;
+	Descriptor.CellSizeMeters = Params.CellSizeMeters;
+	Descriptor.Unit = TEXT("0-1");
+	Descriptor.ColorMap = EMassifChannelColorMap::BlueWhite;
+	Descriptor.DisplayRange = FVector2d(0.0, 1.0);
+	return Descriptor;
+}
+
+FMassifChannelDescriptor FWindFieldProcess::MakeFoehnChannel() const
+{
+	FMassifChannelDescriptor Descriptor;
+	Descriptor.Name = MassifEnvironmentChannels::FoehnWarming();
+	Descriptor.Type = EMassifChannelType::Scalar;
+	Descriptor.Encoding = EMassifChannelEncoding::Uint16;
+	Descriptor.CellSizeMeters = Params.CellSizeMeters;
+	Descriptor.Unit = TEXT("C");
+	Descriptor.ColorMap = EMassifChannelColorMap::Magma;
+	return Descriptor;
+}
+
 FMassifProcessDeclaration FWindFieldProcess::Declare() const
 {
 	FMassifProcessDeclaration Declaration;
 	Declaration.Name = MassifEnvironmentProcesses::Wind();
 	Declaration.InputChannels = {MassifEnvironmentChannels::Altitude()};
-	Declaration.OptionalInputChannels = {MassifEnvironmentChannels::VegetationCanopy()};
+
+	// The catchment above a point is what cold air drains off, and the hollow it
+	// cannot leave is what holds it there; the water solve has already worked out
+	// both. Optional, so the wind still solves in a graph with no hydrology - there
+	// is simply nothing draining and nothing trapped anywhere.
+	Declaration.OptionalInputChannels = {
+		MassifEnvironmentChannels::VegetationCanopy(), MassifEnvironmentChannels::FlowAccumulation(),
+		MassifEnvironmentChannels::StandingWaterDepth()};
 
 	// Vegetation reads the snow this wind moves, so the scheduler finds a cycle
 	// through it and has to be told it is meant.
@@ -351,52 +551,67 @@ FMassifProcessDeclaration FWindFieldProcess::Declare() const
 		EMassifFidelity::Cheap, EMassifFidelity::Standard, EMassifFidelity::Reference};
 	Declaration.OutputChannels.Add(MakeExposureChannel());
 	Declaration.OutputChannels.Add(MakeFieldChannel());
+	Declaration.OutputChannels.Add(MakeKatabaticChannel());
+	Declaration.OutputChannels.Add(MakeFoehnChannel());
 	return Declaration;
 }
 
 void FWindFieldProcess::WriteSynoptic(FMassifEnvironmentContext& Context, const FSynopticWind& Wind) const
 {
 	// Off is the synoptic wind over level ground everywhere: the channels still
-	// exist, so nothing downstream has to ask whether the wind was solved.
+	// exist, so nothing downstream has to ask whether the wind was solved. Level
+	// ground has nothing above it to drain and nothing upwind to descend from, so
+	// both terrain-driven channels read zero.
 	const TUniquePtr<FMassifChannelWriteScope> Exposure =
 		Context.OpenOutput(MassifEnvironmentChannels::WindExposure());
 	const TUniquePtr<FMassifChannelWriteScope> Field = Context.OpenOutput(MassifEnvironmentChannels::WindField());
+	const TUniquePtr<FMassifChannelWriteScope> Katabatic =
+		Context.OpenOutput(MassifEnvironmentChannels::KatabaticStrength());
+	const TUniquePtr<FMassifChannelWriteScope> Foehn = Context.OpenOutput(MassifEnvironmentChannels::FoehnWarming());
 
 	const FVector2d Synoptic = Wind.FlowDirection * Wind.SpeedMetersPerSecond;
 	TArrayView<double> ExposureValues = Exposure->GetComponent(0);
 	TArrayView<double> EastwardValues = Field->GetComponent(0);
 	TArrayView<double> NorthwardValues = Field->GetComponent(1);
+	TArrayView<double> KatabaticValues = Katabatic->GetComponent(0);
+	TArrayView<double> FoehnValues = Foehn->GetComponent(0);
 	for (int32 CellIndex = 0; CellIndex < ExposureValues.Num(); ++CellIndex)
 	{
 		ExposureValues[CellIndex] = 1.0;
 		EastwardValues[CellIndex] = Synoptic.X;
 		NorthwardValues[CellIndex] = Synoptic.Y;
+		KatabaticValues[CellIndex] = 0.0;
+		FoehnValues[CellIndex] = 0.0;
 	}
 
 	Exposure->Commit();
 	Field->Commit();
+	Katabatic->Commit();
+	Foehn->Commit();
 }
 
 void FWindFieldProcess::SolveRow(
 	const FWindTerrain& Terrain, const FSynopticWind& Wind, const FMassifWindParams& RunParams,
-	const FMassifChannelGrid& Grid, int32 Row, EMassifFidelity Fidelity, TArrayView<double> OutExposure,
-	TArrayView<double> OutEastward, TArrayView<double> OutNorthward,
-	TFunctionRef<double(FVector2d)> CanopyAt) const
+	const FMassifChannelGrid& Grid, int32 Row, EMassifFidelity Fidelity, const FWindInputs& Inputs,
+	FWindOutputs& Outputs) const
 {
 	const bool bTerrainSteers = Fidelity != EMassifFidelity::Cheap;
 
 	for (int32 Column = 0; Column < Grid.Width; ++Column)
 	{
 		const FVector2d Position = Grid.CellCentreMeters(Column, Row);
-		const FWindSample Sample =
-			SolveWindAt(Terrain, Position, Wind, Grid.CellSizeMeters, bTerrainSteers, RunParams);
+		const FWindSample Sample = SolveWindAt(
+			Terrain, Position, Wind, Grid.CellSizeMeters, bTerrainSteers,
+			Inputs.AccumulationSquareMetersAt(Position), Inputs.BasinDepthMetersAt(Position), RunParams);
 
-		const double Drag = 1.0 - RunParams.CanopyDragFraction * CanopyAt(Position);
+		const double Drag = 1.0 - RunParams.CanopyDragFraction * Inputs.CanopyAt(Position);
 
 		const int32 CellIndex = Row * Grid.Width + Column;
-		OutExposure[CellIndex] = Sample.Exposure;
-		OutEastward[CellIndex] = Sample.FieldMetersPerSecond.X * Drag;
-		OutNorthward[CellIndex] = Sample.FieldMetersPerSecond.Y * Drag;
+		Outputs.Exposure[CellIndex] = Sample.Exposure;
+		Outputs.Eastward[CellIndex] = Sample.FieldMetersPerSecond.X * Drag;
+		Outputs.Northward[CellIndex] = Sample.FieldMetersPerSecond.Y * Drag;
+		Outputs.KatabaticStrength[CellIndex] = Sample.KatabaticStrength;
+		Outputs.FoehnWarmingCelsius[CellIndex] = Sample.FoehnWarmingCelsius;
 	}
 }
 
@@ -415,29 +630,28 @@ void FWindFieldProcess::Execute(FMassifEnvironmentContext& Context, EMassifFidel
 	const TUniquePtr<FMassifChannelWriteScope> Exposure =
 		Context.OpenOutput(MassifEnvironmentChannels::WindExposure());
 	const TUniquePtr<FMassifChannelWriteScope> Field = Context.OpenOutput(MassifEnvironmentChannels::WindField());
+	const TUniquePtr<FMassifChannelWriteScope> Katabatic =
+		Context.OpenOutput(MassifEnvironmentChannels::KatabaticStrength());
+	const TUniquePtr<FMassifChannelWriteScope> Foehn = Context.OpenOutput(MassifEnvironmentChannels::FoehnWarming());
 
-	const FMassifEnvironmentState& State = Context.GetState();
-	const FMassifChannelHandle Canopy =
-		Context.FindOptionalInput(MassifEnvironmentChannels::VegetationCanopy());
-	const auto CanopyAt = [&State, Canopy](FVector2d Position)
-	{
-		if (!Canopy.IsValid())
-		{
-			return 0.0;
-		}
-		return State.SampleScalar(Canopy, Position);
-	};
+	const FWindInputs Inputs{
+		Context.GetState(), Context.FindOptionalInput(MassifEnvironmentChannels::VegetationCanopy()),
+		Context.FindOptionalInput(MassifEnvironmentChannels::FlowAccumulation()),
+		Context.FindOptionalInput(MassifEnvironmentChannels::StandingWaterDepth())};
+	FWindOutputs Outputs{
+		Exposure->GetComponent(0), Field->GetComponent(0), Field->GetComponent(1), Katabatic->GetComponent(0),
+		Foehn->GetComponent(0)};
 
 	const FMassifChannelGrid& Grid = Exposure->GetGrid();
 	for (int32 Row = 0; Row < Grid.Height; ++Row)
 	{
-		SolveRow(
-			Terrain, Wind, RunParams, Grid, Row, Fidelity, Exposure->GetComponent(0), Field->GetComponent(0),
-			Field->GetComponent(1), CanopyAt);
+		SolveRow(Terrain, Wind, RunParams, Grid, Row, Fidelity, Inputs, Outputs);
 	}
 
 	Exposure->Commit();
 	Field->Commit();
+	Katabatic->Commit();
+	Foehn->Commit();
 }
 
 void MassifRegisterWindProcesses(FMassifEnvironmentScheduler& Scheduler, const FMassifWindParams& Params)

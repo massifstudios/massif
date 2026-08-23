@@ -83,4 +83,49 @@ struct FMassifWindParams
 	 * than merely sheltering it.
 	 */
 	double LeeReversalFraction = 0.3;
+
+	/**
+	 * Slope area above a point at which cold-air drainage is as full as it gets.
+	 *
+	 * A quarter of a square kilometre is about one cirque, which is the smallest
+	 * catchment that fills the hollow below it on a single clear night. Anything
+	 * gathering more than that is already draining as much air as the hollow can
+	 * hold, so the reading saturates rather than growing with the catchment.
+	 */
+	double DrainageReferenceAreaSquareMeters = 250000.0;
+
+	/**
+	 * Slope above which drained air keeps moving instead of settling.
+	 *
+	 * Cold air on a steep flank is on its way somewhere; only ground gentle enough
+	 * to hold it reads as a pool. This is why frost hollows sit on valley floors
+	 * and never on the gullies that feed them, however much drains through those.
+	 */
+	double DrainageMaxSlopeDegrees = 25.0;
+
+	/**
+	 * Depth of hollow that holds cold air outright.
+	 *
+	 * A closed basin traps air because the air cannot leave it, which is a
+	 * different thing from a valley floor collecting what drains into it, and the
+	 * routed water cannot express it: the depression fill sends everything out over
+	 * the rim, so a hollow reads as an accumulation minimum. This is the frost
+	 * hollow, and it is why a treeline dips into a basin instead of following a
+	 * contour.
+	 */
+	double TrappingDepthMeters = 40.0;
+
+	/**
+	 * Warming of unsaturated air per metre it descends. Physics rather than a
+	 * tuning knob: air that dropped its water climbing the windward side comes
+	 * down the lee dry, at roughly twice the rate it cooled going up.
+	 */
+	double DryAdiabaticLapseCelsiusPerMeter = 0.0098;
+
+	/**
+	 * Ceiling on what one descent may add. A kilometre of dry descent is ten
+	 * degrees on paper, and a real foehn has mixed with the air it displaces long
+	 * before it delivers that.
+	 */
+	double MaxFoehnWarmingCelsius = 8.0;
 };
