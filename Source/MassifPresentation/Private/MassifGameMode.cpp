@@ -35,7 +35,7 @@
 #include "Terrain/MassifTerrainManager.h"
 #include "UObject/SoftObjectPath.h"
 #include "GameFramework/PlayerController.h"
-#include "Water/MassifFluidRegionManager.h"
+#include "Water/MassifShallowWaterRegion.h"
 #include "Water/MassifRiverManager.h"
 
 namespace
@@ -158,9 +158,9 @@ namespace
 		return Busiest;
 	}
 
-	/** Where the baked fluid region was put, so the camera can be sent to it by name. */
-	FVector2d GBakedRegionCentreMeters = FVector2d::ZeroVector;
-	bool bGBakedRegionPlaced = false;
+	/** Where the solved water patch was put, so the camera can be sent to it by name. */
+	FVector2d GSolvedPatchCentreMeters = FVector2d::ZeroVector;
+	bool bGSolvedPatchPlaced = false;
 
 	/** Head height over the ground, so a teleport lands standing rather than buried. */
 	constexpr double TeleportEyeHeightMeters = 2.0;
@@ -201,12 +201,12 @@ namespace
 
 	void TeleportToWaterCommand(const TArray<FString>&, UWorld* World)
 	{
-		if (!bGBakedRegionPlaced)
+		if (!bGSolvedPatchPlaced)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("Teleport: no fluid region has been baked."));
+			UE_LOG(LogTemp, Warning, TEXT("Teleport: no water patch has been solved."));
 			return;
 		}
-		TeleportCameraTo(World, GBakedRegionCentreMeters);
+		TeleportCameraTo(World, GSolvedPatchCentreMeters);
 	}
 
 	FAutoConsoleCommandWithWorldAndArgs GTeleportCommand(
@@ -216,7 +216,7 @@ namespace
 
 	FAutoConsoleCommandWithWorldAndArgs GTeleportToWaterCommand(
 		TEXT("massif.GotoWater"),
-		TEXT("Move the camera to the baked fluid region."),
+		TEXT("Move the camera to the solved water patch."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&TeleportToWaterCommand));
 
 	/** Earth's surface gravity, 9.81 m/s down. */
@@ -441,10 +441,10 @@ void AMassifGameMode::BuildTerrainField(TSharedRef<const FMassifHeightmap> Heigh
 	UE_LOG(LogTemp, Display, TEXT("Terrain field: %.0f m across, %d channel segments cut into it"),
 		TerrainField->GetWorldSizeMeters(), RiverField->GetSegmentCount());
 
-	SpawnFluidRegion(Rivers.Get());
+	SpawnShallowWaterRegion(Rivers.Get());
 }
 
-void AMassifGameMode::SpawnFluidRegion(const FMassifRiverNetwork& Rivers)
+void AMassifGameMode::SpawnShallowWaterRegion(const FMassifRiverNetwork& Rivers)
 {
 	const FMassifRiverNode* Node = BusiestNode(Rivers);
 	if (Node == nullptr)
@@ -452,12 +452,12 @@ void AMassifGameMode::SpawnFluidRegion(const FMassifRiverNetwork& Rivers)
 		return;
 	}
 
-	GBakedRegionCentreMeters = Node->PositionMeters;
-	bGBakedRegionPlaced = true;
+	GSolvedPatchCentreMeters = Node->PositionMeters;
+	bGSolvedPatchPlaced = true;
 
-	FluidRegionManager = GetWorld()->SpawnActor<AMassifFluidRegionManager>();
-	FluidRegionManager->Initialize(
-		TerrainField, Node->PositionMeters, Node->WaterSurfaceMeters, LoadRiverMaterial());
+	ShallowWaterRegion = GetWorld()->SpawnActor<AMassifShallowWaterRegion>();
+	ShallowWaterRegion->Initialize(
+		TerrainField, RiverField, Node->PositionMeters, LoadRiverMaterial());
 }
 
 bool AMassifGameMode::BuildEnvironment(TSharedRef<const FMassifHeightmap> Heightmap)

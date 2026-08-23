@@ -8,7 +8,7 @@ class AMassifDebugChannelView;
 class AMassifDaylightManager;
 class AMassifFogManager;
 class AMassifFoliageManager;
-class AMassifFluidRegionManager;
+class AMassifShallowWaterRegion;
 class AMassifRiverManager;
 class AMassifTerrainManager;
 class FMassifEnvironmentScheduler;
@@ -65,7 +65,7 @@ private:
 	void BuildTerrainField(TSharedRef<const FMassifHeightmap> Heightmap);
 
 	/** Puts the baked fluid region on the largest channel the world traced. */
-	void SpawnFluidRegion(const FMassifRiverNetwork& Rivers);
+	void SpawnShallowWaterRegion(const FMassifRiverNetwork& Rivers);
 	void SpawnEnvironmentActors();
 	void SpawnSunAndSky();
 	void SpawnAtmosphericHaze();
@@ -95,7 +95,7 @@ private:
 	TObjectPtr<AMassifRiverManager> RiverManager;
 
 	UPROPERTY()
-	TObjectPtr<AMassifFluidRegionManager> FluidRegionManager;
+	TObjectPtr<AMassifShallowWaterRegion> ShallowWaterRegion;
 
 	UPROPERTY()
 	TObjectPtr<AMassifDebugChannelView> DebugChannelView;
