@@ -34,48 +34,69 @@ namespace
 	 */
 	constexpr double ShoreOvershoot = 1.06;
 
-	/** The trench a section of thirty-three samples holds, as a share of its depth midstream. */
-	double ParabolicShare(int32 OffsetIndex)
-	{
-		const double AcrossFraction = 2.0 * OffsetIndex / (MassifChannelProfileOffsetCount - 1) - 1.0;
-		return FMath::Max(1.0 - AcrossFraction * AcrossFraction, 0.0);
-	}
+	/** Narrowest section a station can have, so no reach divides by a span of nothing. */
+	constexpr double MinSectionHalfSpanMeters = 0.5;
 
 	/**
-	 * How far across its own section a point stands, from the offset to the nearest
-	 * point of the centreline.
+	 * Furthest out the solved bed is taken as given, as a share of the section's
+	 * own span.
 	 *
-	 * The whole offset rather than the part of it across the flow. Mid-span the two
-	 * are the same thing; past either end they are not, and taking only the part
-	 * across the flow runs a station's trench on beyond the reach it belongs to at
-	 * full depth. Measured this way a reach closes its own trench where it ends.
+	 * A section spans four channel widths and the water is held to two of them, so
+	 * this is a guard against a section with no bank inside it rather than
+	 * something a real channel meets. What it guarantees is that there is always a
+	 * band of section left to return to the measured ground over.
 	 */
-	double SignedOffsetMeters(FVector2d OffsetMeters, FVector2d Rightward)
+	constexpr double MaxSolvedSpanShare = 0.5;
+
+	/**
+	 * How much wider than the water a station's own section is, where there is no
+	 * solved one to take the answer from. The same four widths the profile solve
+	 * spans, so a fallback station has as much bank in it to blend over as a solved
+	 * one does.
+	 */
+	constexpr double FallbackSpanFactor = 4.0;
+
+	/** Smooth one to nothing over a band, flat at both ends so the ground gets no crease. */
+	double FalloffShare(double DistanceMeters, double BandMeters)
 	{
-		const double LengthMeters = OffsetMeters.Length();
-		if (OffsetMeters.Dot(Rightward) < 0.0)
+		if (BandMeters <= UE_DOUBLE_SMALL_NUMBER)
 		{
-			return -LengthMeters;
+			return 0.0;
 		}
-		return LengthMeters;
+
+		const double Fraction = FMath::Clamp(DistanceMeters / BandMeters, 0.0, 1.0);
+		return 1.0 - Fraction * Fraction * (3.0 - 2.0 * Fraction);
 	}
 }
 
-double FMassifRiverField::FSectionCut::DepthAt(double AcrossMeters) const
+double FMassifRiverField::FSectionBed::AltitudeAt(double AcrossMeters) const
 {
-	if (HalfSpanMeters <= 0.0f || FMath::Abs(AcrossMeters) >= HalfSpanMeters)
+	if (HalfSpanMeters <= 0.0f)
+	{
+		return AltitudeMeters[MassifChannelProfileMidOffset];
+	}
+
+	const double SampleIndex = FMath::Clamp(
+		0.5 * (AcrossMeters / HalfSpanMeters + 1.0) * (MassifChannelProfileOffsetCount - 1),
+		0.0, static_cast<double>(MassifChannelProfileOffsetCount - 1));
+	const int32 LowIndex =
+		FMath::Clamp(FMath::FloorToInt32(SampleIndex), 0, MassifChannelProfileOffsetCount - 2);
+	return FMath::Lerp(
+		static_cast<double>(AltitudeMeters[LowIndex]),
+		static_cast<double>(AltitudeMeters[LowIndex + 1]),
+		SampleIndex - LowIndex);
+}
+
+double FMassifRiverField::FSectionBed::BlendAt(double AcrossMeters) const
+{
+	if (HalfSpanMeters <= 0.0f)
 	{
 		return 0.0;
 	}
 
-	const double SampleIndex = 0.5 * (AcrossMeters / HalfSpanMeters + 1.0)
-		* (MassifChannelProfileOffsetCount - 1);
-	const int32 LowIndex =
-		FMath::Clamp(FMath::FloorToInt32(SampleIndex), 0, MassifChannelProfileOffsetCount - 2);
-	return FMath::Lerp(
-		static_cast<double>(DepthMeters[LowIndex]),
-		static_cast<double>(DepthMeters[LowIndex + 1]),
-		SampleIndex - LowIndex);
+	const double SolvedMeters =
+		FMath::Min<double>(SolvedHalfSpanMeters, MaxSolvedSpanShare * HalfSpanMeters);
+	return FalloffShare(FMath::Abs(AcrossMeters) - SolvedMeters, HalfSpanMeters - SolvedMeters);
 }
 
 // ---------------------------------------------------------------------------
@@ -159,24 +180,37 @@ namespace
 	}
 }
 
-void FMassifRiverField::FSectionCut::SetFromProfile(const FMassifChannelProfile& Profile)
+void FMassifRiverField::FSectionBed::SetFromProfile(const FMassifChannelProfile& Profile)
 {
-	HalfSpanMeters = static_cast<float>(Profile.HalfSpanMeters * ShoreOvershoot);
+	HalfSpanMeters = static_cast<float>(
+		FMath::Max(Profile.HalfSpanMeters * ShoreOvershoot, MinSectionHalfSpanMeters));
+	SolvedHalfSpanMeters = static_cast<float>(0.5 * Profile.WettedWidthMeters);
 	for (int32 OffsetIndex = 0; OffsetIndex < MassifChannelProfileOffsetCount; ++OffsetIndex)
 	{
-		const double CutMeters = static_cast<double>(Profile.GroundAltitudeMeters[OffsetIndex])
-			- Profile.BedAltitudeMeters[OffsetIndex];
-		DepthMeters[OffsetIndex] = static_cast<float>(FMath::Max(CutMeters, 0.0));
+		AltitudeMeters[OffsetIndex] = Profile.BedAltitudeMeters[OffsetIndex];
 	}
 }
 
-void FMassifRiverField::FSectionCut::SetFromChannel(double WidthMeters, double CutMeters)
+void FMassifRiverField::FSectionBed::SetFromChannel(
+	double GroundAltitudeMeters, double WidthMeters, double CutMeters)
 {
-	HalfSpanMeters = static_cast<float>(0.5 * FMath::Max(WidthMeters, 0.0) * ShoreOvershoot);
+	const double WetHalfSpanMeters = FMath::Max(0.5 * WidthMeters, UE_DOUBLE_SMALL_NUMBER);
+	HalfSpanMeters = static_cast<float>(FMath::Max(
+		WetHalfSpanMeters * FallbackSpanFactor * ShoreOvershoot, MinSectionHalfSpanMeters));
+	SolvedHalfSpanMeters = static_cast<float>(WetHalfSpanMeters);
+
+	// Laid out where the samples sit rather than where they are read: the span the
+	// lookup declares is the stretched one, and the trench has to be a trench in
+	// the channel's own width and not in a channel six per cent wider.
+	const double SampleHalfSpanMeters = HalfSpanMeters / ShoreOvershoot;
 	for (int32 OffsetIndex = 0; OffsetIndex < MassifChannelProfileOffsetCount; ++OffsetIndex)
 	{
-		DepthMeters[OffsetIndex] =
-			static_cast<float>(FMath::Max(CutMeters, 0.0) * ParabolicShare(OffsetIndex));
+		const double SampleFraction =
+			2.0 * OffsetIndex / (MassifChannelProfileOffsetCount - 1) - 1.0;
+		const double WetFraction = SampleFraction * SampleHalfSpanMeters / WetHalfSpanMeters;
+		const double Share = FMath::Max(1.0 - WetFraction * WetFraction, 0.0);
+		AltitudeMeters[OffsetIndex] =
+			static_cast<float>(GroundAltitudeMeters - FMath::Max(CutMeters, 0.0) * Share);
 	}
 }
 
@@ -192,12 +226,14 @@ void FMassifRiverField::AppendStation(const FMassifRiverNode& Node)
 
 	if (Node.Profile.HalfSpanMeters > 0.0)
 	{
-		Station.Cut.SetFromProfile(Node.Profile);
+		Station.Section.SetFromProfile(Node.Profile);
 		Stations.Add(Station);
 		return;
 	}
 
-	Station.Cut.SetFromChannel(Node.WidthMeters, Node.GroundAltitudeMeters - Node.BedAltitudeMeters);
+	Station.Section.SetFromChannel(
+		Node.GroundAltitudeMeters, Node.WidthMeters,
+		Node.GroundAltitudeMeters - Node.BedAltitudeMeters);
 	Stations.Add(Station);
 }
 
@@ -256,15 +292,17 @@ FMassifRiverField::FSegment FMassifRiverField::MakeSpanSegment(
 	// Far enough out that a point the segment can answer for always finds it in
 	// its own cell: the bank the field reports over, or the section the carve
 	// cut, whichever reaches further. The annual width, because it is the widest
-	// the year gets and the index has to cover every slice of it.
+	// the year gets and the index has to cover every slice of it. The section's
+	// own half-span covers the run past either end as well, which is the band the
+	// bed closes to nothing over there.
 	const FStation& StartStation = Stations[Segment.StartStationIndex];
 	const FStation& EndStation = Stations[Segment.EndStationIndex];
 	Segment.InfluenceMeters = FMath::Max(
 		FMath::Max(StartStation.Annual.HalfWidthMeters, EndStation.Annual.HalfWidthMeters)
 			+ BankReachMeters,
 		FMath::Max(
-			static_cast<double>(StartStation.Cut.HalfSpanMeters),
-			static_cast<double>(EndStation.Cut.HalfSpanMeters)));
+			static_cast<double>(StartStation.Section.HalfSpanMeters),
+			static_cast<double>(EndStation.Section.HalfSpanMeters)));
 	return Segment;
 }
 
@@ -470,49 +508,74 @@ void FMassifRiverField::ConsiderSegment(
 	InOutNearest.SignedDistanceMeters = SignedDistanceMeters;
 }
 
-double FMassifRiverField::CutDepthOfSegment(int32 SegmentIndex, FVector2d PositionMeters) const
+/**
+ * The section is read across the flow, and what closes it at either end of the
+ * span is the run past that end.
+ *
+ * Not the offset to the nearest point of the span, which mid-span is the same
+ * thing and past either end is a radius. A section read against a radius arrives
+ * on the ground as circles round the station — round every terminus, and round
+ * the outside of every bend, where the ground between two spans' perpendiculars
+ * belongs to the interior of neither.
+ */
+double FMassifRiverField::ChannelGroundOfSegment(
+	int32 SegmentIndex, FVector2d PositionMeters, double MeasuredGroundMeters) const
 {
 	const FSegment& Segment = Segments[SegmentIndex];
 	const FVector2d Along = Segment.EndMeters - Segment.StartMeters;
 	const double LengthSquared = Along.SquaredLength();
 	if (LengthSquared <= UE_DOUBLE_KINDA_SMALL_NUMBER)
 	{
-		return 0.0;
+		return MeasuredGroundMeters;
 	}
 
-	const double Fraction =
-		FMath::Clamp((PositionMeters - Segment.StartMeters).Dot(Along) / LengthSquared, 0.0, 1.0);
-	const double AcrossMeters = SignedOffsetMeters(
-		PositionMeters - (Segment.StartMeters + Fraction * Along), AcrossFlow(Along.GetSafeNormal()));
+	const FVector2d FromStart = PositionMeters - Segment.StartMeters;
+	const double Projection = FromStart.Dot(Along) / LengthSquared;
+	const double Fraction = FMath::Clamp(Projection, 0.0, 1.0);
+	const double AcrossMeters = FromStart.Dot(AcrossFlow(Along.GetSafeNormal()));
 
-	return FMath::Lerp(
-		Stations[Segment.StartStationIndex].Cut.DepthAt(AcrossMeters),
-		Stations[Segment.EndStationIndex].Cut.DepthAt(AcrossMeters),
-		Fraction);
+	const FSectionBed& StartSection = Stations[Segment.StartStationIndex].Section;
+	const FSectionBed& EndSection = Stations[Segment.EndStationIndex].Section;
+	const double PastEndMeters = FMath::Abs(Projection - Fraction) * Segment.LengthMeters;
+	const double BlendShare =
+		FMath::Lerp(StartSection.BlendAt(AcrossMeters), EndSection.BlendAt(AcrossMeters), Fraction)
+		* FalloffShare(
+			PastEndMeters,
+			FMath::Lerp<double>(StartSection.HalfSpanMeters, EndSection.HalfSpanMeters, Fraction));
+	if (BlendShare <= 0.0)
+	{
+		return MeasuredGroundMeters;
+	}
+
+	const double BedMeters = FMath::Lerp(
+		StartSection.AltitudeAt(AcrossMeters), EndSection.AltitudeAt(AcrossMeters), Fraction);
+	return FMath::Lerp(MeasuredGroundMeters, BedMeters, BlendShare);
 }
 
-double FMassifRiverField::SampleCutDepthMeters(FVector2d PositionMeters) const
+double FMassifRiverField::SampleChannelGroundMeters(
+	FVector2d PositionMeters, double MeasuredGroundMeters) const
 {
 	if (Segments.IsEmpty())
 	{
-		return 0.0;
+		return MeasuredGroundMeters;
 	}
 
 	const int32 Column = ColumnAt(PositionMeters.X);
 	const int32 Row = RowAt(PositionMeters.Y);
 	if (!Contains(Column, Row))
 	{
-		return 0.0;
+		return MeasuredGroundMeters;
 	}
 
 	const int32 CellIndex = Row * Width + Column;
-	double DeepestMeters = 0.0;
+	double LowestMeters = MeasuredGroundMeters;
 	for (int32 Slot = CellSegmentStart[CellIndex]; Slot < CellSegmentStart[CellIndex + 1]; ++Slot)
 	{
-		DeepestMeters =
-			FMath::Max(DeepestMeters, CutDepthOfSegment(CellSegments[Slot], PositionMeters));
+		LowestMeters = FMath::Min(
+			LowestMeters,
+			ChannelGroundOfSegment(CellSegments[Slot], PositionMeters, MeasuredGroundMeters));
 	}
-	return DeepestMeters;
+	return LowestMeters;
 }
 
 FMassifRiverField::FNearestSegment FMassifRiverField::FindNearestSegment(
@@ -569,7 +632,6 @@ FMassifRiverSample FMassifRiverField::MakeSample(
 	const double HalfWidthMeters = FMath::Max(0.5 * Sample.WidthMeters, UE_DOUBLE_SMALL_NUMBER);
 	const double OffsetMeters = (PositionMeters - CentreMeters).Dot(AcrossFlow(Sample.FlowDirection));
 	Sample.AcrossFraction = FMath::Clamp(OffsetMeters / HalfWidthMeters, -1.0, 1.0);
-	Sample.CutDepthMeters = SampleCutDepthMeters(PositionMeters);
 	return Sample;
 }
 

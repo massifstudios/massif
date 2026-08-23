@@ -167,9 +167,10 @@ struct FMassifShallowWaterMesh
  * altitude is the bed under it plus the water over it, and the sheet ends where
  * the water runs out.
  *
- * A node takes the mean of the cells around it counting dry ones as nothing, so
- * the sheet thins to the ground at its own edge instead of standing a wall of
- * water there.
+ * A node takes the mean surface of the wet cells around it rather than a mean
+ * bed and a mean depth averaged apart, so the sheet is level over ground that is
+ * not. It still thins to nothing at its own edge, because the water there is
+ * already nothing deep.
  */
 MASSIFWORLDGEN_API FMassifShallowWaterMesh MassifBuildShallowWaterSurface(
 	const FMassifShallowWaterField& Field, const FMassifShallowWaterParams& Params);

@@ -127,9 +127,11 @@ bool FSeasonalFlowLeavesTheBedAloneTest::RunTest(const FString& Parameters)
 	const TSharedRef<const FMassifRiverNetwork> Network = FMassifRiverNetwork::Create(MoveTemp(Reaches));
 	const TSharedRef<const FMassifRiverField> Field =
 		FMassifRiverField::Build(Network.Get(), MassifDefaultBankReachMeters);
-	const FVector2d MidstreamMeters = Network->GetReaches()[0].Nodes[20].PositionMeters;
+	const FMassifRiverNode& MidstreamNode = Network->GetReaches()[0].Nodes[20];
+	const double GroundMeters = Field->SampleChannelGroundMeters(
+		MidstreamNode.PositionMeters, MidstreamNode.GroundAltitudeMeters);
 	TestTrue(TEXT("The trench is there whatever the season"),
-		Field->SampleCutDepthMeters(MidstreamMeters) > 0.0);
+		GroundMeters < MidstreamNode.GroundAltitudeMeters);
 	return true;
 }
 

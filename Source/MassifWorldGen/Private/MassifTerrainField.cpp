@@ -32,18 +32,18 @@ double FMassifTerrainField::GetMaxAltitudeMeters() const
 }
 
 /**
- * The measured ground, less the trench the channels cut into it.
+ * The measured ground with the channels' own beds standing in it.
  *
- * A subtraction rather than a level the ground is pulled down to. The trench is
- * the shape the carve worked across each station's own cross-section — a pool
- * against the outer bank, a bar against the inner one, the bed between them —
- * and taking it off whatever the model measured lands that shape on the real
- * hillside instead of replacing the hillside with a fitted one.
+ * The field does the blending, because it is the only thing that knows how far
+ * from a centreline the solved bed is still the answer and where the hillside
+ * takes over again. Everything this adds is the measurement to blend against.
  *
- * Nothing here reads the sample spacing, which is what makes the surface a
- * function of position alone: two tiles meeting at different vertex spacings get
- * the same altitude along the edge they share rather than two, and the coarser
- * of them is a filtered version of the same cut.
+ * Under the water the result is the bed the carve worked and nothing of the
+ * hillside, which is what a surface solved to sit a fixed depth over that bed
+ * needs. Outside the sections it is the measurement untouched, and no width of
+ * the blend depends on the sample spacing — so two tiles meeting at different
+ * vertex spacings disagree along their shared edge by no more than the terrain
+ * alone does.
  */
 double FMassifTerrainField::SampleHeightMeters(FVector2d PositionMeters, double SampleSpacingMeters) const
 {
@@ -52,7 +52,7 @@ double FMassifTerrainField::SampleHeightMeters(FVector2d PositionMeters, double 
 	{
 		return MeasuredMeters;
 	}
-	return MeasuredMeters - RiverField->SampleCutDepthMeters(PositionMeters);
+	return RiverField->SampleChannelGroundMeters(PositionMeters, MeasuredMeters);
 }
 
 FVector3d FMassifTerrainField::SampleNormal(FVector2d PositionMeters, double SampleSpacingMeters) const

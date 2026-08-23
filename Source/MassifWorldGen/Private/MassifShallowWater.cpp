@@ -483,6 +483,7 @@ namespace
 	/** What one lattice node takes from the four cells that meet at it. */
 	struct FNodeGather
 	{
+		double SurfaceAltitudeMeters = 0.0;
 		double DepthMeters = 0.0;
 		double BedAltitudeMeters = 0.0;
 		double SpeedMetersPerSecond = 0.0;
@@ -503,13 +504,12 @@ namespace
 		InOutGather.BedAltitudeMeters += Field.BedAltitudeMeters[Cell];
 		++InOutGather.CellsCounted;
 
-		// Dry cells count towards the mean depth as nothing, which is what thins
-		// the sheet to the ground at its own edge rather than ending it on a wall.
 		if (Field.DepthMeters[Cell] < Params.MinWetDepthMeters)
 		{
 			return;
 		}
 
+		InOutGather.SurfaceAltitudeMeters += Field.SurfaceAltitudeMeters(Cell);
 		InOutGather.DepthMeters += Field.DepthMeters[Cell];
 		InOutGather.SpeedMetersPerSecond += FVector2d(Field.VelocityMetersPerSecond[Cell]).Length();
 		++InOutGather.WetCellsCounted;
@@ -525,6 +525,26 @@ namespace
 		GatherCellIntoNode(Field, Params, NodeX - 1, NodeY, Gather);
 		GatherCellIntoNode(Field, Params, NodeX, NodeY, Gather);
 		return Gather;
+	}
+
+	/**
+	 * A node sits at the mean surface of the water round it, and on the ground
+	 * where there is none.
+	 *
+	 * The surface and not the bed plus the depth averaged apart. Water stands
+	 * level, and a node that takes its bed from four cells and its depth from the
+	 * two of them that are wet rides whatever the ground under it is doing — which
+	 * over a bank is a step per cell for as far as the sheet reaches. Averaging the
+	 * surface the cells are actually at leaves a level sheet, and it still meets
+	 * the ground at the waterline because the water there is nothing deep.
+	 */
+	double NodeAltitudeMeters(const FNodeGather& Gather)
+	{
+		if (Gather.WetCellsCounted > 0)
+		{
+			return Gather.SurfaceAltitudeMeters / Gather.WetCellsCounted;
+		}
+		return Gather.BedAltitudeMeters / FMath::Max(Gather.CellsCounted, 1);
 	}
 
 	/** Whether any of the four cells meeting at a quad's corner has water in it. */
@@ -551,14 +571,12 @@ namespace
 				const FNodeGather Gather = GatherNode(Field, Params, NodeX, NodeY);
 				const int32 NodeIndex = NodeY * NodesX + NodeX;
 				const FVector2d PositionMeters = Field.NodePositionMeters(NodeX, NodeY);
-				const double CellsCounted = FMath::Max(Gather.CellsCounted, 1);
 				const double WetCellsCounted = FMath::Max(Gather.WetCellsCounted, 1);
 
 				OutMesh.PositionsMeters[NodeIndex] = FVector3f(
 					static_cast<float>(PositionMeters.X),
 					static_cast<float>(PositionMeters.Y),
-					static_cast<float>(
-						Gather.BedAltitudeMeters / CellsCounted + Gather.DepthMeters / CellsCounted));
+					static_cast<float>(NodeAltitudeMeters(Gather)));
 				OutMesh.DepthAndSpeed[NodeIndex] = FVector2f(
 					static_cast<float>(
 						FMath::Clamp(Gather.DepthMeters / WetCellsCounted / DepthReferenceMeters, 0.0, 1.0)),
