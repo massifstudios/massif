@@ -35,17 +35,26 @@ commit.
   seed → different hash, height/slope queries sane; manual — fly over a
   plausible massif, seed change gives a different mountain.
 
-### M2 — Deterministic Sim Core — **still open**
-Skipped at the time and never returned to: `MassifSim` is an empty module, one
-`IMPLEMENT_MODULE` line and a smoke test. Everything from W1 on is blocked on it,
-as are M7–M11. Easy to miss given how far the worldgen side has run ahead.
+### M2 — Deterministic Sim Core — done
+Skipped at the time and returned to only once the weather work needed it, so it
+landed long after the worldgen side had run ahead of it.
 
 - `MassifSim`: `UMassifSimSubsystem`, `FMassifSimState`, fixed 10 Hz tick
-  with accumulator, game-speed control (pause/1x/4x), `FSimCommand` queue
-  with one dummy command.
-- **Verify:** tests — same seed → identical state hash after N ticks;
-  command applied on tick boundary, not mid-frame; speed change alters
-  tick count, not tick delta.
+  with accumulator, game-speed control (pause/1x/4x), `FMassifSimCommand` queue
+  with one placeholder command.
+- **Verified:** same seed reaches the same state hash after N ticks and a
+  different seed does not; a command changes nothing until the step that follows
+  it, and is not applied twice by the steps after that; a quarter second at 4×
+  is the same ten steps as a second at 1×, and both reach the same state; the
+  same forty steps cut across three frame rates hold the same world.
+
+Two things the milestone did not originally say, both settled here. The clock
+caps catch-up at `MassifMaxSimTicksPerFrame`, dropping real time it cannot
+simulate rather than shortening a step — a spiral is a frame-rate problem and
+must not be paid for with determinism. And the determinism contract is in
+**ticks, not seconds**: frame time reaches the sim only as a running total, and
+a total of many inexact frame lengths lands a hair either side of a boundary, so
+"N seconds is N×10 steps" is not a property the sim has or needs.
 
 ### M3 — Erosion (GPU) — done, partly superseded
 - Hydraulic erosion (virtual pipes model) + thermal erosion as compute
