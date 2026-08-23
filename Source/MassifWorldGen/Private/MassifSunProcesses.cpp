@@ -21,6 +21,12 @@ namespace MassifEnvironmentChannels
 		static const FName Name(TEXT("Sun.DiffuseInsolation"));
 		return Name;
 	}
+
+	const FName& AnnualInsolation()
+	{
+		static const FName Name(TEXT("Sun.AnnualInsolation"));
+		return Name;
+	}
 }
 
 namespace MassifEnvironmentProcesses
@@ -34,6 +40,9 @@ namespace MassifEnvironmentProcesses
 
 namespace
 {
+	/** Half-monthly slices of a representative year (ARCHITECTURE §5.6.4). */
+	constexpr int32 SeasonalSliceCount = 24;
+
 	/** Where the sun stands, in the frame the terrain is in: X east, Y north, Z up. */
 	struct FSunPosition
 	{
@@ -46,7 +55,13 @@ namespace
 	/** Tilt of the earth's axis against its orbit, which is what gives the year a summer. */
 	constexpr double AxialTiltDegrees = 23.44;
 
-	double SolarDeclinationRadians(int32 DayOfYear)
+	/** Middle of a half-month, which is the day that half-month's sun path is taken on. */
+	double SliceMidDayOfYear(int32 TimeSlice)
+	{
+		return (TimeSlice + 0.5) * 365.0 / SeasonalSliceCount;
+	}
+
+	double SolarDeclinationRadians(double DayOfYear)
 	{
 		const double OrbitFraction = UE_DOUBLE_TWO_PI * (284.0 + DayOfYear) / 365.0;
 		return FMath::DegreesToRadians(AxialTiltDegrees) * FMath::Sin(OrbitFraction);
@@ -93,23 +108,153 @@ namespace
 		return FMath::Acos(CosHourAngle);
 	}
 
-	TArray<FSunPosition> SampleSunPath(double LatitudeDegrees, const FMassifSunParams& Params)
+	/**
+	 * One half-month's sun path, and what level open ground takes over it.
+	 *
+	 * The step weight is what makes two days comparable: a December day is both
+	 * lower and shorter than a June one, and an unweighted sum over a fixed step
+	 * count would throw the shortness away and leave only the lowness.
+	 */
+	struct FSunDay
 	{
-		const double LatitudeRadians = FMath::DegreesToRadians(LatitudeDegrees);
-		const double DeclinationRadians = SolarDeclinationRadians(Params.RepresentativeDayOfYear);
-		const double SunsetRadians = SunsetHourAngleRadians(LatitudeRadians, DeclinationRadians);
-
-		const int32 StepCount = FMath::Max(2, Params.SunPathStepCount);
 		TArray<FSunPosition> Path;
-		Path.Reserve(StepCount);
+
+		/** Hour angle one step covers, scaled so that a day's total comes out as a channel value. */
+		double StepWeightRadians = 0.0;
+
+		/** What level open ground at this latitude takes on this day, in the channel's own units. */
+		double LevelEnergy = 0.0;
+	};
+
+	/** Slices of the year a span covers, both ends included. */
+	struct FSliceRange
+	{
+		int32 FirstSlice = 0;
+		int32 LastSlice = SeasonalSliceCount - 1;
+
+		int32 Count() const
+		{
+			return LastSlice - FirstSlice + 1;
+		}
+	};
+
+	FSliceRange GrowingSeasonSlices(const FMassifSunParams& Params)
+	{
+		FSliceRange Range;
+		Range.FirstSlice = FMath::Clamp(Params.GrowingSeasonFirstSlice, 0, SeasonalSliceCount - 1);
+		Range.LastSlice = FMath::Clamp(Params.GrowingSeasonLastSlice, Range.FirstSlice, SeasonalSliceCount - 1);
+		return Range;
+	}
+
+	bool IsSunAboveHorizon(const FSunPosition& Sun, TArrayView<const double> HorizonRadians)
+	{
+		if (HorizonRadians.IsEmpty())
+		{
+			return true;
+		}
+
+		// Azimuth back out of the direction, to pick the sweep it falls in.
+		const double AzimuthRadians = FMath::Atan2(Sun.Direction.X, Sun.Direction.Y);
+		const double Wrapped = FMath::Fmod(AzimuthRadians + UE_DOUBLE_TWO_PI, UE_DOUBLE_TWO_PI);
+		const int32 Index = FMath::Clamp(
+			FMath::RoundToInt32(Wrapped / UE_DOUBLE_TWO_PI * HorizonRadians.Num()), 0, HorizonRadians.Num() - 1)
+			% HorizonRadians.Num();
+		return Sun.AltitudeRadians > HorizonRadians[Index];
+	}
+
+	/** What one step of the day puts on a surface, before the day's step weight scales it. */
+	double StepEnergy(const FSunPosition& Sun, FVector3d Normal, TArrayView<const double> HorizonRadians)
+	{
+		if (Sun.AltitudeRadians <= 0.0)
+		{
+			return 0.0;
+		}
+		if (!IsSunAboveHorizon(Sun, HorizonRadians))
+		{
+			return 0.0;
+		}
+		return FMath::Max(0.0, FVector3d::DotProduct(Normal, Sun.Direction));
+	}
+
+	/** What a surface takes over one whole day, integrated at the day's own step spacing. */
+	double ReceivedDayEnergy(const FSunDay& Day, FVector3d Normal, TArrayView<const double> HorizonRadians)
+	{
+		double Energy = 0.0;
+		for (const FSunPosition& Sun : Day.Path)
+		{
+			Energy += StepEnergy(Sun, Normal, HorizonRadians);
+		}
+		return Day.StepWeightRadians * Energy;
+	}
+
+	/** The same for level open ground under an open sky, which is what a slice is measured against. */
+	double LevelDayEnergy(const FSunDay& Day)
+	{
+		return ReceivedDayEnergy(Day, FVector3d::ZAxisVector, TArrayView<const double>());
+	}
+
+	FSunDay SampleSunDay(double LatitudeRadians, double DayOfYear, const FMassifSunParams& Params)
+	{
+		const double DeclinationRadians = SolarDeclinationRadians(DayOfYear);
+		const double SunsetRadians = SunsetHourAngleRadians(LatitudeRadians, DeclinationRadians);
+		const int32 StepCount = FMath::Max(2, Params.SunPathStepCount);
+
+		FSunDay Day;
+		Day.StepWeightRadians = 2.0 * SunsetRadians / StepCount;
+		Day.Path.Reserve(StepCount);
 		for (int32 Step = 0; Step < StepCount; ++Step)
 		{
 			// Midpoints of equal slices of the day, so neither end is counted twice.
 			const double Fraction = (Step + 0.5) / StepCount;
 			const double HourAngleRadians = FMath::Lerp(-SunsetRadians, SunsetRadians, Fraction);
-			Path.Add(SunAt(LatitudeRadians, DeclinationRadians, HourAngleRadians));
+			Day.Path.Add(SunAt(LatitudeRadians, DeclinationRadians, HourAngleRadians));
 		}
-		return Path;
+
+		Day.LevelEnergy = LevelDayEnergy(Day);
+		return Day;
+	}
+
+	/**
+	 * Divides the year through by what level open ground takes on an average
+	 * growing-season day.
+	 *
+	 * One denominator for every slice, rather than each slice against its own day:
+	 * a ratio taken against the same day it was measured on is one on level ground
+	 * in December as much as in June, and the seasons cancel straight back out of
+	 * the channel. Against a fixed reference, level ground reads a quarter in
+	 * midwinter and the growing-season mean still reads exactly one, which is the
+	 * level everything downstream measures a slope's advantage against.
+	 */
+	void NormaliseAgainstGrowingSeason(TArray<FSunDay>& Year, FSliceRange GrowingSeason)
+	{
+		double ReferenceEnergy = 0.0;
+		for (int32 TimeSlice = GrowingSeason.FirstSlice; TimeSlice <= GrowingSeason.LastSlice; ++TimeSlice)
+		{
+			ReferenceEnergy += Year[TimeSlice].LevelEnergy;
+		}
+
+		const double MeanEnergy =
+			FMath::Max(ReferenceEnergy / GrowingSeason.Count(), UE_DOUBLE_KINDA_SMALL_NUMBER);
+		for (FSunDay& Day : Year)
+		{
+			Day.StepWeightRadians /= MeanEnergy;
+			Day.LevelEnergy /= MeanEnergy;
+		}
+	}
+
+	TArray<FSunDay> SampleSeasonalYear(double LatitudeDegrees, const FMassifSunParams& Params)
+	{
+		const double LatitudeRadians = FMath::DegreesToRadians(LatitudeDegrees);
+
+		TArray<FSunDay> Year;
+		Year.Reserve(SeasonalSliceCount);
+		for (int32 TimeSlice = 0; TimeSlice < SeasonalSliceCount; ++TimeSlice)
+		{
+			Year.Add(SampleSunDay(LatitudeRadians, SliceMidDayOfYear(TimeSlice), Params));
+		}
+
+		NormaliseAgainstGrowingSeason(Year, GrowingSeasonSlices(Params));
+		return Year;
 	}
 
 	/** The terrain the sweep marches over, sampled from the altitude channel at this grid's spacing. */
@@ -202,41 +347,93 @@ namespace
 		return Sum / FMath::Max(1, HorizonRadians.Num());
 	}
 
-	bool IsSunAboveHorizon(const FSunPosition& Sun, TArrayView<const double> HorizonRadians)
+	/**
+	 * Everything the solve fills before any of it is committed.
+	 *
+	 * Held whole rather than written straight into channel slices because the
+	 * horizon a cell stands under feeds all twenty-four of that cell's slices, and
+	 * the sweep that found it is the expensive part of the bake.
+	 */
+	struct FInsolationField
 	{
-		if (HorizonRadians.IsEmpty())
+		explicit FInsolationField(const FMassifChannelGrid& InGrid)
+			: Grid(InGrid)
 		{
-			return true;
+			SkyView.SetNumZeroed(Grid.CellCount());
+			SurfaceSkyFraction.SetNumZeroed(Grid.CellCount());
+			DirectBySlice.SetNumZeroed(Grid.CellCount() * SeasonalSliceCount);
 		}
 
-		// Azimuth back out of the direction, to pick the sweep it falls in.
-		const double AzimuthRadians = FMath::Atan2(Sun.Direction.X, Sun.Direction.Y);
-		const double Wrapped = FMath::Fmod(AzimuthRadians + UE_DOUBLE_TWO_PI, UE_DOUBLE_TWO_PI);
-		const int32 Index = FMath::Clamp(
-			FMath::RoundToInt32(Wrapped / UE_DOUBLE_TWO_PI * HorizonRadians.Num()), 0, HorizonRadians.Num() - 1)
-			% HorizonRadians.Num();
-		return Sun.AltitudeRadians > HorizonRadians[Index];
+		TArrayView<double> SliceOfDirect(int32 TimeSlice)
+		{
+			return TArrayView<double>(DirectBySlice.GetData() + TimeSlice * Grid.CellCount(), Grid.CellCount());
+		}
+
+		TArrayView<const double> SliceOfDirect(int32 TimeSlice) const
+		{
+			return TArrayView<const double>(
+				DirectBySlice.GetData() + TimeSlice * Grid.CellCount(), Grid.CellCount());
+		}
+
+		FMassifChannelGrid Grid;
+
+		TArray<double> SkyView;
+
+		/** Sky view narrowed by the surface's own tilt: the skylight before the season scales it. */
+		TArray<double> SurfaceSkyFraction;
+
+		/** Slice-major, so one slice is a contiguous run to commit. */
+		TArray<double> DirectBySlice;
+	};
+
+	/** Copies one solved surface into one slice of a channel, scaled by what that season is worth. */
+	void WriteSlice(
+		FMassifEnvironmentContext& Context, const FName& ChannelName, int32 TimeSlice,
+		TArrayView<const double> Values, double Scale)
+	{
+		const TUniquePtr<FMassifChannelWriteScope> Scope = Context.OpenOutput(ChannelName, TimeSlice);
+		TArrayView<double> Target = Scope->GetComponent(0);
+		for (int32 CellIndex = 0; CellIndex < Target.Num(); ++CellIndex)
+		{
+			Target[CellIndex] = Values[CellIndex] * Scale;
+		}
+		Scope->Commit();
 	}
 
-	/**
-	 * One step of the day, added to what this ground takes and to what level open
-	 * ground at the same latitude takes over the same step. The ratio of the two is
-	 * what the channel holds, so no radiative constant has to be believed.
-	 */
-	void AccumulateStep(
-		const FSunPosition& Sun, FVector3d Normal, TArrayView<const double> HorizonRadians,
-		double& ReceivedEnergy, double& LevelEnergy)
+	/** Every slice of one channel as open sky over level ground, which is what Off means. */
+	void WriteOpenSky(FMassifEnvironmentContext& Context, const FName& ChannelName)
 	{
-		if (Sun.AltitudeRadians <= 0.0)
-		{
-			return;
-		}
+		const FMassifEnvironmentState& State = Context.GetState();
+		const FMassifChannelHandle Channel = Context.GetOutput(ChannelName);
 
-		LevelEnergy += FMath::Sin(Sun.AltitudeRadians);
-		if (IsSunAboveHorizon(Sun, HorizonRadians))
+		TArray<double> Open;
+		Open.Init(1.0, State.GetGrid(Channel).CellCount());
+		for (int32 TimeSlice = 0; TimeSlice < State.GetDescriptor(Channel).TimeSliceCount; ++TimeSlice)
 		{
-			ReceivedEnergy += FMath::Max(0.0, FVector3d::DotProduct(Normal, Sun.Direction));
+			WriteSlice(Context, ChannelName, TimeSlice, Open, 1.0);
 		}
+	}
+
+	void AddSliceShare(TArrayView<double> Mean, TArrayView<const double> Slice, double Share)
+	{
+		for (int32 CellIndex = 0; CellIndex < Mean.Num(); ++CellIndex)
+		{
+			Mean[CellIndex] += Slice[CellIndex] * Share;
+		}
+	}
+
+	/** Mean of the growing-season slices, which is what the annual channel holds. */
+	TArray<double> GrowingSeasonMean(const FInsolationField& Field, FSliceRange GrowingSeason)
+	{
+		TArray<double> Mean;
+		Mean.SetNumZeroed(Field.Grid.CellCount());
+
+		const double Share = 1.0 / GrowingSeason.Count();
+		for (int32 TimeSlice = GrowingSeason.FirstSlice; TimeSlice <= GrowingSeason.LastSlice; ++TimeSlice)
+		{
+			AddSliceShare(Mean, Field.SliceOfDirect(TimeSlice), Share);
+		}
+		return Mean;
 	}
 
 	/** Reference sweeps and integrates twice as finely; the model itself is the same. */
@@ -257,11 +454,15 @@ namespace
 
 /**
  * Sunlight over the world: how much of the sky a point can see, and how much of
- * a day's sun actually reaches it.
+ * each half-month's sun actually reaches it.
  *
- * Both are answered against a flat, unshaded surface at the same latitude, so a
- * value of 1 means "as much as level open ground here" and the numbers stay
- * meaningful without a radiative constant in them.
+ * Everything is answered against a flat, unshaded surface at the same latitude
+ * on an average growing-season day, so a value of 1 means "as much as level open
+ * ground here in the middle of its season" and the numbers stay meaningful
+ * without a radiative constant in them. The year is carried because at 47 degrees
+ * north the January sun stands thirty degrees lower than the July one and a north
+ * face takes almost none of it — the difference that decides which slopes are
+ * still white in May.
  */
 class FInsolationProcess final : public IMassifEnvironmentProcess
 {
@@ -275,26 +476,35 @@ public:
 	void Execute(FMassifEnvironmentContext& Context, EMassifFidelity Fidelity) const override;
 
 private:
-	FMassifChannelDescriptor MakeFractionChannel(const FName& Name, EMassifChannelColorMap ColorMap) const;
+	FMassifChannelDescriptor MakeFractionChannel(
+		const FName& Name, EMassifChannelColorMap ColorMap, int32 TimeSliceCount) const;
 
 	void WriteUnlit(FMassifEnvironmentContext& Context) const;
 
+	void SolveCell(
+		const FTerrainWindow& Terrain, const TArray<FSunDay>& Year, const FMassifSunParams& RunParams,
+		int32 Column, int32 Row, EMassifFidelity Fidelity, TArray<double>& HorizonScratch,
+		FInsolationField& Field) const;
+
 	void SolveRow(
-		const FTerrainWindow& Terrain, const TArray<FSunPosition>& SunPath, const FMassifSunParams& RunParams,
-		const FMassifChannelGrid& Grid, int32 Row, EMassifFidelity Fidelity, TArrayView<double> OutSkyView,
-		TArrayView<double> OutDirect, TArrayView<double> OutDiffuse) const;
+		const FTerrainWindow& Terrain, const TArray<FSunDay>& Year, const FMassifSunParams& RunParams, int32 Row,
+		EMassifFidelity Fidelity, FInsolationField& Field) const;
+
+	void CommitField(
+		FMassifEnvironmentContext& Context, const TArray<FSunDay>& Year, const FInsolationField& Field) const;
 
 	FMassifSunParams Params;
 };
 
 FMassifChannelDescriptor FInsolationProcess::MakeFractionChannel(
-	const FName& Name, EMassifChannelColorMap ColorMap) const
+	const FName& Name, EMassifChannelColorMap ColorMap, int32 TimeSliceCount) const
 {
 	FMassifChannelDescriptor Descriptor;
 	Descriptor.Name = Name;
 	Descriptor.Type = EMassifChannelType::Scalar;
 	Descriptor.Encoding = EMassifChannelEncoding::Uint16;
 	Descriptor.CellSizeMeters = Params.CellSizeMeters;
+	Descriptor.TimeSliceCount = TimeSliceCount;
 	Descriptor.Unit = TEXT("0-1");
 	Descriptor.ColorMap = ColorMap;
 	Descriptor.DisplayRange = FVector2d(0.0, 1.0);
@@ -308,66 +518,92 @@ FMassifProcessDeclaration FInsolationProcess::Declare() const
 	Declaration.InputChannels = {MassifEnvironmentChannels::Altitude()};
 	Declaration.SupportedFidelities = {
 		EMassifFidelity::Cheap, EMassifFidelity::Standard, EMassifFidelity::Reference};
+
+	// The sky view is a property of the terrain and carries no date, which is also
+	// what keeps its horizon sweep outside the per-slice loop in Execute.
 	Declaration.OutputChannels.Add(
-		MakeFractionChannel(MassifEnvironmentChannels::SkyViewFactor(), EMassifChannelColorMap::Viridis));
+		MakeFractionChannel(MassifEnvironmentChannels::SkyViewFactor(), EMassifChannelColorMap::Viridis, 1));
+	Declaration.OutputChannels.Add(MakeFractionChannel(
+		MassifEnvironmentChannels::DirectInsolation(), EMassifChannelColorMap::Magma, SeasonalSliceCount));
+	Declaration.OutputChannels.Add(MakeFractionChannel(
+		MassifEnvironmentChannels::DiffuseInsolation(), EMassifChannelColorMap::Magma, SeasonalSliceCount));
 	Declaration.OutputChannels.Add(
-		MakeFractionChannel(MassifEnvironmentChannels::DirectInsolation(), EMassifChannelColorMap::Magma));
-	Declaration.OutputChannels.Add(
-		MakeFractionChannel(MassifEnvironmentChannels::DiffuseInsolation(), EMassifChannelColorMap::Magma));
+		MakeFractionChannel(MassifEnvironmentChannels::AnnualInsolation(), EMassifChannelColorMap::Magma, 1));
 	return Declaration;
 }
 
 void FInsolationProcess::WriteUnlit(FMassifEnvironmentContext& Context) const
 {
-	// Off is an open sky over level ground everywhere: the channels still exist, so
-	// nothing downstream has to ask whether the sun was solved.
+	// Off is an open sky over level ground everywhere, in every slice: the channels
+	// still exist, so nothing downstream has to ask whether the sun was solved.
 	const FName Names[] = {
 		MassifEnvironmentChannels::SkyViewFactor(), MassifEnvironmentChannels::DirectInsolation(),
-		MassifEnvironmentChannels::DiffuseInsolation()};
+		MassifEnvironmentChannels::DiffuseInsolation(), MassifEnvironmentChannels::AnnualInsolation()};
+
 	for (const FName& Name : Names)
 	{
-		const TUniquePtr<FMassifChannelWriteScope> Scope = Context.OpenOutput(Name);
-		TArrayView<double> Values = Scope->GetComponent(0);
-		for (int32 CellIndex = 0; CellIndex < Values.Num(); ++CellIndex)
-		{
-			Values[CellIndex] = 1.0;
-		}
-		Scope->Commit();
+		WriteOpenSky(Context, Name);
+	}
+}
+
+void FInsolationProcess::SolveCell(
+	const FTerrainWindow& Terrain, const TArray<FSunDay>& Year, const FMassifSunParams& RunParams, int32 Column,
+	int32 Row, EMassifFidelity Fidelity, TArray<double>& HorizonScratch, FInsolationField& Field) const
+{
+	const FVector2d Position = Field.Grid.CellCentreMeters(Column, Row);
+	const FVector3d Normal = Terrain.NormalAt(Position, Field.Grid.CellSizeMeters);
+
+	// Swept once, then integrated against every slice: the skyline depends on the
+	// terrain alone, and re-sweeping it per half-month would cost the bake
+	// twenty-four sweeps for one answer.
+	HorizonScratch.Reset();
+	if (Fidelity != EMassifFidelity::Cheap)
+	{
+		SweepHorizon(Terrain, Position, Terrain.AltitudeAt(Position), RunParams, HorizonScratch);
+	}
+
+	const int32 CellIndex = Row * Field.Grid.Width + Column;
+	Field.SkyView[CellIndex] = SkyViewFactorFrom(HorizonScratch);
+
+	// Isotropic sky: a tilted surface sees less of it, and a hemmed-in one less again.
+	Field.SurfaceSkyFraction[CellIndex] = Field.SkyView[CellIndex] * 0.5 * (1.0 + Normal.Z);
+
+	for (int32 TimeSlice = 0; TimeSlice < Year.Num(); ++TimeSlice)
+	{
+		Field.SliceOfDirect(TimeSlice)[CellIndex] = ReceivedDayEnergy(Year[TimeSlice], Normal, HorizonScratch);
 	}
 }
 
 void FInsolationProcess::SolveRow(
-	const FTerrainWindow& Terrain, const TArray<FSunPosition>& SunPath, const FMassifSunParams& RunParams,
-	const FMassifChannelGrid& Grid, int32 Row, EMassifFidelity Fidelity, TArrayView<double> OutSkyView,
-	TArrayView<double> OutDirect, TArrayView<double> OutDiffuse) const
+	const FTerrainWindow& Terrain, const TArray<FSunDay>& Year, const FMassifSunParams& RunParams, int32 Row,
+	EMassifFidelity Fidelity, FInsolationField& Field) const
 {
-	const bool bShadowed = Fidelity != EMassifFidelity::Cheap;
-
-	TArray<double> HorizonRadians;
-	for (int32 Column = 0; Column < Grid.Width; ++Column)
+	TArray<double> HorizonScratch;
+	for (int32 Column = 0; Column < Field.Grid.Width; ++Column)
 	{
-		const FVector2d Position = Grid.CellCentreMeters(Column, Row);
-		const FVector3d Normal = Terrain.NormalAt(Position, Grid.CellSizeMeters);
+		SolveCell(Terrain, Year, RunParams, Column, Row, Fidelity, HorizonScratch, Field);
+	}
+}
 
-		HorizonRadians.Reset();
-		if (bShadowed)
-		{
-			SweepHorizon(Terrain, Position, Terrain.AltitudeAt(Position), RunParams, HorizonRadians);
-		}
+void FInsolationProcess::CommitField(
+	FMassifEnvironmentContext& Context, const TArray<FSunDay>& Year, const FInsolationField& Field) const
+{
+	const TArray<double> AnnualMean = GrowingSeasonMean(Field, GrowingSeasonSlices(Params));
+	WriteSlice(Context, MassifEnvironmentChannels::SkyViewFactor(), 0, Field.SkyView, 1.0);
+	WriteSlice(Context, MassifEnvironmentChannels::AnnualInsolation(), 0, AnnualMean, 1.0);
 
-		double ReceivedEnergy = 0.0;
-		double LevelEnergy = 0.0;
-		for (const FSunPosition& Sun : SunPath)
-		{
-			AccumulateStep(Sun, Normal, HorizonRadians, ReceivedEnergy, LevelEnergy);
-		}
+	for (int32 TimeSlice = 0; TimeSlice < Year.Num(); ++TimeSlice)
+	{
+		WriteSlice(
+			Context, MassifEnvironmentChannels::DirectInsolation(), TimeSlice, Field.SliceOfDirect(TimeSlice),
+			1.0);
 
-		const int32 CellIndex = Row * Grid.Width + Column;
-		OutSkyView[CellIndex] = SkyViewFactorFrom(HorizonRadians);
-		OutDirect[CellIndex] = ReceivedEnergy / FMath::Max(LevelEnergy, UE_DOUBLE_KINDA_SMALL_NUMBER);
-
-		// Isotropic sky: a tilted surface sees less of it, and a hemmed-in one less again.
-		OutDiffuse[CellIndex] = OutSkyView[CellIndex] * 0.5 * (1.0 + Normal.Z);
+		// The sky is isotropic, so a surface's share of it does not turn over with the
+		// date; what does is how much skylight there is to take, which is what level
+		// open ground took on that day.
+		WriteSlice(
+			Context, MassifEnvironmentChannels::DiffuseInsolation(), TimeSlice, Field.SurfaceSkyFraction,
+			Year[TimeSlice].LevelEnergy);
 	}
 }
 
@@ -382,27 +618,16 @@ void FInsolationProcess::Execute(FMassifEnvironmentContext& Context, EMassifFide
 	const FMassifSunParams RunParams = RefineForFidelity(Params, Fidelity);
 	const FTerrainWindow Terrain(
 		Context.GetState(), Context.GetInput(MassifEnvironmentChannels::Altitude()));
-	const TArray<FSunPosition> SunPath =
-		SampleSunPath(Context.GetGeoreference().LatitudeDegrees, RunParams);
+	const TArray<FSunDay> Year = SampleSeasonalYear(Context.GetGeoreference().LatitudeDegrees, RunParams);
 
-	const TUniquePtr<FMassifChannelWriteScope> SkyView =
-		Context.OpenOutput(MassifEnvironmentChannels::SkyViewFactor());
-	const TUniquePtr<FMassifChannelWriteScope> Direct =
-		Context.OpenOutput(MassifEnvironmentChannels::DirectInsolation());
-	const TUniquePtr<FMassifChannelWriteScope> Diffuse =
-		Context.OpenOutput(MassifEnvironmentChannels::DiffuseInsolation());
-
-	const FMassifChannelGrid& Grid = SkyView->GetGrid();
-	for (int32 Row = 0; Row < Grid.Height; ++Row)
+	FInsolationField Field(
+		Context.GetState().GetGrid(Context.GetOutput(MassifEnvironmentChannels::DirectInsolation())));
+	for (int32 Row = 0; Row < Field.Grid.Height; ++Row)
 	{
-		SolveRow(
-			Terrain, SunPath, RunParams, Grid, Row, Fidelity, SkyView->GetComponent(0),
-			Direct->GetComponent(0), Diffuse->GetComponent(0));
+		SolveRow(Terrain, Year, RunParams, Row, Fidelity, Field);
 	}
 
-	SkyView->Commit();
-	Direct->Commit();
-	Diffuse->Commit();
+	CommitField(Context, Year, Field);
 }
 
 void MassifRegisterSunProcesses(FMassifEnvironmentScheduler& Scheduler, const FMassifSunParams& Params)

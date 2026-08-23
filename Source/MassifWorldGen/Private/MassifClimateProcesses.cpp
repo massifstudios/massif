@@ -46,7 +46,7 @@ namespace
 			: State(Context.GetState())
 			, Altitude(Context.GetInput(MassifEnvironmentChannels::Altitude()))
 			, FilledAltitude(Context.GetInput(MassifEnvironmentChannels::FilledAltitude()))
-			, DirectInsolation(Context.GetInput(MassifEnvironmentChannels::DirectInsolation()))
+			, AnnualInsolation(Context.GetInput(MassifEnvironmentChannels::AnnualInsolation()))
 		{
 		}
 
@@ -55,9 +55,9 @@ namespace
 			return State.SampleScalar(Altitude, PositionMeters);
 		}
 
-		double DirectInsolationAt(FVector2d PositionMeters) const
+		double AnnualInsolationAt(FVector2d PositionMeters) const
 		{
-			return State.SampleScalar(DirectInsolation, PositionMeters);
+			return State.SampleScalar(AnnualInsolation, PositionMeters);
 		}
 
 		/** How deep a hollow the depression fill had to flood before water could leave here. */
@@ -70,17 +70,20 @@ namespace
 		const FMassifEnvironmentState& State;
 		FMassifChannelHandle Altitude;
 		FMassifChannelHandle FilledAltitude;
-		FMassifChannelHandle DirectInsolation;
+		FMassifChannelHandle AnnualInsolation;
 	};
 
 	/**
 	 * What the sun adds or takes away against level open ground at the same
 	 * altitude. The insolation channel is already a ratio against that ground, so
 	 * one is no anomaly at all and zero is the full depression.
+	 *
+	 * The growing-season mean rather than a half-month, because the temperature
+	 * this feeds is itself a growing-season mean.
 	 */
-	double SolarAnomalyCelsius(const FMassifClimateParams& Params, double DirectInsolation)
+	double SolarAnomalyCelsius(const FMassifClimateParams& Params, double AnnualInsolation)
 	{
-		return Params.InsolationGainCelsius * (DirectInsolation - 1.0);
+		return Params.InsolationGainCelsius * (AnnualInsolation - 1.0);
 	}
 
 	/**
@@ -173,7 +176,7 @@ FMassifProcessDeclaration FTemperatureProcess::Declare() const
 	Declaration.Name = MassifEnvironmentProcesses::Temperature();
 	Declaration.InputChannels = {
 		MassifEnvironmentChannels::Altitude(), MassifEnvironmentChannels::FilledAltitude(),
-		MassifEnvironmentChannels::DirectInsolation()};
+		MassifEnvironmentChannels::AnnualInsolation()};
 	Declaration.SupportedFidelities = {
 		EMassifFidelity::Cheap, EMassifFidelity::Standard, EMassifFidelity::Reference};
 
@@ -200,7 +203,7 @@ double FTemperatureProcess::TemperatureAt(
 	}
 
 	const double SunlitCelsius =
-		Celsius + SolarAnomalyCelsius(Params, Inputs.DirectInsolationAt(PositionMeters));
+		Celsius + SolarAnomalyCelsius(Params, Inputs.AnnualInsolationAt(PositionMeters));
 	if (Fidelity != EMassifFidelity::Reference)
 	{
 		return SunlitCelsius;

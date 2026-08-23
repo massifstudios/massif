@@ -105,12 +105,25 @@ bool FEnvironmentViewHistogramTest::RunTest(const FString& Parameters)
 		TestEqual(FString::Printf(TEXT("%s: the buckets are the coarse strip the panel draws"), *ChannelName),
 			Statistics.BucketCounts.Num(), MassifHistogramBucketCount);
 
+		// The channel's range spans every slice it holds; the measurement is of the
+		// one slice being drawn. For a channel holding a year those differ - a
+		// January insolation does not reach the summer maximum - so the measured
+		// range has to sit inside the channel's rather than equal it, and equal it
+		// exactly where there is only the one slice to measure.
 		const double Minimum = State.GetChannelMinimum(Channel);
 		const double Maximum = State.GetChannelMaximum(Channel);
-		TestEqual(FString::Printf(TEXT("%s: the low end is the channel's"), *ChannelName),
-			Statistics.Minimum, Minimum, RangeTolerance(Minimum));
-		TestEqual(FString::Printf(TEXT("%s: the high end is the channel's"), *ChannelName),
-			Statistics.Maximum, Maximum, RangeTolerance(Maximum));
+		TestTrue(FString::Printf(TEXT("%s: the measured range sits inside the channel's (%.4f-%.4f in %.4f-%.4f)"),
+			*ChannelName, Statistics.Minimum, Statistics.Maximum, Minimum, Maximum),
+			Statistics.Minimum >= Minimum - RangeTolerance(Minimum)
+				&& Statistics.Maximum <= Maximum + RangeTolerance(Maximum));
+
+		if (State.GetDescriptor(Channel).TimeSliceCount == 1)
+		{
+			TestEqual(FString::Printf(TEXT("%s: the low end is the channel's"), *ChannelName),
+				Statistics.Minimum, Minimum, RangeTolerance(Minimum));
+			TestEqual(FString::Printf(TEXT("%s: the high end is the channel's"), *ChannelName),
+				Statistics.Maximum, Maximum, RangeTolerance(Maximum));
+		}
 		TestTrue(FString::Printf(TEXT("%s: the mean lies inside the range"), *ChannelName),
 			Statistics.Mean >= Minimum - RangeTolerance(Minimum)
 				&& Statistics.Mean <= Maximum + RangeTolerance(Maximum));

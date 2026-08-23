@@ -32,13 +32,21 @@ struct FMassifSunParams
 	 */
 	double HorizonReachMeters = 4000.0;
 
-	/**
-	 * Day of the year the representative sun path is taken on. Day 196 is mid
-	 * July: the middle of the growing season, which is what decides where a tree
-	 * can stand rather than what the ski season looks like.
-	 */
-	int32 RepresentativeDayOfYear = 196;
-
 	/** Steps the sun path is integrated at, between sunrise and sunset. */
 	int32 SunPathStepCount = 24;
+
+	/**
+	 * First and last half-monthly slice of the growing season, inclusive.
+	 *
+	 * Two things hang off this. It is the span the annual channel averages, which
+	 * is what a treeline reads: what decides whether a tree can stand somewhere is
+	 * the season it has to grow in, not the average of that season and the winter
+	 * it sleeps through. It is also the span every slice is measured against, so
+	 * that one is a growing-season day of level open ground and the winter slices
+	 * come out as the fractions of it they are.
+	 *
+	 * Slice 6 is the first half of April and slice 17 the second half of September.
+	 */
+	int32 GrowingSeasonFirstSlice = 6;
+	int32 GrowingSeasonLastSlice = 17;
 };

@@ -224,9 +224,11 @@ bool FClimateRidgeAspectTest::RunTest(const FString& Parameters)
 			SouthCelsius, NorthCelsius),
 		SouthCelsius > NorthCelsius);
 
+	// The annual channel, because that is the one the temperature reads: a
+	// growing-season mean is not answerable from whichever half-month was asked.
 	const double InsolationGap =
-		SampleClimateChannel(*Ridge, MassifEnvironmentChannels::DirectInsolation(), SouthPosition)
-		- SampleClimateChannel(*Ridge, MassifEnvironmentChannels::DirectInsolation(), NorthPosition);
+		SampleClimateChannel(*Ridge, MassifEnvironmentChannels::AnnualInsolation(), SouthPosition)
+		- SampleClimateChannel(*Ridge, MassifEnvironmentChannels::AnnualInsolation(), NorthPosition);
 	const double ExpectedCelsius = FMassifClimateParams().InsolationGainCelsius * InsolationGap;
 	TestTrue(
 		FString::Printf(TEXT("And by what the insolation between them is worth (%.4f C against %.4f C)"),
