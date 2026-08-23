@@ -31,23 +31,7 @@ One line in the target ends it. It costs some incremental build time and buys
 back the property that a green suite means a build the user can run.
 
 Until then: verify with `-DisableAdaptiveUnity` before committing C++, and note
-that a module which only *relinks* was never recompiled.
-
-### 3. Look at the three views fixed this round
-
-I cannot judge any of it, and all three are the kind of thing that reads as
-correct in a channel view and wrong on the mountain.
-
-- **Hydrology.SeasonalFlow** — stripes should be gone, trunk on the valley floor
-- **Precip.Seasonal** — scrubbing should now visibly change; August against January
-- **Hydrology.SpringDischarge** — streams starting mid-slope, on a minority of ground
-
-If springs read as too common or too sparse, that is
-`SpringYieldDropThreshold` and `SpringYieldDropSpan` in
-`MassifEnvironmentBakeParams.h`, and it is a tuning call, not a bug. I only
-fixed the reach that made the channel structurally impossible.
-
----
+that a module which only _relinks_ was never recompiled.
 
 ## Correctness and staleness
 
@@ -89,11 +73,11 @@ present once before the solve starts.
 
 Measured on the full 20 km world: **24.1 s total**, of which
 
-| process | seconds | shape |
-|---|---|---|
-| `Sun.Insolation` | 10.6 | per-cell, read-only terrain, no accumulation |
-| `Soil.Deposition` | 3.1 | droplet scatter, needs integer atomics on fixed point |
-| everything else | < 0.5 each | |
+| process           | seconds    | shape                                                 |
+| ----------------- | ---------- | ----------------------------------------------------- |
+| `Sun.Insolation`  | 10.6       | per-cell, read-only terrain, no accumulation          |
+| `Soil.Deposition` | 3.1        | droplet scatter, needs integer atomics on fixed point |
+| everything else   | < 0.5 each |                                                       |
 
 Sun first: it is 44% of the bake on its own and is deterministic on the GPU
 without any special handling. Droplets second — the determinism contract
