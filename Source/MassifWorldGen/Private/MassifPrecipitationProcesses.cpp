@@ -2,6 +2,7 @@
 
 #include "MassifClimateProcesses.h"
 #include "MassifEnvironmentGraph.h"
+#include "MassifVegetationProcesses.h"
 #include "MassifWindProcesses.h"
 
 namespace MassifEnvironmentChannels
@@ -12,9 +13,21 @@ namespace MassifEnvironmentChannels
 		return Name;
 	}
 
+	const FName& SeasonalPrecipitation()
+	{
+		static const FName Name(TEXT("Precip.Seasonal"));
+		return Name;
+	}
+
 	const FName& SnowFraction()
 	{
 		static const FName Name(TEXT("Precip.SnowFraction"));
+		return Name;
+	}
+
+	const FName& Evapotranspiration()
+	{
+		static const FName Name(TEXT("Climate.Evapotranspiration"));
 		return Name;
 	}
 }
@@ -30,6 +43,9 @@ namespace MassifEnvironmentProcesses
 
 namespace
 {
+	/** Half-monthly slices of a representative year (ARCHITECTURE §5.6.4). */
+	constexpr int32 SeasonalSliceCount = 24;
+
 	/** The channels the solve reads, resolved once and sampled by world position. */
 	class FPrecipitationInputs
 	{
@@ -39,6 +55,8 @@ namespace
 			, Altitude(Context.GetInput(MassifEnvironmentChannels::Altitude()))
 			, Wind(Context.GetInput(MassifEnvironmentChannels::WindField()))
 			, Temperature(Context.GetInput(MassifEnvironmentChannels::MeanTemperature()))
+			, SeasonalTemperature(Context.GetInput(MassifEnvironmentChannels::SeasonalTemperature()))
+			, VegetationCover(Context.FindOptionalInput(MassifEnvironmentChannels::VegetationCover()))
 		{
 		}
 
@@ -57,6 +75,21 @@ namespace
 			return State.SampleScalar(Temperature, PositionMeters);
 		}
 
+		double SeasonalTemperatureAt(FVector2d PositionMeters, int32 TimeSlice) const
+		{
+			return State.SampleScalar(SeasonalTemperature, PositionMeters, TimeSlice);
+		}
+
+		/** Bare ground where no vegetation is in the graph, and until the loop has grown any. */
+		double VegetationCoverAt(FVector2d PositionMeters) const
+		{
+			if (!VegetationCover.IsValid())
+			{
+				return 0.0;
+			}
+			return State.SampleScalar(VegetationCover, PositionMeters);
+		}
+
 		/** Uphill gradient of the ground, differenced across one cell. */
 		FVector2d UphillGradientAt(FVector2d PositionMeters, double SpacingMeters) const
 		{
@@ -72,6 +105,8 @@ namespace
 		FMassifChannelHandle Altitude;
 		FMassifChannelHandle Wind;
 		FMassifChannelHandle Temperature;
+		FMassifChannelHandle SeasonalTemperature;
+		FMassifChannelHandle VegetationCover;
 	};
 
 	/**
@@ -124,6 +159,102 @@ namespace
 		return FMath::Clamp(0.5 - Above / (2.0 * Band), 0.0, 1.0);
 	}
 
+	/** One cosine over the year, peaking at the wettest slice and never going negative. */
+	double SeasonalWeight(const FMassifPrecipitationParams& Params, int32 TimeSlice)
+	{
+		const double Amplitude = FMath::Clamp(Params.SeasonalAmplitude, 0.0, 1.0);
+		const double PhaseRadians = UE_DOUBLE_TWO_PI * (TimeSlice - Params.WettestSlice) / SeasonalSliceCount;
+		return 1.0 + Amplitude * FMath::Cos(PhaseRadians);
+	}
+
+	/**
+	 * Share of the year's water falling in one half-month.
+	 *
+	 * Normalised over the whole year rather than trusted to sum: the shape decides
+	 * when the water arrives and must never decide how much of it there is, so
+	 * whatever the amplitude, the slices still add up to the annual total the
+	 * climatology and everything reading it agreed on.
+	 */
+	double SeasonalShare(const FMassifPrecipitationParams& Params, int32 TimeSlice)
+	{
+		double YearWeight = 0.0;
+		for (int32 Slice = 0; Slice < SeasonalSliceCount; ++Slice)
+		{
+			YearWeight += SeasonalWeight(Params, Slice);
+		}
+		return SeasonalWeight(Params, TimeSlice) / YearWeight;
+	}
+
+	/** Below Standard the year is flat: the same fall every half-month, still summing to the total. */
+	double SeasonalShareForFidelity(
+		const FMassifPrecipitationParams& Params, int32 TimeSlice, EMassifFidelity Fidelity)
+	{
+		if (Fidelity == EMassifFidelity::Off || Fidelity == EMassifFidelity::Cheap)
+		{
+			return 1.0 / SeasonalSliceCount;
+		}
+		return SeasonalShare(Params, TimeSlice);
+	}
+
+	/**
+	 * What a year would take back off ground with water to spare.
+	 *
+	 * Thornthwaite's form: temperature stands in for the energy available, because
+	 * the humidity, radiation and wind speed a Penman-Monteith form needs are not
+	 * things this graph holds. Frozen ground returns nothing.
+	 */
+	double PotentialEvapotranspirationMillimetres(
+		const FMassifPrecipitationParams& Params, double TemperatureCelsius)
+	{
+		const double ReferenceCelsius =
+			FMath::Max(Params.EvapotranspirationReferenceCelsius, UE_DOUBLE_KINDA_SMALL_NUMBER);
+		const double AboveBase = FMath::Max(0.0, TemperatureCelsius - Params.EvapotranspirationBaseCelsius);
+		return Params.ReferenceEvapotranspirationMillimetres * AboveBase / ReferenceCelsius;
+	}
+
+	/** Rock evaporates what is on it and transpires nothing; a closed canopy does both. */
+	double VegetationEvaporationScale(const FMassifPrecipitationParams& Params, double VegetationCover)
+	{
+		const double BareFraction = FMath::Clamp(Params.BareGroundEvaporationFraction, 0.0, 1.0);
+		return BareFraction + (1.0 - BareFraction) * FMath::Clamp(VegetationCover, 0.0, 1.0);
+	}
+
+	/**
+	 * What the air actually gets, which is the potential limited twice over: by the
+	 * water that fell here, and by whether anything is growing to move it.
+	 */
+	double ActualEvapotranspirationMillimetres(
+		const FMassifPrecipitationParams& Params, double TemperatureCelsius, double AnnualMillimetres,
+		double VegetationCover, EMassifFidelity Fidelity)
+	{
+		const double Potential = PotentialEvapotranspirationMillimetres(Params, TemperatureCelsius);
+		const double Supplied = FMath::Min(Potential, FMath::Max(0.0, AnnualMillimetres));
+		if (Fidelity == EMassifFidelity::Cheap)
+		{
+			return Supplied;
+		}
+		return Supplied * VegetationEvaporationScale(Params, VegetationCover);
+	}
+
+	void ScaleInto(TArrayView<const double> Values, double Scale, TArrayView<double> OutValues)
+	{
+		for (int32 CellIndex = 0; CellIndex < OutValues.Num(); ++CellIndex)
+		{
+			OutValues[CellIndex] = Values[CellIndex] * Scale;
+		}
+	}
+
+	void FillSlice(FMassifEnvironmentContext& Context, const FName& ChannelName, int32 TimeSlice, double Value)
+	{
+		const TUniquePtr<FMassifChannelWriteScope> Scope = Context.OpenOutput(ChannelName, TimeSlice);
+		TArrayView<double> Values = Scope->GetComponent(0);
+		for (int32 CellIndex = 0; CellIndex < Values.Num(); ++CellIndex)
+		{
+			Values[CellIndex] = Value;
+		}
+		Scope->Commit();
+	}
+
 	FMassifChannelDescriptor MakeChannel(
 		const FName& Name, const TCHAR* Unit, double CellSizeMeters, EMassifChannelColorMap ColorMap)
 	{
@@ -139,12 +270,17 @@ namespace
 }
 
 /**
- * What falls on the world over a year, and how much of it falls as snow.
+ * What falls on the world over a year, when it falls, how much of it falls as
+ * snow, and what the air takes back.
  *
  * Precipitation over a massif is mostly not about the massif's own weather: it
  * is about what the air was carrying when it arrived and what the ground made
  * it do on the way in. Air forced up a windward slope drops its water before
  * the crest, and everything behind that crest is dry for exactly that reason.
+ *
+ * The annual total is a climatology and stays one. Everything half-monthly
+ * hangs off it: a share of the year's water per slice, and the phase that share
+ * falls in, which is a property of the day rather than of the place.
  */
 class FPrecipitationProcess final : public IMassifEnvironmentProcess
 {
@@ -160,9 +296,38 @@ public:
 private:
 	void WriteUniform(FMassifEnvironmentContext& Context) const;
 
-	void SolveRow(
+	/** The annual field, returned as well as written: everything else is a share of it. */
+	TArray<double> WriteAnnual(
+		FMassifEnvironmentContext& Context, const FPrecipitationInputs& Inputs, EMassifFidelity Fidelity,
+		int32 UpwindStepCount) const;
+
+	void WriteSeasonal(
+		FMassifEnvironmentContext& Context, TArrayView<const double> AnnualMillimetres,
+		EMassifFidelity Fidelity) const;
+
+	void WriteSnowFraction(
+		FMassifEnvironmentContext& Context, const FPrecipitationInputs& Inputs, EMassifFidelity Fidelity) const;
+
+	void WriteSnowFractionSlice(
+		FMassifEnvironmentContext& Context, const FPrecipitationInputs& Inputs, int32 TimeSlice,
+		EMassifFidelity Fidelity) const;
+
+	void WriteEvapotranspiration(
+		FMassifEnvironmentContext& Context, const FPrecipitationInputs& Inputs,
+		TArrayView<const double> AnnualMillimetres, EMassifFidelity Fidelity) const;
+
+	void SolveAnnualRow(
 		const FPrecipitationInputs& Inputs, const FMassifChannelGrid& Grid, int32 Row, EMassifFidelity Fidelity,
-		int32 UpwindStepCount, TArrayView<double> OutAnnual, TArrayView<double> OutSnowFraction) const;
+		int32 UpwindStepCount, TArrayView<double> OutAnnual) const;
+
+	void SolveSnowFractionRow(
+		const FPrecipitationInputs& Inputs, const FMassifChannelGrid& Grid, int32 Row, int32 TimeSlice,
+		EMassifFidelity Fidelity, TArrayView<double> OutSnowFraction) const;
+
+	void SolveEvapotranspirationRow(
+		const FPrecipitationInputs& Inputs, const FMassifChannelGrid& Grid, int32 Row,
+		TArrayView<const double> AnnualMillimetres, EMassifFidelity Fidelity,
+		TArrayView<double> OutMillimetres) const;
 
 	double AnnualMillimetresAt(
 		const FPrecipitationInputs& Inputs, FVector2d PositionMeters, double SpacingMeters,
@@ -177,7 +342,13 @@ FMassifProcessDeclaration FPrecipitationProcess::Declare() const
 	Declaration.Name = MassifEnvironmentProcesses::Precipitation();
 	Declaration.InputChannels = {
 		MassifEnvironmentChannels::Altitude(), MassifEnvironmentChannels::WindField(),
-		MassifEnvironmentChannels::MeanTemperature()};
+		MassifEnvironmentChannels::MeanTemperature(), MassifEnvironmentChannels::SeasonalTemperature()};
+
+	// What is growing decides how much of the rain goes back into the air, but
+	// vegetation reads the water balance this closes: optional, so precipitation
+	// solves in a graph with nothing growing in it and simply evaporates off bare
+	// ground everywhere.
+	Declaration.OptionalInputChannels = {MassifEnvironmentChannels::VegetationCover()};
 	Declaration.SupportedFidelities = {
 		EMassifFidelity::Cheap, EMassifFidelity::Standard, EMassifFidelity::Reference};
 
@@ -189,33 +360,50 @@ FMassifProcessDeclaration FPrecipitationProcess::Declare() const
 		MassifEnvironmentChannels::AnnualPrecipitation(), TEXT("mm/yr"), Params.CellSizeMeters,
 		EMassifChannelColorMap::BlueWhite));
 
+	FMassifChannelDescriptor Seasonal = MakeChannel(
+		MassifEnvironmentChannels::SeasonalPrecipitation(), TEXT("mm"), Params.CellSizeMeters,
+		EMassifChannelColorMap::BlueWhite);
+	Seasonal.TimeSliceCount = SeasonalSliceCount;
+	Seasonal.Description = TEXT("Millimetres falling in one half-month");
+	Declaration.OutputChannels.Add(Seasonal);
+
 	FMassifChannelDescriptor Snow = MakeChannel(
 		MassifEnvironmentChannels::SnowFraction(), TEXT("0-1"), Params.CellSizeMeters,
 		EMassifChannelColorMap::BlueWhite);
+	Snow.TimeSliceCount = SeasonalSliceCount;
 	Snow.DisplayRange = FVector2d(0.0, 1.0);
+	Snow.Description = TEXT("Share of one half-month's fall arriving as snow");
 	Declaration.OutputChannels.Add(Snow);
+
+	FMassifChannelDescriptor Evaporated = MakeChannel(
+		MassifEnvironmentChannels::Evapotranspiration(), TEXT("mm/yr"), Params.CellSizeMeters,
+		EMassifChannelColorMap::Magma);
+	Evaporated.Description = TEXT("Water a year returns to the air off the ground and its plants");
+	Declaration.OutputChannels.Add(Evaporated);
 	return Declaration;
 }
 
 void FPrecipitationProcess::WriteUniform(FMassifEnvironmentContext& Context) const
 {
-	// Off is flat weather: the same rain everywhere and none of it frozen. The
-	// channels still exist, so nothing downstream asks whether it rained.
-	const TUniquePtr<FMassifChannelWriteScope> Annual =
-		Context.OpenOutput(MassifEnvironmentChannels::AnnualPrecipitation());
-	const TUniquePtr<FMassifChannelWriteScope> Snow =
-		Context.OpenOutput(MassifEnvironmentChannels::SnowFraction());
+	// Off is flat weather: the same rain every half-month, everywhere, and none of
+	// it going back into the air.
+	FillSlice(Context, MassifEnvironmentChannels::AnnualPrecipitation(), 0, Params.BaseAnnualMillimetres);
+	FillSlice(Context, MassifEnvironmentChannels::Evapotranspiration(), 0, 0.0);
 
-	TArrayView<double> AnnualValues = Annual->GetComponent(0);
-	TArrayView<double> SnowValues = Snow->GetComponent(0);
-	for (int32 CellIndex = 0; CellIndex < AnnualValues.Num(); ++CellIndex)
+	const double SliceMillimetres = Params.BaseAnnualMillimetres / SeasonalSliceCount;
+	for (int32 TimeSlice = 0; TimeSlice < SeasonalSliceCount; ++TimeSlice)
 	{
-		AnnualValues[CellIndex] = Params.BaseAnnualMillimetres;
-		SnowValues[CellIndex] = 0.0;
+		FillSlice(Context, MassifEnvironmentChannels::SeasonalPrecipitation(), TimeSlice, SliceMillimetres);
 	}
 
-	Annual->Commit();
-	Snow->Commit();
+	// The phase is not part of what Off switches off. Writing "none of it is
+	// frozen" would not be a trivial value, it would be a false one: the snowpack
+	// reads this channel, so a world twenty degrees below freezing would be told no
+	// snow ever falls on it. What Off drops is the structure - the orographic gain,
+	// the rain shadow, the band around the turn - not the fact that cold rain is
+	// snow.
+	const FPrecipitationInputs Inputs(Context.GetState(), Context);
+	WriteSnowFraction(Context, Inputs, EMassifFidelity::Cheap);
 }
 
 double FPrecipitationProcess::AnnualMillimetresAt(
@@ -243,19 +431,125 @@ double FPrecipitationProcess::AnnualMillimetresAt(
 	return FMath::Clamp((Millimetres + Orographic) * LeeFactor * Shadow, 0.0, Params.MaxAnnualMillimetres);
 }
 
-void FPrecipitationProcess::SolveRow(
+void FPrecipitationProcess::SolveAnnualRow(
 	const FPrecipitationInputs& Inputs, const FMassifChannelGrid& Grid, int32 Row, EMassifFidelity Fidelity,
-	int32 UpwindStepCount, TArrayView<double> OutAnnual, TArrayView<double> OutSnowFraction) const
+	int32 UpwindStepCount, TArrayView<double> OutAnnual) const
+{
+	for (int32 Column = 0; Column < Grid.Width; ++Column)
+	{
+		const FVector2d Position = Grid.CellCentreMeters(Column, Row);
+		OutAnnual[Row * Grid.Width + Column] =
+			AnnualMillimetresAt(Inputs, Position, Grid.CellSizeMeters, Fidelity, UpwindStepCount);
+	}
+}
+
+TArray<double> FPrecipitationProcess::WriteAnnual(
+	FMassifEnvironmentContext& Context, const FPrecipitationInputs& Inputs, EMassifFidelity Fidelity,
+	int32 UpwindStepCount) const
+{
+	const TUniquePtr<FMassifChannelWriteScope> Annual =
+		Context.OpenOutput(MassifEnvironmentChannels::AnnualPrecipitation());
+
+	const FMassifChannelGrid& Grid = Annual->GetGrid();
+	TArrayView<double> Millimetres = Annual->GetComponent(0);
+	for (int32 Row = 0; Row < Grid.Height; ++Row)
+	{
+		SolveAnnualRow(Inputs, Grid, Row, Fidelity, UpwindStepCount, Millimetres);
+	}
+
+	TArray<double> AnnualMillimetres(Millimetres.GetData(), Millimetres.Num());
+	Annual->Commit();
+	return AnnualMillimetres;
+}
+
+void FPrecipitationProcess::WriteSeasonal(
+	FMassifEnvironmentContext& Context, TArrayView<const double> AnnualMillimetres,
+	EMassifFidelity Fidelity) const
+{
+	// Every channel here is solved on the same grid, so a slice is the annual field
+	// scaled cell by cell and nothing has to be resampled to write one.
+	for (int32 TimeSlice = 0; TimeSlice < SeasonalSliceCount; ++TimeSlice)
+	{
+		const double Share = SeasonalShareForFidelity(Params, TimeSlice, Fidelity);
+		const TUniquePtr<FMassifChannelWriteScope> Scope =
+			Context.OpenOutput(MassifEnvironmentChannels::SeasonalPrecipitation(), TimeSlice);
+		ScaleInto(AnnualMillimetres, Share, Scope->GetComponent(0));
+		Scope->Commit();
+	}
+}
+
+void FPrecipitationProcess::SolveSnowFractionRow(
+	const FPrecipitationInputs& Inputs, const FMassifChannelGrid& Grid, int32 Row, int32 TimeSlice,
+	EMassifFidelity Fidelity, TArrayView<double> OutSnowFraction) const
 {
 	const bool bBanded = Fidelity != EMassifFidelity::Cheap;
 	for (int32 Column = 0; Column < Grid.Width; ++Column)
 	{
 		const FVector2d Position = Grid.CellCentreMeters(Column, Row);
-		const int32 CellIndex = Row * Grid.Width + Column;
-		OutAnnual[CellIndex] =
-			AnnualMillimetresAt(Inputs, Position, Grid.CellSizeMeters, Fidelity, UpwindStepCount);
-		OutSnowFraction[CellIndex] = SnowFractionAt(Inputs.TemperatureAt(Position), Params, bBanded);
+		OutSnowFraction[Row * Grid.Width + Column] =
+			SnowFractionAt(Inputs.SeasonalTemperatureAt(Position, TimeSlice), Params, bBanded);
 	}
+}
+
+void FPrecipitationProcess::WriteSnowFractionSlice(
+	FMassifEnvironmentContext& Context, const FPrecipitationInputs& Inputs, int32 TimeSlice,
+	EMassifFidelity Fidelity) const
+{
+	const TUniquePtr<FMassifChannelWriteScope> Scope =
+		Context.OpenOutput(MassifEnvironmentChannels::SnowFraction(), TimeSlice);
+
+	const FMassifChannelGrid& Grid = Scope->GetGrid();
+	TArrayView<double> Fraction = Scope->GetComponent(0);
+	for (int32 Row = 0; Row < Grid.Height; ++Row)
+	{
+		SolveSnowFractionRow(Inputs, Grid, Row, TimeSlice, Fidelity, Fraction);
+	}
+
+	Scope->Commit();
+}
+
+void FPrecipitationProcess::WriteSnowFraction(
+	FMassifEnvironmentContext& Context, const FPrecipitationInputs& Inputs, EMassifFidelity Fidelity) const
+{
+	// Off the half-monthly temperature rather than the annual mean: the phase is a
+	// property of the day it fell on, and a slope that takes rain in July takes
+	// snow in January.
+	for (int32 TimeSlice = 0; TimeSlice < SeasonalSliceCount; ++TimeSlice)
+	{
+		WriteSnowFractionSlice(Context, Inputs, TimeSlice, Fidelity);
+	}
+}
+
+void FPrecipitationProcess::SolveEvapotranspirationRow(
+	const FPrecipitationInputs& Inputs, const FMassifChannelGrid& Grid, int32 Row,
+	TArrayView<const double> AnnualMillimetres, EMassifFidelity Fidelity,
+	TArrayView<double> OutMillimetres) const
+{
+	for (int32 Column = 0; Column < Grid.Width; ++Column)
+	{
+		const FVector2d Position = Grid.CellCentreMeters(Column, Row);
+		const int32 CellIndex = Row * Grid.Width + Column;
+		OutMillimetres[CellIndex] = ActualEvapotranspirationMillimetres(
+			Params, Inputs.TemperatureAt(Position), AnnualMillimetres[CellIndex],
+			Inputs.VegetationCoverAt(Position), Fidelity);
+	}
+}
+
+void FPrecipitationProcess::WriteEvapotranspiration(
+	FMassifEnvironmentContext& Context, const FPrecipitationInputs& Inputs,
+	TArrayView<const double> AnnualMillimetres, EMassifFidelity Fidelity) const
+{
+	const TUniquePtr<FMassifChannelWriteScope> Scope =
+		Context.OpenOutput(MassifEnvironmentChannels::Evapotranspiration());
+
+	const FMassifChannelGrid& Grid = Scope->GetGrid();
+	TArrayView<double> Millimetres = Scope->GetComponent(0);
+	for (int32 Row = 0; Row < Grid.Height; ++Row)
+	{
+		SolveEvapotranspirationRow(Inputs, Grid, Row, AnnualMillimetres, Fidelity, Millimetres);
+	}
+
+	Scope->Commit();
 }
 
 void FPrecipitationProcess::Execute(FMassifEnvironmentContext& Context, EMassifFidelity Fidelity) const
@@ -274,20 +568,10 @@ void FPrecipitationProcess::Execute(FMassifEnvironmentContext& Context, EMassifF
 		UpwindStepCount = Params.UpwindStepCount * 2;
 	}
 
-	const TUniquePtr<FMassifChannelWriteScope> Annual =
-		Context.OpenOutput(MassifEnvironmentChannels::AnnualPrecipitation());
-	const TUniquePtr<FMassifChannelWriteScope> Snow =
-		Context.OpenOutput(MassifEnvironmentChannels::SnowFraction());
-
-	const FMassifChannelGrid& Grid = Annual->GetGrid();
-	for (int32 Row = 0; Row < Grid.Height; ++Row)
-	{
-		SolveRow(
-			Inputs, Grid, Row, Fidelity, UpwindStepCount, Annual->GetComponent(0), Snow->GetComponent(0));
-	}
-
-	Annual->Commit();
-	Snow->Commit();
+	const TArray<double> AnnualMillimetres = WriteAnnual(Context, Inputs, Fidelity, UpwindStepCount);
+	WriteSeasonal(Context, AnnualMillimetres, Fidelity);
+	WriteSnowFraction(Context, Inputs, Fidelity);
+	WriteEvapotranspiration(Context, Inputs, AnnualMillimetres, Fidelity);
 }
 
 void MassifRegisterPrecipitationProcesses(

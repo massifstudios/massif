@@ -50,4 +50,43 @@ struct FMassifPrecipitationParams
 	/** Air temperature the falling phase turns over at, and the width of the turn. */
 	double FreezingCelsius = 1.0;
 	double SnowTransitionCelsius = 2.0;
+
+	/**
+	 * How far the wettest and the driest half-month stand from an even year, as a
+	 * share of the mean half-month.
+	 *
+	 * A third is a temperate massif with a convective summer: thunderstorms over
+	 * warm ground put more water on a slope in August than any frontal winter
+	 * month manages. It moves nothing but the timing — the year still totals what
+	 * the annual channel says it does.
+	 */
+	double SeasonalAmplitude = 0.35;
+
+	/**
+	 * Half-month the wet season peaks in, counting from the first half of January.
+	 * Slice 14 is the first half of August: an Alpine massif takes its water in
+	 * high summer off convection, not off winter fronts, which is why its
+	 * snowpack is built out of a small share of a large annual total.
+	 */
+	int32 WettestSlice = 14;
+
+	/**
+	 * What a year takes off ground with water to spare at the reference
+	 * temperature. Temperature stands in for the energy available, Thornthwaite
+	 * style: the humidity and wind speed a Penman form needs are not in the graph.
+	 */
+	double ReferenceEvapotranspirationMillimetres = 700.0;
+
+	/** Below this nothing evaporates: frozen ground returns no water to the air. */
+	double EvapotranspirationBaseCelsius = 0.0;
+
+	/** Temperature the reference figure is quoted at. */
+	double EvapotranspirationReferenceCelsius = 15.0;
+
+	/**
+	 * Share of the potential that bare ground manages. Rock and mineral soil
+	 * evaporate what is on the surface and transpire nothing, so the water balance
+	 * over scree closes very differently from the one over a forest.
+	 */
+	double BareGroundEvaporationFraction = 0.35;
 };
