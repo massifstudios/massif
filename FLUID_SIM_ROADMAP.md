@@ -83,23 +83,35 @@ as shape, sub-metre coverage of a 20 km world is ~10⁹ particles, and SPH
 neighbour sums are float-order-dependent, which fights the determinism contract
 rather than fitting it.
 
-## Where it runs, and what it costs
+## What the solve produces, and where it lives
 
-Corridor only. A 20 × 20 km world above the 1 km² channel-initiation threshold
-carries roughly 150–300 km of channel; a 40 m corridor at 2 m cells is about
-3 M cells, one to three percent of a world grid at the same resolution. At 1 m
-it is about 12 M. Both are affordable; neither is affordable as a dense world
-grid, which is why the storage below exists.
+Not a raster. `FMassifTerrainField::SampleHeightMeters` is a point query at
+whatever spacing the caller is about to mesh at, down to 14 cm at the finest
+quadtree depth, and it reads the channel through `FMassifRiverField` — which is
+an analytic function of the polyline, not a lookup. A stored grid could not
+answer it at any one resolution and be right.
 
-**Per reach, in the reach's own frame.** The domain is curvilinear — `s` along
-the centreline, `n` across it — which bounds cost per reach, parallelises
-naturally (reaches are independent given upstream inflow), makes the along/across
-UVs and the flow map fall out of the coordinates, and packs into a rectangular
-buffer per reach for an atlas.
+So the solve's output is **per-station cross-sections**: at every station along a
+reach centreline, a profile across the channel — bed altitude at a fixed set of
+offsets, water surface altitude, mean velocity, Froude number. Roughly 300 km of
+channel at 4 m stations and 33 offsets is about 30 MB, and it reconstructs at any
+resolution, which is what the terrain field needs. It is also the natural output
+of a curvilinear `(s, n)` solve, so nothing is resampled on the way out.
 
-Determinism is by fixed iteration count per reach, never a convergence test
-(ARCHITECTURE §4). Sediment scatter into shared cells uses the fixed-point
-integer atomics already established by `Soil.Deposition`.
+That makes it an extension of `FMassifRiverReach`, which already carries
+per-node attributes that `FMassifRiverField` interpolates and indexes. No new
+subsystem, and no channel storage that a 2 m world grid would need 400 MB per
+channel for.
+
+**Per reach.** Reaches are independent given upstream inflow, so they solve in
+parallel, and each one's domain is bounded. Determinism is by fixed iteration
+count per reach, never a convergence test (ARCHITECTURE §4). Sediment scatter
+into shared cells uses the fixed-point integer atomics already established by
+`Soil.Deposition`.
+
+Alongside it, coarse `Water.*` channels at the hydrology's own 8 m, so the
+result is visible in the debug channel views and readable by habitat and masks
+like anything else. Those are ordinary channels and need no framework change.
 
 ## Ordering: the carve must not feed back into the bake
 
@@ -147,23 +159,26 @@ records. What it reads changes.
   of a ridge carries more than the lee flank it mirrors while draining the same
   catchment. Manual — the trunk and its tributaries are in a plausible ratio.
 
-### F1 — Corridor channels
+### F1 — Cross-sections and normal depth
 
-The one framework change the whole thing needs. `FMassifEnvironmentState`
-stores channels as world grids at a per-channel cell size (E1); a 2 m world grid
-is 400 MB per channel and most of it is dry ground.
+The smallest thing that changes the look, and the hydraulic engine F2 and F3 are
+both built on. It replaces the constant-width ribbon with a channel that fits the
+ground it is in.
 
-- A corridor storage kind: per-reach strips in the reach's `(s, n)` frame,
-  registered and sampled through the same `FMassifChannelHandle` API so nothing
-  downstream learns a second way to read a channel.
-- World-position sampling maps into the nearest reach's frame, which is the
-  spatial-index problem `FMassifRiverField` already solves.
-- Debug channel views, probe and transect (E5) work on corridor channels
-  unchanged — that is the test of whether the abstraction held.
-- **Verify:** tests — round-trip through the encoding, sampling agrees with
-  `ReadCell` at cell centres, a corridor channel and a world channel sampled at
-  the same position agree where they overlap, the registry walk covers corridor
-  channels without being taught about them.
+- `FMassifChannelProfile` on each river node: bed altitude at a fixed set of
+  offsets across the channel, taken from the elevation source, plus the solved
+  water surface, wetted width, mean velocity and Froude number.
+- Normal depth by Manning against the reach's local slope and the node's
+  discharge, solved on the measured cross-section rather than on a power law. A
+  confined reach runs deep and narrow, an open one shallow and wide, at the same
+  discharge — which the hydraulic geometry cannot express, because it knows only
+  the discharge.
+- Roughness from `Geology.RockHardness` and the reach's own slope.
+- `FMassifRiverField::Sample` reports depth and surface from the profile.
+- **Verify:** tests — a prismatic trapezoid of known slope and roughness
+  reproduces the closed-form normal depth; halving the width at fixed discharge
+  raises the surface; the wetted edge sits where the profile crosses the solved
+  surface; determinism hash over the profiles.
 
 ### F2 — Channel carve
 
@@ -253,9 +268,18 @@ none of them are this work.
 
 ## Open questions
 
-- **Corridor resolution.** 2 m matches the source data and costs ~3 M cells;
-  1 m resolves a brook properly and costs ~12 M. Decide against a measured F3
-  solve time, not in advance.
+- **Where the solve is registered.** It is a pure function over the elevation
+  source and the network, like `MassifExtractRivers`, and its main output is not
+  a channel. The coarse `Water.*` channels are, and a process that wrote them
+  would have to run the solve a second time or read a result no channel carries.
+  Resolve before F3, not before F1 — F1 needs no answer.
+- **Station spacing and offset count.** 6 m stations and 33 offsets are a guess at
+  what reads as a river.
+- **`MaxWettedWidthFactor` on the Ötztal.** F1 puts the widest channel in the
+  world at 45 m against a hydraulic-geometry width of 17 m for the same 12.8 m³/s.
+  A braided gravel flat does that, and so does a solve spilling across a flat
+  valley floor, and the two are not distinguishable from the number. Worth a look
+  before the guard is loosened or tightened.
 - **Confluences.** Two reaches meeting have overlapping corridors, and the water
   surface has to be single-valued there or it draws as two sheets in the same
   place. `FMassifRiverField` currently resolves this by taking the channel whose

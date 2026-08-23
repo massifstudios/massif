@@ -369,6 +369,22 @@ namespace
 			OutProfile.SpeedMetersPerSecond, OutProfile.FlowAreaSquareMeters, OutProfile.WettedWidthMeters);
 	}
 
+	/**
+	 * The section's answer becomes the channel's.
+	 *
+	 * Width, depth and speed arrive as the hydraulic geometry's guess and leave as
+	 * what fits the ground here, so everything that already reads a node — the
+	 * field, the terrain carve, the water mesh, the masks — picks the section up
+	 * without being taught about it.
+	 */
+	void AdoptProfile(FMassifRiverNode& InOutNode)
+	{
+		InOutNode.WidthMeters = InOutNode.Profile.WettedWidthMeters;
+		InOutNode.DepthMeters = InOutNode.Profile.DepthMeters;
+		InOutNode.SpeedMetersPerSecond = InOutNode.Profile.SpeedMetersPerSecond;
+		InOutNode.BedAltitudeMeters = InOutNode.WaterSurfaceMeters - InOutNode.Profile.DepthMeters;
+	}
+
 	void SolveNodeProfile(
 		const IMassifElevationSource& Elevation, const FMassifChannelSolveParams& Params,
 		FVector2d FlowDirection, double EnergySlope, FMassifRiverNode& InOutNode)
@@ -383,6 +399,7 @@ namespace
 		if (!Band.IsValid())
 		{
 			FallBackToHydraulicGeometry(Params, InOutNode, Profile);
+			AdoptProfile(InOutNode);
 			return;
 		}
 		ClampBandWidth(Band, Profile, Params, InOutNode.WidthMeters);
@@ -400,6 +417,7 @@ namespace
 			SpeedFromSection(InOutNode.DischargeCubicMetersPerSecond, Section.AreaSquareMeters);
 		Profile.FroudeNumber = FroudeNumber(
 			Profile.SpeedMetersPerSecond, Section.AreaSquareMeters, Section.TopWidthMeters);
+		AdoptProfile(InOutNode);
 	}
 
 	// -----------------------------------------------------------------------

@@ -119,8 +119,15 @@ struct FMassifChannelSolveParams
 	 */
 	int32 DepthIterations = 40;
 
-	/** Shallowest water drawn, so a section that can carry the flow dry still has a column in it. */
-	double MinDepthMeters = 0.05;
+	/**
+	 * Shallowest water drawn.
+	 *
+	 * The terrain is cut to this depth whatever the section says, so even a channel
+	 * the ground could carry dry has a column of water in it rather than a sheet
+	 * lying on the ground with nothing underneath for the shading to integrate
+	 * through.
+	 */
+	double MinDepthMeters = 0.30;
 };
 
 /**

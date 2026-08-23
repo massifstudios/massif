@@ -210,10 +210,14 @@ bool FRiverNetworkSmoothingTest::RunTest(const FString& Parameters)
 
 	// Catchment only grows downstream, so a resampled node between two traced
 	// ones cannot carry less water than the one above it or more than the one
-	// below. An interpolant that overshoots puts a bulge in the channel that no
-	// catchment paid for, and it shows in the mesh as a slab wider than its banks.
+	// below. An interpolant that overshoots puts water in the channel that no
+	// catchment paid for.
+	//
+	// The channel's own width is not asserted to grow with it. It used to be,
+	// because width was a power of discharge and could do nothing else; it now
+	// comes from the section the water is actually in, and a river narrows where
+	// its valley does.
 	int32 NodesLosingWater = 0;
-	int32 NodesNarrowingDownstream = 0;
 	for (const FMassifRiverReach& Reach : Rivers->GetReaches())
 	{
 		for (int32 NodeIndex = 1; NodeIndex < Reach.Nodes.Num(); ++NodeIndex)
@@ -222,12 +226,10 @@ bool FRiverNetworkSmoothingTest::RunTest(const FString& Parameters)
 			const FMassifRiverNode& Below = Reach.Nodes[NodeIndex];
 			NodesLosingWater +=
 				Below.DischargeCubicMetersPerSecond < Above.DischargeCubicMetersPerSecond - 1.0e-9 ? 1 : 0;
-			NodesNarrowingDownstream += Below.WidthMeters < Above.WidthMeters - 1.0e-9 ? 1 : 0;
 		}
 	}
 
 	TestEqual(TEXT("Discharge never falls going downstream"), NodesLosingWater, 0);
-	TestEqual(TEXT("The channel never narrows going downstream"), NodesNarrowingDownstream, 0);
 
 	// Resampling is what turns the routing's 45 degree staircase into a line, so
 	// a smoothed reach has to carry more nodes than the corners it was reduced to.
@@ -253,39 +255,42 @@ bool FRiverNetworkChannelShapeTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	// Width times depth times speed is the discharge it was all derived from:
-	// the exponents sum to one and the coefficients multiply to one, so a change
-	// to one of them that breaks continuity fails here rather than silently
-	// producing a river carrying more water than its catchment yields.
+	// The section the water passes through times the speed it passes at is the
+	// discharge, at every station. Continuity used to be checked as width times
+	// depth times speed, which held while all three were powers of the discharge;
+	// the channel is now a shape rather than a box, so the area is the thing that
+	// has to come back to the flow.
 	int32 NodesBreakingContinuity = 0;
-	FVector2d WidestNodeMeters = FVector2d::ZeroVector;
+	int32 NodesWithoutAColumn = 0;
+	FVector2d BiggestNodeMeters = FVector2d::ZeroVector;
+	double BiggestDischargeCubicMetersPerSecond = 0.0;
 	double WidestMeters = 0.0;
 	for (const FMassifRiverReach& Reach : Rivers->GetReaches())
 	{
 		for (const FMassifRiverNode& Node : Reach.Nodes)
 		{
-			const bool bClampedToMinimum =
-				Node.WidthMeters <= Params.MinWidthMeters || Node.DepthMeters <= Params.MinDepthMeters;
-			if (!bClampedToMinimum)
+			const double Carried = Node.Profile.FlowAreaSquareMeters * Node.SpeedMetersPerSecond;
+			const double Relative = FMath::Abs(Carried - Node.DischargeCubicMetersPerSecond)
+				/ FMath::Max(Node.DischargeCubicMetersPerSecond, UE_DOUBLE_SMALL_NUMBER);
+			NodesBreakingContinuity += Relative > 0.02 ? 1 : 0;
+			NodesWithoutAColumn += Node.DepthMeters < Params.Channels.MinDepthMeters - 1.0e-9 ? 1 : 0;
+
+			WidestMeters = FMath::Max(WidestMeters, Node.WidthMeters);
+			if (Node.DischargeCubicMetersPerSecond > BiggestDischargeCubicMetersPerSecond)
 			{
-				const double Carried = Node.WidthMeters * Node.DepthMeters * Node.SpeedMetersPerSecond;
-				const double Relative = FMath::Abs(Carried - Node.DischargeCubicMetersPerSecond)
-					/ FMath::Max(Node.DischargeCubicMetersPerSecond, UE_DOUBLE_SMALL_NUMBER);
-				NodesBreakingContinuity += Relative > 0.02 ? 1 : 0;
-			}
-			if (Node.WidthMeters > WidestMeters)
-			{
-				WidestMeters = Node.WidthMeters;
-				WidestNodeMeters = Node.PositionMeters;
+				BiggestDischargeCubicMetersPerSecond = Node.DischargeCubicMetersPerSecond;
+				BiggestNodeMeters = Node.PositionMeters;
 			}
 		}
 	}
 
-	TestEqual(TEXT("Width, depth and speed multiply back to the discharge"), NodesBreakingContinuity, 0);
+	TestEqual(TEXT("The section and the speed multiply back to the discharge"), NodesBreakingContinuity, 0);
+	// What the terrain carve stands on: there is always water to draw.
+	TestEqual(TEXT("Every station has at least the minimum column"), NodesWithoutAColumn, 0);
 	TestTrue(TEXT("The river is wider than the minimum somewhere"), WidestMeters > Params.MinWidthMeters);
-	// Discharge is the catchment above a point, so the widest the channel ever
-	// gets is where it leaves the world, having gathered all of it.
-	TestTrue(TEXT("The widest channel is at the river's mouth"), IsOnWorldBorder(WidestNodeMeters));
+	// Discharge is the catchment above a point, so the most water the channel ever
+	// carries is where it leaves the world, having gathered all of it.
+	TestTrue(TEXT("The most water is at the river's mouth"), IsOnWorldBorder(BiggestNodeMeters));
 	return true;
 }
 
