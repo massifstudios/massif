@@ -167,6 +167,11 @@ namespace
 		TArray<FVector3f> PositionsMeters;
 		TArray<FVector3f> VelocitiesMetersPerSecond;
 
+		/** The particles sorted by cell, so a grid sample can read the ones near it. */
+		TArray<int32> BinStart;
+		TArray<int32> BinCounts;
+		TArray<int32> BinnedParticles;
+
 		int32 CellIndex(int32 X, int32 Y, int32 Z) const
 		{
 			return (Z * CellCounts.Y + Y) * CellCounts.X + X;
@@ -180,6 +185,15 @@ namespace
 		FVector ToCells(FVector PositionMeters) const
 		{
 			return (PositionMeters - OriginMeters) / CellSizeMeters;
+		}
+
+		int32 CellOfParticle(FVector PositionMeters) const
+		{
+			const FVector Cells = ToCells(PositionMeters);
+			return CellIndex(
+				FMath::Clamp(FMath::FloorToInt32(Cells.X), 0, CellCounts.X - 1),
+				FMath::Clamp(FMath::FloorToInt32(Cells.Y), 0, CellCounts.Y - 1),
+				FMath::Clamp(FMath::FloorToInt32(Cells.Z), 0, CellCounts.Z - 1));
 		}
 
 		double GroundAt(int32 X, int32 Y) const
@@ -202,6 +216,9 @@ namespace
 	double SweptPressure(const FFluidState& State, int32 X, int32 Y, int32 Z, double SourceScale);
 	void SubtractPressureInLayer(FFluidState& InOutState, int32 Z, double Scale);
 	void SubtractPressureAtCell(FFluidState& InOutState, int32 X, int32 Y, int32 Z, double Scale);
+	void GatherNeighbourSlab(
+		const FFluidState& State, const FFaceField& Field, FIntVector Sample, int32 Axis, int32 Z,
+		double& InOutTotal, double& InOutWeight);
 
 	void SetupFields(const FMassifFluidRegion& Region, FFluidState& OutState)
 	{
@@ -329,15 +346,146 @@ namespace
 		}
 	}
 
-	void ScatterParticles(FFluidState& InOutState)
+	/** Counting sort of the particles into the cells they stand in: count, prefix sum, place. */
+	void BinParticles(FFluidState& InOutState)
 	{
+		const int32 CellCount = InOutState.CellKinds.Num();
+		InOutState.BinCounts.SetNumZeroed(CellCount);
+		for (const FVector3f& PositionMeters : InOutState.PositionsMeters)
+		{
+			++InOutState.BinCounts[InOutState.CellOfParticle(FVector(PositionMeters))];
+		}
+
+		InOutState.BinStart.SetNumUninitialized(CellCount + 1);
+		int32 RunningTotal = 0;
+		for (int32 Cell = 0; Cell < CellCount; ++Cell)
+		{
+			InOutState.BinStart[Cell] = RunningTotal;
+			RunningTotal += InOutState.BinCounts[Cell];
+			InOutState.BinCounts[Cell] = InOutState.BinStart[Cell];
+		}
+		InOutState.BinStart[CellCount] = RunningTotal;
+
+		InOutState.BinnedParticles.SetNumUninitialized(InOutState.PositionsMeters.Num());
 		for (int32 ParticleIndex = 0; ParticleIndex < InOutState.PositionsMeters.Num(); ++ParticleIndex)
 		{
-			const FVector Cells = InOutState.ToCells(FVector(InOutState.PositionsMeters[ParticleIndex]));
-			const FVector3f Velocity = InOutState.VelocitiesMetersPerSecond[ParticleIndex];
-			ScatterToField(InOutState.AlongX, Cells, Velocity.X);
-			ScatterToField(InOutState.AlongY, Cells, Velocity.Y);
-			ScatterToField(InOutState.AlongZ, Cells, Velocity.Z);
+			const int32 Cell =
+				InOutState.CellOfParticle(FVector(InOutState.PositionsMeters[ParticleIndex]));
+			InOutState.BinnedParticles[InOutState.BinCounts[Cell]++] = ParticleIndex;
+		}
+	}
+
+	/** The share one particle gives a sample, which is nothing unless the sample is one of its eight. */
+	double SampleWeightForParticle(const FFaceField& Field, FVector ParticleCells, FIntVector Sample)
+	{
+		const FVector SampleCells = ParticleCells - Field.OffsetCells;
+		const FIntVector Corner(
+			FMath::FloorToInt32(SampleCells.X),
+			FMath::FloorToInt32(SampleCells.Y),
+			FMath::FloorToInt32(SampleCells.Z));
+		const FVector Fraction = SampleCells - FVector(Corner);
+
+		double Weight = 1.0;
+		for (int32 Axis = 0; Axis < 3; ++Axis)
+		{
+			if (Sample[Axis] == Corner[Axis])
+			{
+				Weight *= 1.0 - Fraction[Axis];
+				continue;
+			}
+			if (Sample[Axis] == Corner[Axis] + 1)
+			{
+				Weight *= Fraction[Axis];
+				continue;
+			}
+			return 0.0;
+		}
+		return Weight;
+	}
+
+	/** Everything one sample takes from the particles in one cell. */
+	void GatherCellIntoSample(
+		const FFluidState& State, const FFaceField& Field, int32 Cell, FIntVector Sample, int32 Axis,
+		double& InOutTotal, double& InOutWeight)
+	{
+		for (int32 Slot = State.BinStart[Cell]; Slot < State.BinStart[Cell + 1]; ++Slot)
+		{
+			const int32 ParticleIndex = State.BinnedParticles[Slot];
+			const FVector ParticleCells = State.ToCells(FVector(State.PositionsMeters[ParticleIndex]));
+			const double Weight = SampleWeightForParticle(Field, ParticleCells, Sample);
+			if (Weight <= 0.0)
+			{
+				continue;
+			}
+			InOutTotal += Weight * State.VelocitiesMetersPerSecond[ParticleIndex][Axis];
+			InOutWeight += Weight;
+		}
+	}
+
+	void GatherSample(
+		const FFluidState& State, FFaceField& InOutField, FIntVector Sample, int32 Axis)
+	{
+		double Total = 0.0;
+		double TotalWeight = 0.0;
+		for (int32 Z = Sample.Z - 1; Z <= Sample.Z + 1; ++Z)
+		{
+			GatherNeighbourSlab(State, InOutField, Sample, Axis, Z, Total, TotalWeight);
+		}
+		const int32 Index = InOutField.SampleIndex(Sample.X, Sample.Y, Sample.Z);
+		InOutField.Values[Index] = static_cast<float>(Total);
+		InOutField.Weights[Index] = static_cast<float>(TotalWeight);
+	}
+
+	void GatherNeighbourSlab(
+		const FFluidState& State, const FFaceField& Field, FIntVector Sample, int32 Axis, int32 Z,
+		double& InOutTotal, double& InOutWeight)
+	{
+		if (Z < 0 || Z >= State.CellCounts.Z)
+		{
+			return;
+		}
+		for (int32 Y = FMath::Max(Sample.Y - 1, 0); Y <= FMath::Min(Sample.Y + 1, State.CellCounts.Y - 1); ++Y)
+		{
+			for (int32 X = FMath::Max(Sample.X - 1, 0); X <= FMath::Min(Sample.X + 1, State.CellCounts.X - 1); ++X)
+			{
+				GatherCellIntoSample(
+					State, Field, State.CellIndex(X, Y, Z), Sample, Axis, InOutTotal, InOutWeight);
+			}
+		}
+	}
+
+	void GatherFieldSlab(const FFluidState& State, FFaceField& InOutField, int32 Axis, int32 Z)
+	{
+		for (int32 Y = 0; Y < InOutField.Counts.Y; ++Y)
+		{
+			for (int32 X = 0; X < InOutField.Counts.X; ++X)
+			{
+				GatherSample(State, InOutField, FIntVector(X, Y, Z), Axis);
+			}
+		}
+	}
+
+	/**
+	 * The particles' velocity on the grid, gathered by the samples rather than
+	 * scattered by the particles.
+	 *
+	 * Same arithmetic either way, but a scatter has every particle adding into eight
+	 * samples it shares with its neighbours, which races the moment it is threaded
+	 * and was the one pass here still running on a single core. A sample that reads
+	 * the particles around it instead writes only itself, so the whole pass threads
+	 * with nothing shared and each sample sums in a fixed order of its own.
+	 */
+	void GatherParticlesToFields(FFluidState& InOutState)
+	{
+		BinParticles(InOutState);
+		FFaceField* Fields[] = { &InOutState.AlongX, &InOutState.AlongY, &InOutState.AlongZ };
+		for (int32 Axis = 0; Axis < 3; ++Axis)
+		{
+			FFaceField& Field = *Fields[Axis];
+			ParallelFor(Field.Counts.Z, [&InOutState, &Field, Axis](int32 Z)
+			{
+				GatherFieldSlab(InOutState, Field, Axis, Z);
+			});
 		}
 	}
 
@@ -816,11 +964,21 @@ namespace
 		});
 	}
 
-	void StepRegion(
-		FFluidState& InOutState, const FMassifFluidBakeParams& Params, const FMassifFluidRegion& Region)
+	/** Seconds each phase of a step cost, summed over the whole solve. */
+	struct FPhaseTimings
 	{
+		double ScatterSeconds = 0.0;
+		double PressureSeconds = 0.0;
+		double AdvectSeconds = 0.0;
+	};
+
+	void StepRegion(
+		FFluidState& InOutState, const FMassifFluidBakeParams& Params, const FMassifFluidRegion& Region,
+		FPhaseTimings& InOutTimings)
+	{
+		const double ScatterStartSeconds = FPlatformTime::Seconds();
 		ClearFields(InOutState);
-		ScatterParticles(InOutState);
+		GatherParticlesToFields(InOutState);
 		NormaliseField(InOutState.AlongX);
 		NormaliseField(InOutState.AlongY);
 		NormaliseField(InOutState.AlongZ);
@@ -832,12 +990,18 @@ namespace
 		SaveBeforePressure(InOutState.AlongX);
 		SaveBeforePressure(InOutState.AlongY);
 		SaveBeforePressure(InOutState.AlongZ);
+		InOutTimings.ScatterSeconds += FPlatformTime::Seconds() - ScatterStartSeconds;
 
+		const double PressureStartSeconds = FPlatformTime::Seconds();
 		MeasureDivergence(InOutState);
 		SolvePressure(InOutState, Params);
 		SubtractPressureGradient(InOutState, Params);
 		ExtrapolateAll(InOutState, Params.ExtrapolationLayers);
+		InOutTimings.PressureSeconds += FPlatformTime::Seconds() - PressureStartSeconds;
+
+		const double AdvectStartSeconds = FPlatformTime::Seconds();
 		StepParticles(InOutState, Params, Region);
+		InOutTimings.AdvectSeconds += FPlatformTime::Seconds() - AdvectStartSeconds;
 	}
 
 	// -----------------------------------------------------------------------
@@ -908,9 +1072,10 @@ FMassifFluidBakeSummary MassifBakeFluidRegion(
 	SampleGround(Terrain, State);
 	SeedWater(Region, Params, State);
 
+	FPhaseTimings Timings;
 	for (int32 Step = 0; Step < Params.StepCount; ++Step)
 	{
-		StepRegion(State, Params, Region);
+		StepRegion(State, Params, Region, Timings);
 	}
 
 	FMassifFluidBakeSummary Summary;
@@ -919,6 +1084,9 @@ FMassifFluidBakeSummary MassifBakeFluidRegion(
 	AccumulateDepths(State, Summary);
 	AccumulateSpeeds(State, Summary);
 	Summary.SolveSeconds = FPlatformTime::Seconds() - StartSeconds;
+	Summary.ScatterSeconds = Timings.ScatterSeconds;
+	Summary.PressureSeconds = Timings.PressureSeconds;
+	Summary.AdvectSeconds = Timings.AdvectSeconds;
 
 	OutParticlePositionsMeters = MoveTemp(State.PositionsMeters);
 	OutParticleVelocitiesMetersPerSecond = MoveTemp(State.VelocitiesMetersPerSecond);

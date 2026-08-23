@@ -103,6 +103,11 @@ struct FMassifFluidBakeSummary
 	double MeanSpeedMetersPerSecond = 0.0;
 	double MaxSpeedMetersPerSecond = 0.0;
 	double SolveSeconds = 0.0;
+
+	/** Where the solve's time went, so a port to the GPU can be aimed rather than guessed. */
+	double ScatterSeconds = 0.0;
+	double PressureSeconds = 0.0;
+	double AdvectSeconds = 0.0;
 };
 
 /**

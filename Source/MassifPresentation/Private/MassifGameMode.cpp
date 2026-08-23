@@ -34,6 +34,7 @@
 #include "Player/MassifPlayerController.h"
 #include "Terrain/MassifTerrainManager.h"
 #include "UObject/SoftObjectPath.h"
+#include "GameFramework/PlayerController.h"
 #include "Water/MassifFluidRegionManager.h"
 #include "Water/MassifRiverManager.h"
 
@@ -156,6 +157,67 @@ namespace
 		}
 		return Busiest;
 	}
+
+	/** Where the baked fluid region was put, so the camera can be sent to it by name. */
+	FVector2d GBakedRegionCentreMeters = FVector2d::ZeroVector;
+	bool bGBakedRegionPlaced = false;
+
+	/** Head height over the ground, so a teleport lands standing rather than buried. */
+	constexpr double TeleportEyeHeightMeters = 2.0;
+
+	void TeleportCameraTo(UWorld* World, FVector2d PositionMeters)
+	{
+		AMassifGameMode* GameMode = World->GetAuthGameMode<AMassifGameMode>();
+		APlayerController* Controller = World->GetFirstPlayerController();
+		if (GameMode == nullptr || Controller == nullptr || Controller->GetPawn() == nullptr)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Teleport: no camera to move yet."));
+			return;
+		}
+
+		const TSharedPtr<const FMassifTerrainField> Terrain = GameMode->GetTerrainField();
+		double GroundMeters = 0.0;
+		if (Terrain.IsValid())
+		{
+			GroundMeters = Terrain->SampleHeightMeters(PositionMeters, 1.0);
+		}
+
+		const FVector TargetMeters(
+			PositionMeters.X, PositionMeters.Y, GroundMeters + TeleportEyeHeightMeters);
+		Controller->GetPawn()->SetActorLocation(TargetMeters * 100.0);
+		UE_LOG(LogTemp, Display, TEXT("Teleport: camera at %.1f, %.1f m, ground %.1f m"),
+			PositionMeters.X, PositionMeters.Y, GroundMeters);
+	}
+
+	void TeleportCommand(const TArray<FString>& Arguments, UWorld* World)
+	{
+		if (Arguments.Num() < 2)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Teleport: needs an x and a y in metres."));
+			return;
+		}
+		TeleportCameraTo(World, FVector2d(FCString::Atod(*Arguments[0]), FCString::Atod(*Arguments[1])));
+	}
+
+	void TeleportToWaterCommand(const TArray<FString>&, UWorld* World)
+	{
+		if (!bGBakedRegionPlaced)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Teleport: no fluid region has been baked."));
+			return;
+		}
+		TeleportCameraTo(World, GBakedRegionCentreMeters);
+	}
+
+	FAutoConsoleCommandWithWorldAndArgs GTeleportCommand(
+		TEXT("massif.Teleport"),
+		TEXT("Move the camera to a world position in metres: massif.Teleport <x> <y>"),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&TeleportCommand));
+
+	FAutoConsoleCommandWithWorldAndArgs GTeleportToWaterCommand(
+		TEXT("massif.GotoWater"),
+		TEXT("Move the camera to the baked fluid region."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&TeleportToWaterCommand));
 
 	/** Earth's surface gravity, 9.81 m/s down. */
 	constexpr float EarthGravityCentimetersPerSecondSquared = -981.0f;
@@ -391,6 +453,9 @@ void AMassifGameMode::SpawnFluidRegion(const FMassifRiverNetwork& Rivers)
 	{
 		return;
 	}
+
+	GBakedRegionCentreMeters = Node->PositionMeters;
+	bGBakedRegionPlaced = true;
 
 	FluidRegionManager = GetWorld()->SpawnActor<AMassifFluidRegionManager>();
 	FluidRegionManager->Initialize(

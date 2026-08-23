@@ -119,11 +119,13 @@ void AMassifFluidRegionManager::Initialize(
 
 	UE_LOG(LogTemp, Display,
 		TEXT("Fluid region at %.0f, %.0f: %d cells, %d particles solved in %.1f s, "
-			"%.2f m deep at most and %.1f m/s at fastest, meshed to %d triangles in %.2f s"),
+			"%.2f m deep at most and %.1f m/s at fastest, meshed to %d triangles in %.2f s "
+			"(scatter %.1f s, pressure %.1f s, advect %.1f s)"),
 		CentreMeters.X, CentreMeters.Y,
 		Summary.CellCounts.X * Summary.CellCounts.Y * Summary.CellCounts.Z, Summary.ParticleCount,
 		Summary.SolveSeconds, Summary.MaxDepthMeters, Summary.MaxSpeedMetersPerSecond,
-		Surface.Triangles.Num(), Surface.BuildSeconds);
+		Surface.Triangles.Num(), Surface.BuildSeconds,
+		Summary.ScatterSeconds, Summary.PressureSeconds, Summary.AdvectSeconds);
 
 	if (Surface.Triangles.IsEmpty())
 	{
