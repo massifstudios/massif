@@ -53,11 +53,19 @@ namespace
 	{
 		return MakeRiverNetworkHeightmap([](FVector2d Position)
 		{
-			// The two valley floors converge on X = 0 as they run south, so above
-			// the meeting point there are two channels and below it one.
+			// The two valley floors converge as they run south, so above the meeting
+			// point there are two channels and below it one.
+			//
+			// They converge on a sample column rather than on X = 0, which falls
+			// between two of them. A valley whose floor lands between columns has
+			// two of them at the same altitude, neither draining into the other, and
+			// steepest descent then runs a channel down each instead of one down the
+			// middle. Real ground is never level across to the last bit; a world
+			// written as a formula is.
+			const double AxisMeters = 0.5 * RiverTestSpacingMeters;
 			const double Separation = FMath::Max(Position.Y, 0.0) * 0.6;
-			const double AcrossLeft = FMath::Abs(Position.X + Separation);
-			const double AcrossRight = FMath::Abs(Position.X - Separation);
+			const double AcrossLeft = FMath::Abs(Position.X - AxisMeters + Separation);
+			const double AcrossRight = FMath::Abs(Position.X - AxisMeters - Separation);
 			return 1500.0 + FMath::Min(AcrossLeft, AcrossRight) * 0.4 + Position.Y * 0.15;
 		});
 	}
@@ -436,3 +444,4 @@ bool FRiverNetworkJoinedTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("A junction is not stationed twice"), RepeatedStations, 0);
 	return true;
 }
+

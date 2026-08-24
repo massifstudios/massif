@@ -460,6 +460,21 @@ namespace
 		/** Steepest downhill neighbour of every cell in the world, or INDEX_NONE where water leaves. */
 		TArray<int32> ReceiverOfCell;
 
+		/**
+		 * Catchment through each cell down single steepest descent, which is what a
+		 * channel is thresholded against.
+		 *
+		 * Not the bake's own accumulation. That routes a cell's water to every
+		 * neighbour below it at once, which is what a hillside does and what wetness
+		 * has to be read from — but it clears any threshold over a whole valley
+		 * floor at once, so thresholding it marks a band of cells rather than a
+		 * line, and the steepest-descent walk then threads a separate river through
+		 * each cell of the band. Down one receiver the accumulation is a tree, so
+		 * the cells over a threshold are a network one cell wide and every one of
+		 * them has exactly one channel below it.
+		 */
+		TArray<double> ChannelAreaSquareMeters;
+
 		/** Compact index of a cell among the river cells, or INDEX_NONE if it carries no channel. */
 		TArray<int32> RiverIndexOfCell;
 
@@ -471,9 +486,22 @@ namespace
 		TArray<int32> HighestUpstreamOrderCount;
 		TArray<double> WaterSurfaceMeters;
 
+		/**
+		 * What the channel carries at each of its cells.
+		 *
+		 * Started from the bake's routed discharge and then held from falling as it
+		 * goes down. Routing spreads a cell's water over every neighbour below it,
+		 * so some of what a channel carries is handed to the ground beside it and
+		 * the value dips from one cell of the channel to the next. A river that
+		 * loses water going downstream is not a thing, and the width and depth fitted
+		 * to it would narrow over a tributary mouth.
+		 */
+		TArray<double> ChannelDischargeCubicMetersPerSecond;
+
 		TArray<FMassifRiverReach> Run()
 		{
 			ComputeReceivers();
+			AccumulateChannelArea();
 			MarkRiverCells();
 			if (RiverCells.IsEmpty())
 			{
@@ -535,6 +563,42 @@ namespace
 			});
 		}
 
+		// --- Catchment down one receiver -------------------------------------
+
+		/** Every cell, highest first. With no local minima below them, that is a drainage order. */
+		TArray<int32> CellsHighestFirst() const
+		{
+			TArray<int32> Order;
+			Order.SetNumUninitialized(Grid.CellCount());
+			for (int32 CellIndex = 0; CellIndex < Grid.CellCount(); ++CellIndex)
+			{
+				Order[CellIndex] = CellIndex;
+			}
+
+			Algo::Sort(Order, [this](int32 Left, int32 Right)
+			{
+				if (Filled[Left] != Filled[Right])
+				{
+					return Filled[Left] > Filled[Right];
+				}
+				return Left < Right;
+			});
+			return Order;
+		}
+
+		void AccumulateChannelArea()
+		{
+			ChannelAreaSquareMeters.Init(Grid.CellAreaSquareMeters(), Grid.CellCount());
+			for (const int32 CellIndex : CellsHighestFirst())
+			{
+				const int32 ReceiverCell = ReceiverOfCell[CellIndex];
+				if (ReceiverCell != INDEX_NONE)
+				{
+					ChannelAreaSquareMeters[ReceiverCell] += ChannelAreaSquareMeters[CellIndex];
+				}
+			}
+		}
+
 		// --- Which cells carry a channel -------------------------------------
 
 		/**
@@ -550,7 +614,7 @@ namespace
 			const double ThresholdSquareMeters = Params.ChannelInitiationAreaSquareMeters;
 			for (int32 CellIndex = 0; CellIndex < Grid.CellCount(); ++CellIndex)
 			{
-				if (AccumulationSquareMeters[CellIndex] >= ThresholdSquareMeters)
+				if (ChannelAreaSquareMeters[CellIndex] >= ThresholdSquareMeters)
 				{
 					MarkFromHereDownstream(CellIndex);
 				}
@@ -621,9 +685,12 @@ namespace
 			// The measured altitude along a channel is the top of the water: a laser
 			// scan gets no return off a river bed. So the surface starts as the
 			// ground and the bed is put back under it by the carve depth.
+			ChannelDischargeCubicMetersPerSecond.SetNumUninitialized(RiverCells.Num());
 			for (int32 RiverIndex = 0; RiverIndex < RiverCells.Num(); ++RiverIndex)
 			{
 				WaterSurfaceMeters[RiverIndex] = Measured[RiverCells[RiverIndex]];
+				ChannelDischargeCubicMetersPerSecond[RiverIndex] =
+					DischargeCubicMetersPerSecond[RiverCells[RiverIndex]];
 			}
 
 			for (int32 RiverIndex : MakeDrainageOrder())
@@ -666,6 +733,9 @@ namespace
 			const int32 ReceiverRiverIndex = RiverIndexOfCell[ReceiverCell];
 			WaterSurfaceMeters[ReceiverRiverIndex] =
 				FMath::Min(WaterSurfaceMeters[ReceiverRiverIndex], WaterSurfaceMeters[RiverIndex]);
+			ChannelDischargeCubicMetersPerSecond[ReceiverRiverIndex] = FMath::Max(
+				ChannelDischargeCubicMetersPerSecond[ReceiverRiverIndex],
+				ChannelDischargeCubicMetersPerSecond[RiverIndex]);
 			AccumulateUpstreamOrder(ReceiverRiverIndex, StrahlerOrder[RiverIndex]);
 		}
 
@@ -751,7 +821,7 @@ namespace
 			Node.PositionMeters = Grid.CellCentreMeters(CellIndex % Grid.Width, CellIndex / Grid.Width);
 			Node.GroundAltitudeMeters = Measured[CellIndex];
 			Node.WaterSurfaceMeters = WaterSurfaceMeters[RiverIndex];
-			Node.DischargeCubicMetersPerSecond = DischargeCubicMetersPerSecond[CellIndex];
+			Node.DischargeCubicMetersPerSecond = ChannelDischargeCubicMetersPerSecond[RiverIndex];
 			Node.StrahlerOrder = StrahlerOrder[RiverIndex];
 			ShapeChannel(Params, Node);
 			return Node;
