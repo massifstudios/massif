@@ -3,7 +3,7 @@
 namespace
 {
 	/** As for a channel descriptor: two callers may spell the same text from different literals. */
-	bool TextMatches(const TCHAR* Left, const TCHAR* Right)
+	bool PointSetTextMatches(const TCHAR* Left, const TCHAR* Right)
 	{
 		if (Left == nullptr || Right == nullptr)
 		{
@@ -29,5 +29,5 @@ bool FMassifPointSetDescriptor::operator==(const FMassifPointSetDescriptor& Othe
 			return false;
 		}
 	}
-	return TextMatches(Description, Other.Description);
+	return PointSetTextMatches(Description, Other.Description);
 }

@@ -6,6 +6,7 @@
 #include "MassifLithologyProcesses.h"
 #include "MassifSnowProcesses.h"
 #include "MassifSunProcesses.h"
+#include "MassifRockfallProcesses.h"
 #include "MassifVegetationProcesses.h"
 #include "MassifWindProcesses.h"
 #include "MassifRiverNetwork.h"
@@ -1279,6 +1280,7 @@ void MassifRegisterEnvironmentProcesses(
 	MassifRegisterPrecipitationProcesses(Scheduler, Params.Precipitation);
 	MassifRegisterSnowProcesses(Scheduler, Params.Snow);
 	MassifRegisterVegetationProcesses(Scheduler, Params.Vegetation);
+	MassifRegisterRockfallProcesses(Scheduler, Params.Rockfall);
 }
 
 void MassifRegisterEnvironmentProcesses(
