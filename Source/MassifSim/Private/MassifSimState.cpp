@@ -73,5 +73,7 @@ uint64 MassifComputeSimStateHash(const FMassifSimState& State)
 	// different number of times is not the same state.
 	Hash.AppendInt(State.RandomStream.GetInitialSeed());
 	Hash.AppendInt(State.RandomStream.GetCurrentSeed());
+
+	Hash.AppendUInt(State.ObjectOverlay.ComputeContentHash());
 	return Hash.Finalize();
 }

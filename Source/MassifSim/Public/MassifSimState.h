@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "MassifObjectOverlay.h"
 #include "MassifSimClock.h"
 #include "MassifSimCommand.h"
 #include "Math/RandomStream.h"
@@ -48,6 +49,16 @@ struct MASSIFSIM_API FMassifSimState
 	 */
 	UPROPERTY()
 	int64 ClockOffsetTicks = 0;
+
+	/**
+	 * What play has changed about the generated objects standing in the world.
+	 *
+	 * Sim state rather than world data: the object store holds what generation
+	 * produced and never changes, and this holds the felled trees and blasted
+	 * boulders on top of it (OBJECT_STORE.md §7).
+	 */
+	UPROPERTY()
+	FMassifObjectOverlay ObjectOverlay;
 
 	/** What the placeholder command writes. Goes when the first real system lands. */
 	UPROPERTY()
