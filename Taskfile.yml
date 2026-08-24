@@ -26,10 +26,10 @@ tasks:
       - python3 {{.TASKFILE_DIR}}/Tools/check_automation_report.py {{.REPORT}}/index.json
 
   run:
-    desc: 'Build, then run the game windowed. Optional seed: task run SEED=42'
+    desc: 'Build, then run the game windowed. Optional: task run SEED=42 DEM=diffusion -- -massif.Water.MinStrahlerOrder=3'
     deps: [build]
     cmds:
-      - UnrealEditor {{.PROJECT}} -game -windowed -resx=1920 -resy=1080 {{if .SEED}}-MassifSeed={{.SEED}}{{end}}
+      - UnrealEditor {{.PROJECT}} -game -windowed -resx=1920 -resy=1080 {{if .SEED}}-MassifSeed={{.SEED}}{{end}} {{if .DEM}}-MassifDem={{.DEM}}{{end}} {{.CLI_ARGS}}
 
   editor:
     desc: Open the project in the Unreal editor
@@ -37,10 +37,10 @@ tasks:
       - UnrealEditor {{.PROJECT}}
 
   screenshot:
-    desc: 'Offscreen debug screenshot to Saved/Screenshots. Optional: task screenshot SEED=42'
+    desc: 'Offscreen debug screenshot to Saved/Screenshots. Optional: task screenshot SEED=42 DEM=diffusion'
     deps: [build]
     cmds:
-      - UnrealEditor {{.PROJECT}} -game -RenderOffscreen -resx=1600 -resy=900 -MassifScreenshotAfter=30 {{if .SEED}}-MassifSeed={{.SEED}}{{end}}
+      - UnrealEditor {{.PROJECT}} -game -RenderOffscreen -resx=1600 -resy=900 -MassifScreenshotAfter=30 {{if .SEED}}-MassifSeed={{.SEED}}{{end}} {{if .DEM}}-MassifDem={{.DEM}}{{end}}
 
   dem:
     desc: 'Fetch the Tirol elevation model into Data/Terrain. Optional: task dem -- --lat 47.13 --lon 10.26 --name arlberg'
@@ -51,6 +51,16 @@ tasks:
     desc: Regenerate base content assets (L_Massif map, M_Terrain material)
     cmds:
       - UnrealEditor-Cmd {{.PROJECT}} -run=pythonscript -script={{.TASKFILE_DIR}}/Tools/create_base_content.py -unattended -nosplash -nullrhi
+
+  diffusion-dem:
+    desc: 'Generate a terrain model with InfiniteDiffusion into Data/Terrain. Optional: task diffusion-dem -- --seed 42'
+    vars:
+      # The pipeline resolves its global climate rasters relative to the working
+      # directory, so it is run from its own checkout rather than from here.
+      TERRAIN_DIFFUSION: '{{.TERRAIN_DIFFUSION | default "~/.local/share/massif/terrain-diffusion"}}'
+    dir: '{{.TERRAIN_DIFFUSION}}'
+    cmds:
+      - '{{.TERRAIN_DIFFUSION}}/.venv/bin/python {{.TASKFILE_DIR}}/Tools/generate_diffusion_dem.py --output-directory {{.TASKFILE_DIR}}/Data/Terrain {{.CLI_ARGS}}'
 
   placeholders:
     desc: Regenerate the stand-in flora meshes drawn until the real models exist

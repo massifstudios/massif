@@ -17,7 +17,6 @@ Needs numpy; deliberately no GDAL/rasterio, so it runs on a bare checkout.
 """
 
 import argparse
-import math
 import os
 import struct
 import sys
@@ -25,12 +24,12 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-import zlib
 
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from massif_geo import wgs84_to_gk_west, gk_west_to_wgs84  # noqa: E402
+from massif_dem import write_dem, write_preview  # noqa: E402
 
 WCS_ENDPOINT = "https://gis.tirol.gv.at/arcgis/services/Service_Public/terrain/MapServer/WCSServer"
 COVERAGE_ID = "Gelaendemodell_50cm_M28"
@@ -54,10 +53,6 @@ DEFAULT_CENTER_LONGITUDE = 10.97800
 MAX_TILE_SAMPLES = 2000
 REQUEST_TIMEOUT_SECONDS = 300
 REQUEST_ATTEMPTS = 3
-
-DEM_MAGIC = b"MASSIFDM"
-DEM_VERSION = 1
-DEM_HEADER_BYTES = 192
 
 # Anything outside this is a void or a service artefact, not Tirol: the lowest
 # ground in the state is around 460 m, and the service returns 0 outside it.
@@ -284,66 +279,6 @@ def fill_voids(heights):
     return void_count
 
 
-def write_dem(path, heights, resolution_meters, easting_min, northing_max, label):
-    minimum = float(heights.min())
-    maximum = float(heights.max())
-    # uint16 over the window's own altitude band: a 3000 m band quantises to
-    # 4.6 cm, well under the source model's own vertical accuracy.
-    altitude_step = max((maximum - minimum) / 65535.0, 1.0e-6)
-    quantised = np.rint((heights - minimum) / altitude_step).astype(np.uint16)
-
-    header = bytearray(DEM_HEADER_BYTES)
-    struct.pack_into("<8sIIII", header, 0, DEM_MAGIC, DEM_VERSION,
-                     heights.shape[1], heights.shape[0], 0)
-    struct.pack_into("<ddddd", header, 24, resolution_meters, minimum, altitude_step,
-                     easting_min, northing_max)
-    struct.pack_into("<32s", header, 64, SOURCE_CRS.encode("ascii"))
-    struct.pack_into("<96s", header, 96, label.encode("utf-8")[:95])
-
-    with open(path, "wb") as dem_file:
-        dem_file.write(header)
-        dem_file.write(quantised.astype("<u2").tobytes())
-    return minimum, maximum
-
-
-def write_png(path, image_rgb):
-    height, width, _ = image_rgb.shape
-    raw = b"".join(b"\x00" + image_rgb[row].tobytes() for row in range(height))
-
-    def chunk(kind, payload):
-        return (struct.pack(">I", len(payload)) + kind + payload
-                + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF))
-
-    with open(path, "wb") as png_file:
-        png_file.write(b"\x89PNG\r\n\x1a\n")
-        png_file.write(chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)))
-        png_file.write(chunk(b"IDAT", zlib.compress(raw, 6)))
-        png_file.write(chunk(b"IEND", b""))
-
-
-def write_preview(path, heights, resolution_meters, preview_size=1200):
-    """Hillshade over an altitude ramp: enough to recognise the valley at a glance."""
-    stride = max(1, heights.shape[0] // preview_size)
-    sampled = heights[::stride, ::stride].astype(np.float64)
-    spacing = resolution_meters * stride
-
-    # Row 0 is north, so the row derivative runs the opposite way to northing.
-    gradient_row, gradient_east = np.gradient(sampled, spacing)
-    gradient_north = -gradient_row
-
-    sun_azimuth = math.radians(315.0)
-    sun_altitude = math.radians(45.0)
-    sun = (math.sin(sun_azimuth) * math.cos(sun_altitude),
-           math.cos(sun_azimuth) * math.cos(sun_altitude),
-           math.sin(sun_altitude))
-    normal_length = np.sqrt(gradient_east**2 + gradient_north**2 + 1.0)
-    shade = np.clip((-gradient_east * sun[0] - gradient_north * sun[1] + sun[2]) / normal_length, 0.0, 1.0)
-
-    band = np.clip((sampled - sampled.min()) / max(float(np.ptp(sampled)), 1.0), 0.0, 1.0)
-    ramp = np.stack([0.35 + 0.65 * band, 0.40 + 0.55 * band, 0.35 + 0.45 * band], axis=-1)
-    write_png(path, np.clip(ramp * shade[..., None] * 255.0, 0, 255).astype(np.uint8))
-
-
 def main():
     arguments = parse_arguments()
     resolution_meters = arguments.resolution_meters
@@ -379,7 +314,7 @@ def main():
     dem_path = os.path.join(arguments.output_directory, arguments.name + ".massifdem")
     label = "Tirol DGM 50cm @ %.4fN %.4fE" % (arguments.lat, arguments.lon)
     minimum, maximum = write_dem(dem_path, heights, resolution_meters,
-                                 easting_range[0], northing_range[1], label)
+                                 easting_range[0], northing_range[1], label, SOURCE_CRS)
     write_preview(os.path.join(arguments.output_directory, arguments.name + "_preview.png"),
                   heights, resolution_meters)
 
