@@ -11,6 +11,7 @@ class UDynamicMeshComponent;
 class UMaterialInstanceDynamic;
 class UMaterialInterface;
 class UTexture2D;
+class UWaterTerrainComponent;
 
 namespace UE::Geometry
 {
@@ -136,6 +137,10 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UTexture2D> SurfaceLayerParameters;
+
+	/** Offers the tiles below to the water zone as the ground its rivers are cut into. */
+	UPROPERTY()
+	TObjectPtr<UWaterTerrainComponent> WaterTerrain;
 
 	UPROPERTY()
 	TArray<TObjectPtr<UDynamicMeshComponent>> ComponentPool;

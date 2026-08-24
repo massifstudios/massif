@@ -8,8 +8,7 @@ class AMassifDebugChannelView;
 class AMassifDaylightManager;
 class AMassifFogManager;
 class AMassifFoliageManager;
-class AMassifShallowWaterRegion;
-class AMassifRiverManager;
+class AMassifWaterBodyManager;
 class AMassifTerrainManager;
 class FMassifEnvironmentScheduler;
 class FMassifHeightmap;
@@ -45,6 +44,12 @@ public:
 		return TerrainField;
 	}
 
+	/** The traced rivers, for the debug overlay that draws them. Null until world gen has run. */
+	TSharedPtr<const FMassifRiverNetwork> GetRiverNetwork() const
+	{
+		return RiverNetwork;
+	}
+
 private:
 	/** Puts the simulation on the master seed and starts it ticking, so the wall clock runs. */
 	void StartSimulation();
@@ -65,7 +70,7 @@ private:
 	void BuildTerrainField(TSharedRef<const FMassifHeightmap> Heightmap);
 
 	/** Puts the baked fluid region on the largest channel the world traced. */
-	void SpawnShallowWaterRegion(const FMassifRiverNetwork& Rivers);
+	void SpawnWaterBodies();
 	void SpawnEnvironmentActors();
 	void SpawnSunAndSky();
 	void SpawnAtmosphericHaze();
@@ -82,8 +87,11 @@ private:
 	/** Kept rather than only its state: fidelities are switched on it while the world is up. */
 	TSharedPtr<FMassifEnvironmentScheduler> EnvironmentScheduler;
 
-	/** The solved rivers as a field: cut into the terrain, and drawn as water over it. */
+	/** The solved rivers as a field, which is what the terrain is cut against. */
 	TSharedPtr<const FMassifRiverField> RiverField;
+
+	/** The same rivers as reaches and stations, which is what the water bodies are built from. */
+	TSharedPtr<const FMassifRiverNetwork> RiverNetwork;
 
 	UPROPERTY()
 	TObjectPtr<AMassifTerrainManager> TerrainManager;
@@ -92,10 +100,7 @@ private:
 	TObjectPtr<AMassifFoliageManager> FoliageManager;
 
 	UPROPERTY()
-	TObjectPtr<AMassifRiverManager> RiverManager;
-
-	UPROPERTY()
-	TObjectPtr<AMassifShallowWaterRegion> ShallowWaterRegion;
+	TObjectPtr<AMassifWaterBodyManager> WaterBodyManager;
 
 	UPROPERTY()
 	TObjectPtr<AMassifDebugChannelView> DebugChannelView;

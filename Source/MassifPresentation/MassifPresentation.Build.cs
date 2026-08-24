@@ -25,6 +25,9 @@ public class MassifPresentation : ModuleRules
 			"GeometryCore",
 			"GeometryFramework",
 			"GeometryScriptingCore",
+			// The water bodies the rivers are drawn as, and the surface they are
+			// rendered with.
+			"Water",
 			// GMaxRHIShaderPlatform, for reading the terrain material's compile errors.
 			"RHI"
 		});

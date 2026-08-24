@@ -12,6 +12,7 @@
 #include "MassifUnits.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "MassifTerrainTileMesh.h"
+#include "WaterTerrainComponent.h"
 
 using MassifUnits::MetersToCentimeters;
 
@@ -29,6 +30,11 @@ AMassifTerrainManager::AMassifTerrainManager()
 {
 	PrimaryActorTick.bCanEverTick = true;
 	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
+
+	// The ground the water zone measures its own depth against. Without it the
+	// rivers have nothing under them and fall back to a flat assumed depth, which
+	// is a sheet at one colour with a hard edge.
+	WaterTerrain = CreateDefaultSubobject<UWaterTerrainComponent>(TEXT("WaterTerrain"));
 }
 
 void AMassifTerrainManager::Initialize(TSharedPtr<const FMassifTerrainField> InField, UMaterialInterface* InTerrainMaterial)

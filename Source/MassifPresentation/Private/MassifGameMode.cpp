@@ -35,8 +35,7 @@
 #include "Terrain/MassifTerrainManager.h"
 #include "UObject/SoftObjectPath.h"
 #include "GameFramework/PlayerController.h"
-#include "Water/MassifShallowWaterRegion.h"
-#include "Water/MassifRiverManager.h"
+#include "Water/MassifWaterBodyManager.h"
 
 namespace
 {
@@ -158,9 +157,9 @@ namespace
 		return Busiest;
 	}
 
-	/** Where the solved water patch was put, so the camera can be sent to it by name. */
-	FVector2d GSolvedPatchCentreMeters = FVector2d::ZeroVector;
-	bool bGSolvedPatchPlaced = false;
+	/** The busiest station in the network, so the camera can be sent to the biggest river by name. */
+	FVector2d GBusiestNodeMeters = FVector2d::ZeroVector;
+	bool bGBusiestNodeFound = false;
 
 	/** Head height over the ground, so a teleport lands standing rather than buried. */
 	constexpr double TeleportEyeHeightMeters = 2.0;
@@ -201,12 +200,12 @@ namespace
 
 	void TeleportToWaterCommand(const TArray<FString>&, UWorld* World)
 	{
-		if (!bGSolvedPatchPlaced)
+		if (!bGBusiestNodeFound)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("Teleport: no water patch has been solved."));
+			UE_LOG(LogTemp, Warning, TEXT("Teleport: no river has been traced yet."));
 			return;
 		}
-		TeleportCameraTo(World, GSolvedPatchCentreMeters);
+		TeleportCameraTo(World, GBusiestNodeMeters);
 	}
 
 	FAutoConsoleCommandWithWorldAndArgs GTeleportCommand(
@@ -216,7 +215,7 @@ namespace
 
 	FAutoConsoleCommandWithWorldAndArgs GTeleportToWaterCommand(
 		TEXT("massif.GotoWater"),
-		TEXT("Move the camera to the solved water patch."),
+		TEXT("Move the camera to the busiest river in the network."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&TeleportToWaterCommand));
 
 	/** Earth's surface gravity, 9.81 m/s down. */
@@ -326,19 +325,6 @@ namespace
 		return LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/EngineMaterials/WorldGridMaterial.WorldGridMaterial"));
 	}
 
-	UMaterialInterface* LoadRiverMaterial()
-	{
-		const FSoftObjectPath MaterialPath(TEXT("/Game/Materials/M_River.M_River"));
-		UMaterialInterface* Material = Cast<UMaterialInterface>(MaterialPath.TryLoad());
-		if (Material == nullptr)
-		{
-			UE_LOG(LogTemp, Warning, TEXT("M_River missing, no water is drawn. Run Tools/create_river_content.py."));
-			return nullptr;
-		}
-
-		ReportMaterialCompileErrors(*Material);
-		return Material;
-	}
 }
 
 AMassifGameMode::AMassifGameMode()
@@ -416,8 +402,7 @@ void AMassifGameMode::LoadTerrainAndSpawnManagers()
 	FoliageManager = GetWorld()->SpawnActor<AMassifFoliageManager>();
 	FoliageManager->Initialize(TerrainField, Environment, GetMasterSeed());
 
-	RiverManager = GetWorld()->SpawnActor<AMassifRiverManager>();
-	RiverManager->Initialize(RiverField, LoadRiverMaterial());
+	SpawnWaterBodies();
 
 	DebugChannelView = GetWorld()->SpawnActor<AMassifDebugChannelView>();
 	DebugChannelView->Initialize(HabitatField, TerrainManager);
@@ -435,36 +420,30 @@ void AMassifGameMode::BuildTerrainField(TSharedRef<const FMassifHeightmap> Heigh
 			GetEnvironmentParams().Rivers);
 	LogRiverSummary(Rivers.Get());
 
+	RiverNetwork = Rivers;
 	RiverField = FMassifRiverField::Build(Rivers.Get(), MassifDefaultBankReachMeters);
 	TerrainField = MakeShared<const FMassifTerrainField>(MoveTemp(Heightmap), RiverField.ToSharedRef());
 
 	UE_LOG(LogTemp, Display, TEXT("Terrain field: %.0f m across, %d channel segments cut into it"),
 		TerrainField->GetWorldSizeMeters(), RiverField->GetSegmentCount());
 
-	SpawnShallowWaterRegion(Rivers.Get());
+	const FMassifRiverNode* Node = BusiestNode(Rivers.Get());
+	if (Node != nullptr)
+	{
+		GBusiestNodeMeters = Node->PositionMeters;
+		bGBusiestNodeFound = true;
+	}
 }
 
-void AMassifGameMode::SpawnShallowWaterRegion(const FMassifRiverNetwork& Rivers)
+void AMassifGameMode::SpawnWaterBodies()
 {
-	const FMassifRiverNode* Node = BusiestNode(Rivers);
-	if (Node == nullptr)
+	if (!RiverNetwork.IsValid() || !TerrainField.IsValid())
 	{
 		return;
 	}
 
-	GSolvedPatchCentreMeters = Node->PositionMeters;
-	bGSolvedPatchPlaced = true;
-
-	ShallowWaterRegion = GetWorld()->SpawnActor<AMassifShallowWaterRegion>();
-	ShallowWaterRegion->Initialize(
-		TerrainField, RiverField, Node->PositionMeters, LoadRiverMaterial());
-
-	// So the tiled surface stops drawing a level per station over the same bed the
-	// patch has just solved, rather than the two fighting each other there.
-	if (RiverManager != nullptr)
-	{
-		RiverManager->SetSolvedPatchMeters(ShallowWaterRegion->GetPatchMeters());
-	}
+	WaterBodyManager = GetWorld()->SpawnActor<AMassifWaterBodyManager>();
+	WaterBodyManager->Initialize(*RiverNetwork, GBusiestNodeMeters, MassifDrawnWaterTimeSlice());
 }
 
 bool AMassifGameMode::BuildEnvironment(TSharedRef<const FMassifHeightmap> Heightmap)
