@@ -4,10 +4,10 @@
 #include "GameFramework/Actor.h"
 #include "MassifRockManager.generated.h"
 
-class FMassifEnvironmentState;
+class FMassifObjectStore;
 class UHierarchicalInstancedStaticMeshComponent;
 class UMaterialInterface;
-struct FMassifEnvironmentPoint;
+struct FMassifObjectPlacement;
 
 namespace MassifRockPlacement
 {
@@ -18,25 +18,25 @@ namespace MassifRockPlacement
 	inline constexpr double BlockFlattening = 0.62;
 
 	/**
-	 * Where one solved block is drawn, in centimetres.
+	 * Where one stored block is drawn, in centimetres.
 	 *
-	 * The solve puts a block's position on the ground it came to rest on, and how
+	 * The store puts a block's position on the ground it came to rest on, and how
 	 * far into that ground it settled is carried separately, so the mesh has to be
 	 * lifted by what stands proud of the surface rather than centred on the point.
 	 */
-	FTransform MakeBlockTransform(const FMassifEnvironmentPoint& Block);
+	FTransform MakeBlockTransform(const FMassifObjectPlacement& Block);
 }
 
 /**
- * Draws the boulders the rockfall left, a storage tile at a time within reach of
+ * Draws the boulders the object store holds, a chunk at a time within reach of
  * the camera, and drops them again when it leaves.
  *
- * Unlike the foliage beside it this scatters nothing. Where each boulder sits was
- * decided by the fall that put it there (MassifRockfallProcesses), so this reads
- * the placements out of the solve and does no more than turn metres into
- * transforms — which is the whole reason the fall runs over the world rather than
- * per tile: a block arrives from a cliff far outside the tile it lands in, and no
- * apron is wide enough to find it locally (ARCHITECTURE §5.4).
+ * Unlike the foliage beside it this scatters nothing and decides nothing. Where
+ * each boulder sits was settled by the rockfall pass and written into the store
+ * (OBJECT_STORE.md §5), so this reads records and turns metres into transforms.
+ *
+ * It draws the boulder tier only. A chunk holds every stored object in its
+ * square, and each reader takes the categories it knows how to draw.
  */
 UCLASS()
 class AMassifRockManager : public AActor
@@ -46,26 +46,26 @@ class AMassifRockManager : public AActor
 public:
 	AMassifRockManager();
 
-	void Initialize(TSharedPtr<const FMassifEnvironmentState> InEnvironment);
+	void Initialize(TSharedPtr<const FMassifObjectStore> InObjectStore);
 
-	/** Drops every drawn tile and reads a new solve, as the foliage does on a rebuild. */
-	void ResetEnvironment(TSharedPtr<const FMassifEnvironmentState> InEnvironment);
+	/** Drops every drawn chunk and reads a new store, as the foliage does on a rebuild. */
+	void ResetObjectStore(TSharedPtr<const FMassifObjectStore> InObjectStore);
 
 	virtual void Tick(float DeltaSeconds) override;
 
 private:
-	/** One storage tile's boulders, and the component they live in. */
-	struct FDrawnTile
+	/** One chunk's boulders, and the component they live in. */
+	struct FDrawnChunk
 	{
-		int32 TileColumn = 0;
-		int32 TileRow = 0;
+		int32 ChunkColumn = 0;
+		int32 ChunkRow = 0;
 		int32 ComponentIndex = INDEX_NONE;
 	};
 
-	struct FTileRequest
+	struct FChunkRequest
 	{
-		int32 TileColumn = 0;
-		int32 TileRow = 0;
+		int32 ChunkColumn = 0;
+		int32 ChunkRow = 0;
 		double DistanceMeters = 0.0;
 	};
 
@@ -77,23 +77,23 @@ private:
 	static constexpr double VisibleRadiusMeters = 700.0;
 
 	/** Spread the cost of moving, as the foliage manager does. */
-	static constexpr int32 MaxTileBuildsPerFrame = 8;
+	static constexpr int32 MaxChunkBuildsPerFrame = 8;
 
 	void LoadRockMesh();
-	void DropAllTiles();
+	void DropAllChunks();
 
 	FVector GetViewLocationMeters() const;
-	double DistanceToTileMeters(int32 TileColumn, int32 TileRow, const FVector& ViewMeters) const;
+	double DistanceToChunkMeters(int32 ChunkColumn, int32 ChunkRow, const FVector& ViewMeters) const;
 
-	void DropDistantTiles(const FVector& ViewMeters);
-	void GatherTiles(const FVector& ViewMeters);
-	void BuildRequestedTiles();
-	void DrawTile(const FTileRequest& Request);
+	void DropDistantChunks(const FVector& ViewMeters);
+	void GatherChunks(const FVector& ViewMeters);
+	void BuildRequestedChunks();
+	void DrawChunk(const FChunkRequest& Request);
 
 	int32 AcquireComponent();
-	void ReleaseComponent(FDrawnTile& Tile);
+	void ReleaseComponent(FDrawnChunk& Chunk);
 
-	TSharedPtr<const FMassifEnvironmentState> Environment;
+	TSharedPtr<const FMassifObjectStore> ObjectStore;
 
 	UPROPERTY()
 	TObjectPtr<UStaticMesh> RockMesh;
@@ -105,6 +105,6 @@ private:
 	TArray<TObjectPtr<UHierarchicalInstancedStaticMeshComponent>> ComponentPool;
 
 	TArray<int32> FreeComponentIndices;
-	TMap<uint64, FDrawnTile> DrawnTiles;
-	TArray<FTileRequest> TileRequests;
+	TMap<uint64, FDrawnChunk> DrawnChunks;
+	TArray<FChunkRequest> ChunkRequests;
 };

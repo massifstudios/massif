@@ -37,6 +37,8 @@ struct MASSIFCORE_API FMassifObjectChunkGrid
 	/** North-west corner of a chunk. */
 	FVector2d ChunkCornerMeters(int32 Column, int32 Row) const;
 
+	FVector2d ChunkCentreMeters(int32 Column, int32 Row) const;
+
 	bool operator==(const FMassifObjectChunkGrid& Other) const;
 
 	bool operator!=(const FMassifObjectChunkGrid& Other) const

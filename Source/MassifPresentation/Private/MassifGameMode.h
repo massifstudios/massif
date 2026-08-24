@@ -13,6 +13,7 @@ class AMassifWaterBodyManager;
 class AMassifTerrainManager;
 class FMassifEnvironmentScheduler;
 class FMassifEnvironmentState;
+class FMassifObjectStore;
 class FMassifHeightmap;
 class FMassifRiverField;
 class FMassifRiverNetwork;
@@ -65,6 +66,9 @@ private:
 	 */
 	bool BuildEnvironment(TSharedRef<const FMassifHeightmap> Heightmap);
 
+	/** Drains the bake's point sets into the store the world is drawn and saved from. */
+	void BuildObjectStore(const FMassifEnvironmentState& Environment);
+
 	void LogEnvironmentSummary(double SolveSeconds) const;
 	void LogRockfallSummary(const FMassifEnvironmentState& Environment) const;
 	void LogRiverSummary(const FMassifRiverNetwork& Rivers) const;
@@ -95,6 +99,9 @@ private:
 
 	/** The same rivers as reaches and stations, which is what the water bodies are built from. */
 	TSharedPtr<const FMassifRiverNetwork> RiverNetwork;
+
+	/** Every generated object, drained out of the bake's point sets once the graph has run. */
+	TSharedPtr<const FMassifObjectStore> ObjectStore;
 
 	UPROPERTY()
 	TObjectPtr<AMassifTerrainManager> TerrainManager;

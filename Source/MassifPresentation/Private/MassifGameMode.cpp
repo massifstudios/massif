@@ -24,6 +24,9 @@
 #include "MassifHabitat.h"
 #include "UI/MassifEnvironmentSettings.h"
 #include "MassifHeightmap.h"
+#include "MassifObjectStore.h"
+#include "MassifObjectStoreBuilder.h"
+#include "MassifObjectTypeRegistry.h"
 #include "MassifRiverField.h"
 #include "MassifRiverNetwork.h"
 #include "MassifRockfallProcesses.h"
@@ -404,8 +407,9 @@ void AMassifGameMode::LoadTerrainAndSpawnManagers()
 	FoliageManager = GetWorld()->SpawnActor<AMassifFoliageManager>();
 	FoliageManager->Initialize(TerrainField, Environment, GetMasterSeed());
 
+	BuildObjectStore(Environment.Get());
 	RockManager = GetWorld()->SpawnActor<AMassifRockManager>();
-	RockManager->Initialize(Environment);
+	RockManager->Initialize(ObjectStore);
 
 	SpawnWaterBodies();
 
@@ -476,6 +480,18 @@ bool AMassifGameMode::BuildEnvironment(TSharedRef<const FMassifHeightmap> Height
 	EnvironmentScheduler = MakeShareable(Scheduler.Release());
 	LogEnvironmentSummary(FPlatformTime::Seconds() - StartSeconds);
 	return true;
+}
+
+void AMassifGameMode::BuildObjectStore(const FMassifEnvironmentState& Environment)
+{
+	const double StartSeconds = FPlatformTime::Seconds();
+	ObjectStore = MakeShared<const FMassifObjectStore>(
+		MassifObjectStoreBuilder::BuildFromEnvironment(Environment, FMassifObjectTypeRegistry::Get()));
+
+	UE_LOG(LogTemp, Display, TEXT("Object store: %d objects over %d chunks, %.1f MB resident, built in %.2f s"),
+		ObjectStore->GetRecordCount(), ObjectStore->GetChunkGrid().ChunkCount(),
+		ObjectStore->GetResidentByteCount() / (1024.0 * 1024.0),
+		FPlatformTime::Seconds() - StartSeconds);
 }
 
 void AMassifGameMode::LogEnvironmentSummary(double SolveSeconds) const

@@ -85,6 +85,14 @@ FVector2d FMassifObjectChunkGrid::ChunkCornerMeters(int32 Column, int32 Row) con
 		Column * ChunkSizeMeters - 0.5 * WorldSizeXMeters, 0.5 * WorldSizeYMeters - Row * ChunkSizeMeters);
 }
 
+FVector2d FMassifObjectChunkGrid::ChunkCentreMeters(int32 Column, int32 Row) const
+{
+	const FVector2d Corner = ChunkCornerMeters(Column, Row);
+
+	// Rows run against +Y, so a chunk's centre is south of its north-west corner.
+	return FVector2d(Corner.X + 0.5 * ChunkSizeMeters, Corner.Y - 0.5 * ChunkSizeMeters);
+}
+
 bool FMassifObjectChunkGrid::operator==(const FMassifObjectChunkGrid& Other) const
 {
 	return Width == Other.Width && Height == Other.Height

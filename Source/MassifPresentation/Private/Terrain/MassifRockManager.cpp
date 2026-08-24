@@ -3,30 +3,32 @@
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Kismet/GameplayStatics.h"
-#include "MassifEnvironmentState.h"
-#include "MassifRockfallProcesses.h"
+#include "MassifObjectRecord.h"
+#include "MassifObjectStore.h"
+#include "MassifObjectTypeRegistry.h"
 #include "MassifUnits.h"
 #include "Materials/MaterialInterface.h"
-#include "UObject/SoftObjectPath.h"
 
 using MassifUnits::MetersToCentimeters;
 
 namespace
 {
-	/** Stand-in until rock models are generated: the engine's unit sphere, squashed per block. */
-	const TCHAR* RockPlaceholderMeshPath = TEXT("/Engine/BasicShapes/Sphere");
-
-	uint64 PackTileKey(int32 TileColumn, int32 TileRow)
+	uint64 PackChunkKey(int32 ChunkColumn, int32 ChunkRow)
 	{
-		return (static_cast<uint64>(static_cast<uint32>(TileRow)) << 32)
-			| static_cast<uint64>(static_cast<uint32>(TileColumn));
+		return (static_cast<uint64>(static_cast<uint32>(ChunkRow)) << 32)
+			| static_cast<uint64>(static_cast<uint32>(ChunkColumn));
+	}
+
+	/** Whether this reader is the one that draws the type, the store holding every tier at once. */
+	bool IsBoulder(uint16 TypeId)
+	{
+		const FMassifObjectTypeInfo* TypeInfo = FMassifObjectTypeRegistry::Get().FindTypeInfo(TypeId);
+		return TypeInfo != nullptr && TypeInfo->Category == EMassifObjectCategory::Boulder;
 	}
 }
 
-FTransform MassifRockPlacement::MakeBlockTransform(const FMassifEnvironmentPoint& Block)
+FTransform MassifRockPlacement::MakeBlockTransform(const FMassifObjectPlacement& Block)
 {
-	const FRotator Rotation(Block.RotationDegrees.Y, Block.RotationDegrees.X, Block.RotationDegrees.Z);
-
 	// Half the drawn height stands above the ground before burial takes any of it,
 	// so a block at zero burial rests on the surface rather than half through it.
 	const double HalfHeightMeters = Block.RadiusMeters * BlockFlattening;
@@ -35,7 +37,7 @@ FTransform MassifRockPlacement::MakeBlockTransform(const FMassifEnvironmentPoint
 		FVector(Block.PositionMeters + FVector3d(0.0, 0.0, CentreMeters)) * MetersToCentimeters;
 
 	const double Scale = Block.RadiusMeters * MetersToCentimeters / PlaceholderRadiusCentimeters;
-	return FTransform(Rotation, LocationCentimeters, FVector(Scale, Scale, Scale * BlockFlattening));
+	return FTransform(Block.Rotation, LocationCentimeters, FVector(Scale, Scale, Scale * BlockFlattening));
 }
 
 AMassifRockManager::AMassifRockManager()
@@ -44,57 +46,60 @@ AMassifRockManager::AMassifRockManager()
 	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 }
 
-void AMassifRockManager::Initialize(TSharedPtr<const FMassifEnvironmentState> InEnvironment)
+void AMassifRockManager::Initialize(TSharedPtr<const FMassifObjectStore> InObjectStore)
 {
 	LoadRockMesh();
-	ResetEnvironment(InEnvironment);
+	ResetObjectStore(InObjectStore);
 }
 
-void AMassifRockManager::ResetEnvironment(TSharedPtr<const FMassifEnvironmentState> InEnvironment)
+void AMassifRockManager::ResetObjectStore(TSharedPtr<const FMassifObjectStore> InObjectStore)
 {
-	check(InEnvironment.IsValid());
-	DropAllTiles();
-	Environment = InEnvironment;
+	check(InObjectStore.IsValid());
+	DropAllChunks();
+	ObjectStore = InObjectStore;
 }
 
 void AMassifRockManager::LoadRockMesh()
 {
-	RockMesh = Cast<UStaticMesh>(FSoftObjectPath(RockPlaceholderMeshPath).TryLoad());
+	// The mesh belongs to the type, not to the drawing code: replacing the
+	// placeholder is a registry edit rather than a change here.
+	const FMassifObjectTypeInfo* TypeInfo =
+		FMassifObjectTypeRegistry::Get().FindTypeInfo(MassifObjectTypes::GraniteBoulder);
+	check(TypeInfo != nullptr);
+
+	const FSoftObjectPath MeshPath = TypeInfo->MeshPath.IsValid() ? TypeInfo->MeshPath : TypeInfo->PlaceholderMeshPath;
+	RockMesh = Cast<UStaticMesh>(MeshPath.TryLoad());
 	if (RockMesh == nullptr)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("Rocks: no mesh at %s, boulders are not drawn"), RockPlaceholderMeshPath);
+		UE_LOG(LogTemp, Warning, TEXT("Rocks: no mesh at %s, boulders are not drawn"), *MeshPath.ToString());
 		return;
 	}
 	RockMaterial = RockMesh->GetMaterial(0);
 }
 
-void AMassifRockManager::DropAllTiles()
+void AMassifRockManager::DropAllChunks()
 {
-	for (TPair<uint64, FDrawnTile>& Entry : DrawnTiles)
+	for (TPair<uint64, FDrawnChunk>& Entry : DrawnChunks)
 	{
 		ReleaseComponent(Entry.Value);
 	}
-	DrawnTiles.Reset();
-	TileRequests.Reset();
+	DrawnChunks.Reset();
+	ChunkRequests.Reset();
 }
 
 void AMassifRockManager::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
-	if (!Environment.IsValid() || RockMesh == nullptr)
-	{
-		return;
-	}
-	if (!Environment->FindPointSet(MassifEnvironmentPointSets::RockPlacements()).IsValid())
+	if (!ObjectStore.IsValid() || RockMesh == nullptr)
 	{
 		return;
 	}
 
 	const FVector ViewMeters = GetViewLocationMeters();
-	TileRequests.Reset();
-	DropDistantTiles(ViewMeters);
-	GatherTiles(ViewMeters);
-	BuildRequestedTiles();
+	ChunkRequests.Reset();
+	DropDistantChunks(ViewMeters);
+	GatherChunks(ViewMeters);
+	BuildRequestedChunks();
 }
 
 FVector AMassifRockManager::GetViewLocationMeters() const
@@ -107,23 +112,21 @@ FVector AMassifRockManager::GetViewLocationMeters() const
 	return PlayerController->PlayerCameraManager->GetCameraLocation() / MetersToCentimeters;
 }
 
-double AMassifRockManager::DistanceToTileMeters(int32 TileColumn, int32 TileRow, const FVector& ViewMeters) const
+double AMassifRockManager::DistanceToChunkMeters(int32 ChunkColumn, int32 ChunkRow, const FVector& ViewMeters) const
 {
-	const FMassifChannelGrid& TileGrid = Environment->GetPointSetTileGrid(
-		Environment->FindPointSet(MassifEnvironmentPointSets::RockPlacements()));
-	const FVector2d Centre = TileGrid.CellCentreMeters(TileColumn, TileRow);
+	const FVector2d Centre = ObjectStore->GetChunkGrid().ChunkCentreMeters(ChunkColumn, ChunkRow);
 	return FVector2d(Centre.X - ViewMeters.X, Centre.Y - ViewMeters.Y).Length();
 }
 
-void AMassifRockManager::DropDistantTiles(const FVector& ViewMeters)
+void AMassifRockManager::DropDistantChunks(const FVector& ViewMeters)
 {
 	// Hysteresis, as for the foliage: drawn inside the radius, dropped a tenth
-	// beyond it, so a camera on the boundary does not rebuild a tile every frame.
+	// beyond it, so a camera on the boundary does not rebuild a chunk every frame.
 	TArray<uint64> Departed;
-	for (TPair<uint64, FDrawnTile>& Entry : DrawnTiles)
+	for (TPair<uint64, FDrawnChunk>& Entry : DrawnChunks)
 	{
 		const double DistanceMeters =
-			DistanceToTileMeters(Entry.Value.TileColumn, Entry.Value.TileRow, ViewMeters);
+			DistanceToChunkMeters(Entry.Value.ChunkColumn, Entry.Value.ChunkRow, ViewMeters);
 		if (DistanceMeters > VisibleRadiusMeters * 1.1)
 		{
 			ReleaseComponent(Entry.Value);
@@ -132,76 +135,78 @@ void AMassifRockManager::DropDistantTiles(const FVector& ViewMeters)
 	}
 	for (const uint64 Key : Departed)
 	{
-		DrawnTiles.Remove(Key);
+		DrawnChunks.Remove(Key);
 	}
 }
 
-void AMassifRockManager::GatherTiles(const FVector& ViewMeters)
+void AMassifRockManager::GatherChunks(const FVector& ViewMeters)
 {
-	const FMassifChannelGrid& TileGrid = Environment->GetPointSetTileGrid(
-		Environment->FindPointSet(MassifEnvironmentPointSets::RockPlacements()));
-	const FIntPoint Centre = TileGrid.ContainingCell(FVector2d(ViewMeters.X, ViewMeters.Y));
-	const int32 TileReach = FMath::CeilToInt(VisibleRadiusMeters / TileGrid.CellSizeMeters);
+	const FMassifObjectChunkGrid& ChunkGrid = ObjectStore->GetChunkGrid();
+	const FIntPoint Centre = ChunkGrid.ContainingChunk(FVector2d(ViewMeters.X, ViewMeters.Y));
+	const int32 ChunkReach = FMath::CeilToInt(VisibleRadiusMeters / ChunkGrid.ChunkSizeMeters);
 
-	const int32 SideTileCount = 2 * TileReach + 1;
-	for (int32 TileIndex = 0; TileIndex < SideTileCount * SideTileCount; ++TileIndex)
+	const int32 SideChunkCount = 2 * ChunkReach + 1;
+	for (int32 Index = 0; Index < SideChunkCount * SideChunkCount; ++Index)
 	{
-		const int32 TileColumn = Centre.X - TileReach + TileIndex % SideTileCount;
-		const int32 TileRow = Centre.Y - TileReach + TileIndex / SideTileCount;
-		if (TileGrid.CellIndex(TileColumn, TileRow) == INDEX_NONE)
+		const int32 ChunkColumn = Centre.X - ChunkReach + Index % SideChunkCount;
+		const int32 ChunkRow = Centre.Y - ChunkReach + Index / SideChunkCount;
+		if (ChunkGrid.ChunkIndex(ChunkColumn, ChunkRow) == INDEX_NONE)
 		{
 			continue;
 		}
 
-		const double DistanceMeters = DistanceToTileMeters(TileColumn, TileRow, ViewMeters);
+		const double DistanceMeters = DistanceToChunkMeters(ChunkColumn, ChunkRow, ViewMeters);
 		const bool bWanted = DistanceMeters <= VisibleRadiusMeters
-			&& !DrawnTiles.Contains(PackTileKey(TileColumn, TileRow));
+			&& !DrawnChunks.Contains(PackChunkKey(ChunkColumn, ChunkRow));
 		if (bWanted)
 		{
-			TileRequests.Add({ TileColumn, TileRow, DistanceMeters });
+			ChunkRequests.Add({ ChunkColumn, ChunkRow, DistanceMeters });
 		}
 	}
 }
 
-void AMassifRockManager::BuildRequestedTiles()
+void AMassifRockManager::BuildRequestedChunks()
 {
-	TileRequests.Sort([](const FTileRequest& Left, const FTileRequest& Right)
+	ChunkRequests.Sort([](const FChunkRequest& Left, const FChunkRequest& Right)
 	{
 		return Left.DistanceMeters < Right.DistanceMeters;
 	});
 
-	const int32 BuildCount = FMath::Min(TileRequests.Num(), MaxTileBuildsPerFrame);
+	const int32 BuildCount = FMath::Min(ChunkRequests.Num(), MaxChunkBuildsPerFrame);
 	for (int32 RequestIndex = 0; RequestIndex < BuildCount; ++RequestIndex)
 	{
-		DrawTile(TileRequests[RequestIndex]);
+		DrawChunk(ChunkRequests[RequestIndex]);
 	}
 }
 
-void AMassifRockManager::DrawTile(const FTileRequest& Request)
+void AMassifRockManager::DrawChunk(const FChunkRequest& Request)
 {
-	TArray<FMassifEnvironmentPoint> Blocks;
-	Environment->ReadTilePoints(
-		Environment->FindPointSet(MassifEnvironmentPointSets::RockPlacements()),
-		Request.TileColumn, Request.TileRow, Blocks);
+	const FMassifObjectTypeRegistry& Registry = FMassifObjectTypeRegistry::Get();
+	const TConstArrayView<FMassifObjectRecord> Records =
+		ObjectStore->GetChunkRecords(Request.ChunkColumn, Request.ChunkRow);
 
-	FDrawnTile Tile;
-	Tile.TileColumn = Request.TileColumn;
-	Tile.TileRow = Request.TileRow;
-
-	// Tiles no block reached are still recorded, or they would be re-read every frame.
-	if (!Blocks.IsEmpty())
+	TArray<FTransform> Transforms;
+	Transforms.Reserve(Records.Num());
+	for (const FMassifObjectRecord& Record : Records)
 	{
-		TArray<FTransform> Transforms;
-		Transforms.Reserve(Blocks.Num());
-		for (const FMassifEnvironmentPoint& Block : Blocks)
+		FMassifObjectPlacement Block;
+		if (IsBoulder(Record.TypeId) && MassifObjectRecordCodec::Decode(Record, Registry, Block))
 		{
 			Transforms.Add(MassifRockPlacement::MakeBlockTransform(Block));
 		}
-
-		Tile.ComponentIndex = AcquireComponent();
-		ComponentPool[Tile.ComponentIndex]->AddInstances(Transforms, false, true);
 	}
-	DrawnTiles.Add(PackTileKey(Request.TileColumn, Request.TileRow), Tile);
+
+	FDrawnChunk Chunk;
+	Chunk.ChunkColumn = Request.ChunkColumn;
+	Chunk.ChunkRow = Request.ChunkRow;
+
+	// Chunks no block reached are still recorded, or they would be re-read every frame.
+	if (!Transforms.IsEmpty())
+	{
+		Chunk.ComponentIndex = AcquireComponent();
+		ComponentPool[Chunk.ComponentIndex]->AddInstances(Transforms, false, true);
+	}
+	DrawnChunks.Add(PackChunkKey(Request.ChunkColumn, Request.ChunkRow), Chunk);
 }
 
 int32 AMassifRockManager::AcquireComponent()
@@ -222,13 +227,13 @@ int32 AMassifRockManager::AcquireComponent()
 	return ComponentPool.Add(Component);
 }
 
-void AMassifRockManager::ReleaseComponent(FDrawnTile& Tile)
+void AMassifRockManager::ReleaseComponent(FDrawnChunk& Chunk)
 {
-	if (Tile.ComponentIndex == INDEX_NONE)
+	if (Chunk.ComponentIndex == INDEX_NONE)
 	{
 		return;
 	}
-	ComponentPool[Tile.ComponentIndex]->ClearInstances();
-	FreeComponentIndices.Add(Tile.ComponentIndex);
-	Tile.ComponentIndex = INDEX_NONE;
+	ComponentPool[Chunk.ComponentIndex]->ClearInstances();
+	FreeComponentIndices.Add(Chunk.ComponentIndex);
+	Chunk.ComponentIndex = INDEX_NONE;
 }

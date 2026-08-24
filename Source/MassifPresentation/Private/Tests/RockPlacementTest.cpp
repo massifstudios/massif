@@ -1,12 +1,12 @@
-#include "MassifEnvironmentPointSet.h"
+#include "MassifObjectRecord.h"
 #include "Misc/AutomationTest.h"
 #include "Terrain/MassifRockManager.h"
 
 namespace
 {
-	FMassifEnvironmentPoint MakeBlock(double RadiusMeters, double BuriedFraction)
+	FMassifObjectPlacement MakeBlock(double RadiusMeters, double BuriedFraction)
 	{
-		FMassifEnvironmentPoint Block;
+		FMassifObjectPlacement Block;
 		Block.PositionMeters = FVector3d(-412.5, 907.25, 2143.0);
 		Block.RadiusMeters = RadiusMeters;
 		Block.BuriedFraction = BuriedFraction;
@@ -14,7 +14,7 @@ namespace
 	}
 
 	/** Where the drawn block's underside sits, in metres. */
-	double UndersideAltitudeMeters(const FMassifEnvironmentPoint& Block)
+	double UndersideAltitudeMeters(const FMassifObjectPlacement& Block)
 	{
 		const FTransform Transform = MassifRockPlacement::MakeBlockTransform(Block);
 		const double HalfHeightCentimeters =
@@ -29,10 +29,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRockPlacementTest,
 
 bool FRockPlacementTest::RunTest(const FString& Parameters)
 {
-	const FMassifEnvironmentPoint Block = MakeBlock(1.5, 0.0);
+	const FMassifObjectPlacement Block = MakeBlock(1.5, 0.0);
 	const FTransform Transform = MassifRockPlacement::MakeBlockTransform(Block);
 
-	// The solve works in metres and the engine in centimetres, so the horizontal
+	// The store works in metres and the engine in centimetres, so the horizontal
 	// placement is the one conversion that would silently put every boulder a
 	// hundred times too far out.
 	TestTrue(TEXT("The block is drawn where the fall left it"),
