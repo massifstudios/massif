@@ -406,6 +406,9 @@ namespace
 			Node.GroundAltitudeMeters = GroundAltitude.Evaluate(SpanIndex, Fraction);
 			Node.WaterSurfaceMeters = WaterSurface.Evaluate(SpanIndex, Fraction);
 			Node.DischargeCubicMetersPerSecond = Discharge.Evaluate(SpanIndex, Fraction);
+			// A reach carries one order all the way along it until reaches are
+			// joined into rivers, which happens after this.
+			Node.StrahlerOrder = Nodes[SpanIndex].StrahlerOrder;
 			ShapeChannel(Params, Node);
 			return Node;
 		}
@@ -749,10 +752,150 @@ namespace
 			Node.GroundAltitudeMeters = Measured[CellIndex];
 			Node.WaterSurfaceMeters = WaterSurfaceMeters[RiverIndex];
 			Node.DischargeCubicMetersPerSecond = DischargeCubicMetersPerSecond[CellIndex];
+			Node.StrahlerOrder = StrahlerOrder[RiverIndex];
 			ShapeChannel(Params, Node);
 			return Node;
 		}
 	};
+}
+
+// ---------------------------------------------------------------------------
+// Stringing the traced reaches into whole rivers
+// ---------------------------------------------------------------------------
+
+namespace
+{
+	/**
+	 * Where two reaches meet, to the centimetre.
+	 *
+	 * A reach's last station and the first station of the reach below it are the
+	 * same channel cell, and both survive simplification and smoothing unmoved —
+	 * but they travel there through different arithmetic, so they are compared at
+	 * a resolution far below anything the eight-metre lattice can express.
+	 */
+	FIntVector2 JunctionKey(FVector2d PositionMeters)
+	{
+		return FIntVector2(
+			FMath::RoundToInt32(PositionMeters.X * 100.0),
+			FMath::RoundToInt32(PositionMeters.Y * 100.0));
+	}
+
+	double MouthDischargeCubicMetersPerSecond(const FMassifRiverReach& Reach)
+	{
+		return Reach.Nodes.Last().DischargeCubicMetersPerSecond;
+	}
+
+	/** The reach below each one, found by the junction its own last station stands on. */
+	TArray<int32> MapDownstream(const TArray<FMassifRiverReach>& Reaches)
+	{
+		// A junction has one channel leaving it, so a reach head identifies it.
+		TMap<FIntVector2, int32> ReachAtHead;
+		ReachAtHead.Reserve(Reaches.Num());
+		for (int32 ReachIndex = 0; ReachIndex < Reaches.Num(); ++ReachIndex)
+		{
+			ReachAtHead.Add(JunctionKey(Reaches[ReachIndex].Nodes[0].PositionMeters), ReachIndex);
+		}
+
+		TArray<int32> Downstream;
+		Downstream.Init(INDEX_NONE, Reaches.Num());
+		for (int32 ReachIndex = 0; ReachIndex < Reaches.Num(); ++ReachIndex)
+		{
+			const int32* Below =
+				ReachAtHead.Find(JunctionKey(Reaches[ReachIndex].Nodes.Last().PositionMeters));
+			if (Below != nullptr && *Below != ReachIndex)
+			{
+				Downstream[ReachIndex] = *Below;
+			}
+		}
+		return Downstream;
+	}
+
+	/** Which reach above each junction is the same river carrying on: the one bringing the most water. */
+	TArray<int32> MapContinuations(
+		const TArray<FMassifRiverReach>& Reaches, const TArray<int32>& Downstream)
+	{
+		TArray<int32> Continuation;
+		Continuation.Init(INDEX_NONE, Reaches.Num());
+		for (int32 ReachIndex = 0; ReachIndex < Reaches.Num(); ++ReachIndex)
+		{
+			const int32 Below = Downstream[ReachIndex];
+			if (Below == INDEX_NONE)
+			{
+				continue;
+			}
+
+			// Strictly greater, so an exact tie keeps the lower reach index and the
+			// joining does not depend on the order the reaches were traced in.
+			const int32 Standing = Continuation[Below];
+			const bool bLarger = Standing == INDEX_NONE
+				|| MouthDischargeCubicMetersPerSecond(Reaches[ReachIndex])
+					> MouthDischargeCubicMetersPerSecond(Reaches[Standing]);
+			if (bLarger)
+			{
+				Continuation[Below] = ReachIndex;
+			}
+		}
+		return Continuation;
+	}
+
+	/**
+	 * Adds one reach to the river being built. The first station of every reach
+	 * after the first is the junction the one above already ended on, and taking
+	 * it twice would leave two stations in the same place with nothing between.
+	 */
+	void AppendLink(const FMassifRiverReach& Link, FMassifRiverReach& InOutRiver)
+	{
+		const int32 FirstNode = InOutRiver.Nodes.IsEmpty() ? 0 : 1;
+		for (int32 NodeIndex = FirstNode; NodeIndex < Link.Nodes.Num(); ++NodeIndex)
+		{
+			InOutRiver.Nodes.Add(Link.Nodes[NodeIndex]);
+		}
+		InOutRiver.StrahlerOrder = FMath::Max(InOutRiver.StrahlerOrder, Link.StrahlerOrder);
+	}
+
+	/** One river, from a head down to wherever it stops being the largest channel present. */
+	FMassifRiverReach WalkRiverFrom(
+		int32 HeadIndex, const TArray<FMassifRiverReach>& Reaches,
+		const TArray<int32>& Downstream, const TArray<int32>& Continuation)
+	{
+		FMassifRiverReach River;
+		River.bStartsAtSource = Reaches[HeadIndex].bStartsAtSource;
+
+		int32 ReachIndex = HeadIndex;
+		while (ReachIndex != INDEX_NONE)
+		{
+			AppendLink(Reaches[ReachIndex], River);
+
+			const int32 Below = Downstream[ReachIndex];
+			if (Below == INDEX_NONE || Continuation[Below] != ReachIndex)
+			{
+				return River;
+			}
+			ReachIndex = Below;
+		}
+		return River;
+	}
+
+	/**
+	 * Every reach belongs to exactly one river, and a river starts wherever
+	 * nothing upstream carries on into it — which, because a junction always has
+	 * one of its branches carrying on, is always a channel head.
+	 */
+	TArray<FMassifRiverReach> JoinReachesIntoRivers(const TArray<FMassifRiverReach>& Reaches)
+	{
+		const TArray<int32> Downstream = MapDownstream(Reaches);
+		const TArray<int32> Continuation = MapContinuations(Reaches, Downstream);
+
+		TArray<FMassifRiverReach> Rivers;
+		for (int32 ReachIndex = 0; ReachIndex < Reaches.Num(); ++ReachIndex)
+		{
+			if (Continuation[ReachIndex] == INDEX_NONE)
+			{
+				Rivers.Add(WalkRiverFrom(ReachIndex, Reaches, Downstream, Continuation));
+			}
+		}
+		return Rivers;
+	}
 }
 
 TSharedRef<const FMassifRiverNetwork> MassifBakeCpu::ExtractRivers(
@@ -768,7 +911,11 @@ TSharedRef<const FMassifRiverNetwork> MassifBakeCpu::ExtractRivers(
 {
 	FRiverExtraction Extraction{
 		Grid, Params, Measured, Filled, AccumulationSquareMeters, DischargeCubicMetersPerSecond };
-	TArray<FMassifRiverReach> Reaches = Extraction.Run();
+
+	// Joined before anything is solved over them. Every stage below works a run at
+	// a time, and a run that stops at a confluence solves its water surface with
+	// no knowledge of the water it is about to meet.
+	TArray<FMassifRiverReach> Reaches = JoinReachesIntoRivers(Extraction.Run());
 
 	// After the polylines are traced and resampled, so a section is taken across
 	// the line the water is actually drawn along rather than across the staircase

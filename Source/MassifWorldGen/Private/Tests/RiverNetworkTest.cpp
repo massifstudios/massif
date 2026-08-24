@@ -146,24 +146,36 @@ bool FRiverNetworkConnectivityTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	// Every reach has to hand its water on: either to another reach, at a point
-	// they share exactly, or over the world border. A reach that ends anywhere
+	// Every river has to hand its water on: either to another river, at a station
+	// they share exactly, or over the world border. A river that ends anywhere
 	// else is water disappearing into a hillside.
-	TSet<FVector2d> ReachHeads;
-	for (const FMassifRiverReach& Reach : Rivers->GetReaches())
+	//
+	// Any station of another river, not its head. A river runs through its own
+	// confluences now, so a tributary joins one partway down rather than at a
+	// point where a new run begins.
+	TMap<FVector2d, int32> RiversAtStation;
+	for (const FMassifRiverReach& River : Rivers->GetReaches())
 	{
-		ReachHeads.Add(Reach.Nodes[0].PositionMeters);
+		for (const FMassifRiverNode& Node : River.Nodes)
+		{
+			RiversAtStation.FindOrAdd(Node.PositionMeters) += 1;
+		}
 	}
 
-	int32 ReachesEndingNowhere = 0;
-	for (const FMassifRiverReach& Reach : Rivers->GetReaches())
+	int32 RiversEndingNowhere = 0;
+	for (const FMassifRiverReach& River : Rivers->GetReaches())
 	{
-		const FVector2d EndMeters = Reach.Nodes.Last().PositionMeters;
-		const bool bHandedOn = ReachHeads.Contains(EndMeters) || IsOnWorldBorder(EndMeters);
-		ReachesEndingNowhere += bHandedOn ? 0 : 1;
+		const FVector2d MouthMeters = River.Nodes.Last().PositionMeters;
+		// Its own mouth is one of the stations counted, so being shared means two.
+		const bool bHandedOn =
+			RiversAtStation[MouthMeters] >= 2 || IsOnWorldBorder(MouthMeters);
+		if (!bHandedOn)
+		{
+			++RiversEndingNowhere;
+		}
 	}
 
-	TestEqual(TEXT("Every reach ends at another reach or at the world border"), ReachesEndingNowhere, 0);
+	TestEqual(TEXT("Every river ends in another river or at the world border"), RiversEndingNowhere, 0);
 	TestTrue(TEXT("Rivers start at channel heads"), Rivers->GetSourceCount() > 0);
 	return true;
 }
@@ -354,14 +366,73 @@ bool FRiverNetworkStrahlerTest::RunTest(const FString& Parameters)
 		ExtractFrom(MakeConfluence(), MakeTestRiverParams());
 	TestTrue(TEXT("Two channels meeting make the order above them"), Confluence->GetMaxStrahlerOrder() >= 2);
 
-	int32 ReachesOutOfOrder = 0;
-	for (const FMassifRiverReach& Reach : Confluence->GetReaches())
+	int32 SourcesOutOfOrder = 0;
+	int32 StationsOutOfOrder = 0;
+	for (const FMassifRiverReach& River : Confluence->GetReaches())
 	{
-		// A reach beginning at a channel head has nothing above it by definition,
-		// so it is order one; anything higher means the order came from somewhere
-		// the reach graph does not have an edge for.
-		ReachesOutOfOrder += Reach.bStartsAtSource && Reach.StrahlerOrder != 1 ? 1 : 0;
+		// A river beginning at a channel head has nothing above that head by
+		// definition, so its first station is order one; anything higher means the
+		// order came from somewhere the channel graph has no edge for.
+		if (River.bStartsAtSource && River.Nodes[0].StrahlerOrder != 1)
+		{
+			++SourcesOutOfOrder;
+		}
+
+		// And order can only ever rise going down a river, because the only thing
+		// that changes it is another channel joining.
+		for (int32 NodeIndex = 1; NodeIndex < River.Nodes.Num(); ++NodeIndex)
+		{
+			if (River.Nodes[NodeIndex].StrahlerOrder < River.Nodes[NodeIndex - 1].StrahlerOrder)
+			{
+				++StationsOutOfOrder;
+			}
+		}
 	}
-	TestEqual(TEXT("A reach starting at a source is a headwater"), ReachesOutOfOrder, 0);
+
+	TestEqual(TEXT("A river starting at a source starts as a headwater"), SourcesOutOfOrder, 0);
+	TestEqual(TEXT("Order never falls going downstream"), StationsOutOfOrder, 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRiverNetworkJoinedTest,
+	"Massif.WorldGen.Rivers.Joined",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Reaches are joined into whole rivers before anything is solved over them, so
+ * that the surface solve sweeps a river end to end rather than stopping at every
+ * confluence. What that has to produce is runs that start at a channel head and
+ * hold no repeated station where two of them were joined.
+ */
+bool FRiverNetworkJoinedTest::RunTest(const FString& Parameters)
+{
+	const TSharedRef<const FMassifRiverNetwork> Confluence =
+		ExtractFrom(MakeConfluence(), MakeTestRiverParams());
+
+	int32 RiversNotFromASource = 0;
+	int32 RepeatedStations = 0;
+	for (const FMassifRiverReach& River : Confluence->GetReaches())
+	{
+		// Every junction passes one of its branches on, so the only place a river
+		// can begin is a channel head.
+		if (!River.bStartsAtSource)
+		{
+			++RiversNotFromASource;
+		}
+
+		for (int32 NodeIndex = 1; NodeIndex < River.Nodes.Num(); ++NodeIndex)
+		{
+			const FVector2d StepMeters =
+				River.Nodes[NodeIndex].PositionMeters - River.Nodes[NodeIndex - 1].PositionMeters;
+			if (StepMeters.IsNearlyZero(0.01))
+			{
+				++RepeatedStations;
+			}
+		}
+	}
+
+	TestTrue(TEXT("The confluence traces rivers"), Confluence->GetReaches().Num() > 0);
+	TestEqual(TEXT("Every river begins at a channel head"), RiversNotFromASource, 0);
+	TestEqual(TEXT("A junction is not stationed twice"), RepeatedStations, 0);
 	return true;
 }

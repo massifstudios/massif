@@ -116,6 +116,16 @@ struct FMassifRiverNode
 	/** The ground across the flow here, and how the discharge fits into it. */
 	FMassifChannelProfile Profile;
 
+	/**
+	 * Strahler order of the channel here: 1 is a headwater, and two equal orders
+	 * meeting make the next one up.
+	 *
+	 * Per station rather than per river, because a river gains order as it runs:
+	 * the Ache is a first-order trickle where it starts and a fifth-order river
+	 * where it leaves, and both are the same river.
+	 */
+	int32 StrahlerOrder = 1;
+
 	/** The same water, half-month by half-month. Flat where nothing is known about the year. */
 	FMassifStationSeason Season;
 };
@@ -126,15 +136,30 @@ struct FMassifRiverNode
  * points with the reaches they meet, so the set of them is one connected
  * network rather than a pile of loose lines.
  */
+/**
+ * One river: a continuous run of channel from a head down to wherever it joins
+ * something larger, or leaves the world.
+ *
+ * A whole river rather than the piece between two confluences. The extraction
+ * cuts at every junction, and every stage after it — the section fit, the carve,
+ * and above all the surface solve — works a run at a time. Left as pieces, each
+ * one solves its own water surface from nothing, and the surface steps at every
+ * confluence in the world even though the two sides share a station. Joined, the
+ * backwater sweep runs the length of the river and the steps are not there to be
+ * drawn.
+ *
+ * Joined by following the water: where channels meet, the one carrying the most
+ * is the same river carrying on, and the rest are tributaries that end there.
+ */
 struct FMassifRiverReach
 {
 	/** Upstream first, downstream last. Always at least two nodes. */
 	TArray<FMassifRiverNode> Nodes;
 
-	/** Strahler order: 1 is a headwater, and two equal orders meeting make the next one up. */
+	/** The largest order the river reaches, which it carries at its mouth. */
 	int32 StrahlerOrder = 1;
 
-	/** Whether this reach begins at a channel head rather than where two others meet. */
+	/** Whether this river begins at a channel head rather than where two others meet. */
 	bool bStartsAtSource = false;
 };
 
