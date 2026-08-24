@@ -112,21 +112,57 @@ If a future object type needs more than this, **the record grows to 20 bytes**.
 It does not get solved by overloading what the two bytes mean per type — that is
 the version of this decision that cannot be read back in two years.
 
-## 4. Chunk store
+## 4. Both stored tiers come from world passes
+
+Boulders already do. **Trees become one too**, rather than staying a per-tile
+scatter run lazily.
+
+Storage is the smaller half of the reason. The larger half is that a per-tile
+scatter *structurally cannot* model how a forest is arranged, because every
+mechanism that arranges one reaches past a tile:
+
+- **Competition.** A mature spruce suppresses what grows within its own crown
+  radius. Two candidates either side of a tile edge cannot see each other.
+- **Stand structure.** Age classes, gaps, an edge that thins rather than stops.
+- **Seed dispersal.** A stand spreads from parent trees, which is why a treeline
+  is ragged and why a cleared slope refills from its edges inward.
+- **Disturbance.** Avalanche paths cut forest-free stripes; `Snow.AvalanchePath`
+  is already a channel, and a tree pass can read it directly.
+
+None of that fits behind an apron. A world pass gets all of it, and it makes the
+forest the graph simulated (`Vegetation.Cover`, `Height`, `Canopy`,
+`VegetationClass` from E11) and the trees actually drawn into the same forest —
+the same argument that keeps `RockfallDeposit` and the boulders honest.
+
+Shape: `Vegetation.TreePlacements`, a point set produced by a process
+downstream of the vegetation relaxation group, a leaf of the graph exactly as
+the rockfall is. Cost should be well under the rockfall's 3.6 s — 11.4 M
+candidates, but one habitat evaluation each rather than a 400-step fall.
+
+**This supersedes part of `ARCHITECTURE.md` §5.4.** Its table puts "trees, rocks,
+scree" under *discrete scatter*, seeded per tile with the eight neighbours also
+sampled. That is now true only of the tiers that are not stored. §5.4 needs a
+deliberate edit, not a silent one — it is a locked-decisions document.
+
+## 5. Chunk store
 
 - A chunk is **512 m**, matching the resident tiles (§5.4) and the buckets the
   rockfall point set already uses.
 - A chunk holds a flat array of 16-byte records. No per-record header; the chunk
   header carries the count.
-- A chunk is generated on first need, then **owned by the store** — generation
-  does not run again for it. This is the "loading already generated terrain"
-  half: the cost of placing objects is paid once per chunk, not once per view.
-- Chunk generation must stay order-independent, so a chunk generated alone is
-  identical to the same chunk generated after its neighbours. Boulders already
-  hold to this by coming from a world-wide solve; trees hold to it through the
-  scatter's existing per-tile purity.
+- **Chunks are not generated lazily.** With both stored tiers coming from world
+  passes (§4), the store is filled once at world gen by draining the two point
+  sets into it, and is complete from that moment. Order-independence is not a
+  property the chunking has to defend, because nothing is decided per chunk —
+  the chunk is a storage and streaming unit only.
+- What is lazy is **reading**: a chunk is pulled off disk when the camera or
+  player activity needs it and dropped when they leave, which is what
+  `AMassifRockManager` and the foliage manager already do against the point set.
+- This is the "loading already generated terrain" half. The cost of *placing*
+  objects is paid once ever, at world gen, and then never again for that save —
+  not once per chunk and not once per view.
 
-## 5. Save file
+## 6. Save file
 
 The whole map goes in the save, per the call made when this was specified. The
 argument for it is stronger than the size argument against:
@@ -146,14 +182,14 @@ Required in the header, extending §9: the format version
 against a different model a hard error — and the master seed. A chunk index, so
 loading a region does not read the whole file.
 
-## 6. What this changes in what exists
+## 7. What this changes in what exists
 
 - **Rockfall.** `Geology.RockPlacements` stays the solve's output. The store
   becomes its consumer, converting placements to records once. The environment
   bake stays unserialized (§5.6) — the store is what persists, not the bake.
-- **Foliage.** `ScatterTile` stops running per view and runs once per chunk into
-  the store, for the ten tree species only. The other 44 species keep the
-  present view-time path unchanged.
+- **Foliage.** The ten tree species leave `ScatterTile` entirely for a world
+  pass (§4) writing `Vegetation.TreePlacements`. The other 44 species keep the
+  present view-time path unchanged, so `ScatterTile` stays, with a smaller job.
 - **`AMassifRockManager` and `AMassifFoliageManager`** both become readers of
   the store rather than of their own sources.
 - **Sim separation.** The store is world data, not sim state; presentation reads
@@ -161,7 +197,7 @@ loading a region does not read the whole file.
   a piste — that must reach the sim through masks (§5.5) and the response table
   (§5.6.6), never by the sim reading instances.
 
-## 7. Main menu
+## 8. Main menu
 
 There is no way into the game but PIE, and the store above needs a load path, so
 the menu is what the save work hangs off.
@@ -183,18 +219,14 @@ cannot be an unexplained pause. The scheduler already reports per-process
 timings to the graph inspector, which is enough to drive a real progress bar
 rather than a fake one.
 
-## 8. Open questions
+## 9. Open questions
 
-1. **Trees are not solved yet.** Boulders come from a world-wide fall; trees
-   come from a per-tile scatter that has never been run world-wide at once.
-   Does tree generation stay lazy per chunk, or become a world pass like the
-   rockfall?
-2. **Compression.** Worth it at 50–75 MB, and if so per chunk (so a region can
+1. **Compression.** Worth it at 50–75 MB, and if so per chunk (so a region can
    be read alone) rather than over the whole file.
-3. **Does the store hold anything but scattered content?** Lifts, stations and
+2. **Does the store hold anything but scattered content?** Lifts, stations and
    pistes are placed objects too, but they are sim state and belong in the sim's
    own save section. The line is probably: the store holds what generation
    produced, the sim holds what the player built.
-4. **What happens to a save whose generator has changed?** Storing everything
+3. **What happens to a save whose generator has changed?** Storing everything
    means the old world loads correctly. Confirm that is wanted, rather than a
    warning that the world is stale.
