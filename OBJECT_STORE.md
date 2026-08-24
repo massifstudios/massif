@@ -1,8 +1,12 @@
 # Massif — Object Store and Save Format
 
-Design, captured 2026-08-24. **Nothing here is built yet.** Same standing as
-`ARCHITECTURE.md` once it is: changes are deliberate decisions, not side effects
-of implementation work.
+Design, captured 2026-08-24. Same standing as `ARCHITECTURE.md`: changes are
+deliberate decisions, not side effects of implementation work.
+
+Built as of 2026-08-24: the record and type registry (§3), the chunk store
+(§5), the rockfall drain and the boulder reader (§8), the overlay (§7) and the
+save file (§6). Still design only: the tree world pass (§4) and the main menu
+(§9).
 
 Related: `ARCHITECTURE.md` §5.4 (resident tiles), §5.5 (masks and PCG), §9
 (save data); `DESIGN.md` (UI design system); `ROADMAP.md` M11 (playable loop and
