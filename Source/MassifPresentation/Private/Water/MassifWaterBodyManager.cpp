@@ -63,6 +63,22 @@ namespace
 		ECVF_Default);
 
 	/**
+	 * How much wider than its own water a river's surface is built.
+	 *
+	 * The plugin lays the surface as a flat ribbon exactly this wide and there is
+	 * no water at all outside it, so a ribbon cut to the width the section solve
+	 * fitted leaves channel floor bare wherever the ground the game draws sits
+	 * lower than the section said it would. The ground is what should end the
+	 * water, not the edge of the mesh: built wide, the surplus is buried in the
+	 * bank and the waterline falls where the two actually meet.
+	 */
+	TAutoConsoleVariable<float> GWaterWidthFactor(
+		TEXT("massif.Water.WidthFactor"),
+		2.5f,
+		TEXT("How much wider than its solved water a river's surface is built, so the ground ends it."),
+		ECVF_Default);
+
+	/**
 	 * Spacing the rivers are turned into spline points at.
 	 *
 	 * The network's stations are six metres apart, which is far finer than a
@@ -117,9 +133,12 @@ namespace
 		FRiverStation Station;
 		Station.LocationCentimeters =
 			FVector(Node.PositionMeters.X, Node.PositionMeters.Y, SurfaceMeters) * MetersToCentimeters;
+		// Widened for the surface mesh only. Nothing the solve produced is changed
+		// by it: the water still stands where it stands, and the extra sheet is
+		// under the bank.
 		Station.WidthCentimeters = static_cast<float>(
 			2.0 * SeasonalOr(Season.HalfWidthMeters[TimeSlice], 0.5 * Node.WidthMeters)
-				* MetersToCentimeters);
+				* FMath::Max(GWaterWidthFactor.GetValueOnGameThread(), 1.0f) * MetersToCentimeters);
 		Station.DepthCentimeters = static_cast<float>(
 			SeasonalOr(Season.DepthMeters[TimeSlice], Node.DepthMeters) * MetersToCentimeters);
 		Station.SpeedCentimetersPerSecond = static_cast<float>(
