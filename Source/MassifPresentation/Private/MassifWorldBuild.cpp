@@ -12,6 +12,7 @@
 #include "MassifRiverNetwork.h"
 #include "MassifTerrainField.h"
 #include "MassifWorldSave.h"
+#include "Foliage/MassifTreePass.h"
 #include "UI/MassifEnvironmentSettings.h"
 
 namespace
@@ -181,9 +182,20 @@ namespace
 		Progress.ReportStage(EMassifWorldBuildStage::Objects);
 
 		const double StartSeconds = FPlatformTime::Seconds();
-		OutResult.ObjectStore = MakeShared<const FMassifObjectStore>(
-			MassifObjectStoreBuilder::BuildFromEnvironment(
-				OutResult.EnvironmentScheduler->GetState(), FMassifObjectTypeRegistry::Get()));
+		const FMassifEnvironmentState& Environment = OutResult.EnvironmentScheduler->GetState();
+		const FMassifObjectTypeRegistry& Registry = FMassifObjectTypeRegistry::Get();
+
+		FMassifObjectStore Store = MassifObjectStoreBuilder::MakeEmptyStore(Environment);
+		MassifObjectStoreBuilder::FillFromEnvironment(Environment, Registry, Store);
+
+		Progress.Report(EMassifWorldBuildStage::Objects, TEXT("Trees"), 0.5f);
+		const MassifTreePass::FResult Trees = MassifTreePass::PlantWorld(
+			*OutResult.HabitatField, OutResult.MasterSeed, Registry, Store);
+		OutResult.PlantedTreeCount = Trees.PlantedCount;
+		UE_LOG(LogTemp, Display, TEXT("Trees: %d planted in %.2f s"), Trees.PlantedCount, Trees.Seconds);
+
+		Store.Finalize();
+		OutResult.ObjectStore = MakeShared<const FMassifObjectStore>(MoveTemp(Store));
 		OutResult.ObjectStoreSeconds = FPlatformTime::Seconds() - StartSeconds;
 	}
 

@@ -6,20 +6,28 @@
 
 class FMassifEnvironmentState;
 class FMassifHabitatField;
+class FMassifObjectStore;
 class FMassifTerrainField;
 class UHierarchicalInstancedStaticMeshComponent;
 class UMaterialInstanceDynamic;
 struct FMassifFoliageSpecies;
 
 /**
- * Plants the massif from the habitat derived over the terrain field: for every
- * species, the scatter tiles within its visible radius of the camera are built
- * and handed to one instanced-mesh component each, and dropped again when the
- * camera leaves.
+ * Draws the flora of the massif, from two sources that are deliberately different.
  *
- * Purely presentation. The scatter is a pure function of the seed and the
- * field (see MassifFoliageScatter), so what grows where is stable for a seed
- * however the camera moves, but nothing here is sim state.
+ * **Trees are read, not decided.** They were planted once by the vegetation world
+ * pass and written into the object store, so this streams them a chunk at a time
+ * and turns records into transforms — the same relationship the rock manager has
+ * with the boulders beside them. That is what lets a save hold the forest, and
+ * what will let a felled tree stay felled.
+ *
+ * **Everything shorter is scattered here.** The 44 shrub, grass and flower species
+ * are a pure function of the habitat, the species, the seed and the tile (see
+ * MassifFoliageScatter), so they are built within a species' visible radius of the
+ * camera and dropped again when it leaves. Nobody can interact with an individual
+ * tussock, so nothing is gained by storing 2.4 billion of them.
+ *
+ * Purely presentation either way: nothing here is sim state.
  *
  * A species whose model has not been made yet falls back to a tinted primitive
  * of the right size for its growth form, so the whole table can be planted and
@@ -37,13 +45,15 @@ public:
 	void Initialize(
 		TSharedPtr<const FMassifTerrainField> InField,
 		TSharedPtr<const FMassifEnvironmentState> InEnvironment,
-		uint32 InMasterSeed);
+		uint32 InMasterSeed,
+		TSharedPtr<const FMassifObjectStore> InObjectStore);
 
 	/** Drops every planted tile and regrows against a new field, as ResetField does for terrain. */
 	void ResetField(
 		TSharedPtr<const FMassifTerrainField> InField,
 		TSharedPtr<const FMassifEnvironmentState> InEnvironment,
-		uint32 InMasterSeed);
+		uint32 InMasterSeed,
+		TSharedPtr<const FMassifObjectStore> InObjectStore);
 
 	virtual void Tick(float DeltaSeconds) override;
 
@@ -72,8 +82,29 @@ private:
 	 */
 	static constexpr int32 MaxTileBuildsPerFrame = 16;
 
+	/**
+	 * Fewer than the scatter's, because a chunk is 512 m of every tree species at
+	 * once: one of these costs far more than one shrub tile.
+	 */
+	static constexpr int32 MaxTreeChunkBuildsPerFrame = 4;
+
+	/** One chunk's trees. A chunk holds several species, so it holds a component per species drawn. */
+	struct FDrawnTreeChunk
+	{
+		int32 ChunkColumn = 0;
+		int32 ChunkRow = 0;
+		TArray<int32> ComponentIndices;
+	};
+
 	TSharedPtr<const FMassifHabitatField> Habitat;
+	TSharedPtr<const FMassifObjectStore> ObjectStore;
 	uint32 MasterSeed = 0;
+
+	/** Which species a stored record belongs to, so a chunk scan does not search the table per record. */
+	TMap<uint16, int32> SpeciesIndexByObjectTypeId;
+
+	TMap<uint64, FDrawnTreeChunk> DrawnTreeChunks;
+	TArray<FIntPoint> TreeChunkRequests;
 
 	UPROPERTY()
 	TArray<TObjectPtr<UHierarchicalInstancedStaticMeshComponent>> ComponentPool;
@@ -100,6 +131,9 @@ private:
 	FVector GetViewLocationMeters() const;
 
 	void LoadSpeciesMeshes();
+
+	/** Builds the record type to species lookup the chunk scan reads. */
+	void MapStoredSpecies();
 	bool LoadOneSpecies(const FMassifFoliageSpecies& Species);
 	void AddSpeciesMesh(UStaticMesh& Mesh, UMaterialInstanceDynamic* Material);
 	UMaterialInstanceDynamic* MakePlaceholderMaterial(const FLinearColor& Tint);
@@ -110,6 +144,14 @@ private:
 	void DropDistantTiles(const FVector& ViewMeters);
 	void BuildRequestedTiles();
 	void PlantTile(const FTileRequest& Request);
+
+	void GatherTreeChunks(const FVector& ViewMeters);
+	void DropDistantTreeChunks(const FVector& ViewMeters);
+	void BuildRequestedTreeChunks();
+	void DrawTreeChunk(int32 ChunkColumn, int32 ChunkRow);
+	void AddTreeComponents(const TArray<TArray<FTransform>>& TransformsBySpecies, FDrawnTreeChunk& OutChunk);
+	void ReleaseTreeChunk(FDrawnTreeChunk& Chunk);
+	void DropAllTreeChunks();
 
 	int32 AcquireComponent(int32 SpeciesIndex);
 	void ConfigureComponent(UHierarchicalInstancedStaticMeshComponent& Component, int32 SpeciesIndex);

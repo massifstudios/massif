@@ -17,6 +17,60 @@ namespace
 		Info.bCollides = true;
 		return Info;
 	}
+
+	/**
+	 * One tree species.
+	 *
+	 * The band is crown radius at the smallest and largest the species is planted
+	 * at, which is what the record's size byte quantises over; the mesh is the
+	 * growth-form placeholder the species is drawn with until its model exists.
+	 * Both are the same numbers the flora table carries, and a test in the
+	 * presentation module asserts they have not drifted apart.
+	 */
+	FMassifObjectTypeInfo MakeTree(
+		const TCHAR* Name, const TCHAR* PlaceholderMeshPath, FVector2d CrownRadiusBandMeters)
+	{
+		FMassifObjectTypeInfo Info;
+		Info.Name = Name;
+		Info.Category = EMassifObjectCategory::Tree;
+		Info.PlaceholderMeshPath = FSoftObjectPath(PlaceholderMeshPath);
+		Info.SizeBandMeters = CrownRadiusBandMeters;
+
+		// Trees do not collide yet: nothing walks the massif, and a hundred thousand
+		// collision primitives would be paid for before anything could hit one.
+		Info.bCollides = false;
+		return Info;
+	}
+
+	const TCHAR* ConiferSpire = TEXT("/Game/Models/Placeholder/SM_PhConiferSpire");
+	const TCHAR* ConiferBroad = TEXT("/Game/Models/Placeholder/SM_PhConiferBroad");
+	const TCHAR* ConiferOpen = TEXT("/Game/Models/Placeholder/SM_PhConiferOpen");
+	const TCHAR* BroadleafRound = TEXT("/Game/Models/Placeholder/SM_PhBroadleafRound");
+	const TCHAR* TreeSmall = TEXT("/Game/Models/Placeholder/SM_PhTreeSmall");
+
+	void RegisterTrees(FMassifObjectTypeRegistry& Registry)
+	{
+		Registry.Register(MassifObjectTypes::PiceaAbies,
+			MakeTree(TEXT("Tree.PiceaAbies"), ConiferSpire, FVector2d(1.870, 3.520)));
+		Registry.Register(MassifObjectTypes::LarixDecidua,
+			MakeTree(TEXT("Tree.LarixDecidua"), ConiferOpen, FVector2d(1.920, 3.600)));
+		Registry.Register(MassifObjectTypes::PinusSylvestris,
+			MakeTree(TEXT("Tree.PinusSylvestris"), ConiferBroad, FVector2d(2.210, 3.640)));
+		Registry.Register(MassifObjectTypes::AbiesAlba,
+			MakeTree(TEXT("Tree.AbiesAlba"), ConiferSpire, FVector2d(2.070, 3.565)));
+		Registry.Register(MassifObjectTypes::AcerPseudoplatanus,
+			MakeTree(TEXT("Tree.AcerPseudoplatanus"), BroadleafRound, FVector2d(3.060, 5.220)));
+		Registry.Register(MassifObjectTypes::SorbusAucuparia,
+			MakeTree(TEXT("Tree.SorbusAucuparia"), BroadleafRound, FVector2d(1.260, 2.340)));
+		Registry.Register(MassifObjectTypes::BetulaPendula,
+			MakeTree(TEXT("Tree.BetulaPendula"), BroadleafRound, FVector2d(1.650, 2.970)));
+		Registry.Register(MassifObjectTypes::PopulusTremula,
+			MakeTree(TEXT("Tree.PopulusTremula"), BroadleafRound, FVector2d(1.800, 3.120)));
+		Registry.Register(MassifObjectTypes::PinusCembra,
+			MakeTree(TEXT("Tree.PinusCembra"), ConiferBroad, FVector2d(1.960, 3.920)));
+		Registry.Register(MassifObjectTypes::AlnusIncana,
+			MakeTree(TEXT("Tree.AlnusIncana"), TreeSmall, FVector2d(1.500, 2.600)));
+	}
 }
 
 FMassifObjectTypeRegistry& FMassifObjectTypeRegistry::Get()
@@ -33,6 +87,7 @@ FMassifObjectTypeRegistry& FMassifObjectTypeRegistry::Get()
 void FMassifObjectTypeRegistry::RegisterBuiltinTypes(FMassifObjectTypeRegistry& Registry)
 {
 	Registry.Register(MassifObjectTypes::GraniteBoulder, MakeGraniteBoulder());
+	RegisterTrees(Registry);
 }
 
 void FMassifObjectTypeRegistry::Register(uint16 TypeId, const FMassifObjectTypeInfo& Info)

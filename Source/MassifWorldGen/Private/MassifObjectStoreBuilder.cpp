@@ -112,18 +112,28 @@ int32 MassifObjectStoreBuilder::DrainPointSet(
 	return AddedCount;
 }
 
-FMassifObjectStore MassifObjectStoreBuilder::BuildFromEnvironment(
-	const FMassifEnvironmentState& Environment, const FMassifObjectTypeRegistry& Registry)
+FMassifObjectStore MassifObjectStoreBuilder::MakeEmptyStore(const FMassifEnvironmentState& Environment)
 {
-	FMassifObjectStore Store(FMassifObjectChunkGrid::FromWorldSize(Environment.GetWorldSizeMeters()));
+	return FMassifObjectStore(FMassifObjectChunkGrid::FromWorldSize(Environment.GetWorldSizeMeters()));
+}
 
+void MassifObjectStoreBuilder::FillFromEnvironment(
+	const FMassifEnvironmentState& Environment, const FMassifObjectTypeRegistry& Registry,
+	FMassifObjectStore& Store)
+{
 	for (const FPointSetMapping& Mapping : MakeBuiltinMappings())
 	{
 		const int32 AddedCount = DrainPointSet(Environment, Mapping, Registry, Store);
 		UE_LOG(LogMassifWorldGen, Log, TEXT("Object store: %d objects from '%s'."),
 			AddedCount, *Mapping.PointSetName.ToString());
 	}
+}
 
+FMassifObjectStore MassifObjectStoreBuilder::BuildFromEnvironment(
+	const FMassifEnvironmentState& Environment, const FMassifObjectTypeRegistry& Registry)
+{
+	FMassifObjectStore Store = MakeEmptyStore(Environment);
+	FillFromEnvironment(Environment, Registry, Store);
 	Store.Finalize();
 	return Store;
 }

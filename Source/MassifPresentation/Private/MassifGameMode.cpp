@@ -562,10 +562,10 @@ void AMassifGameMode::SpawnWorldActors(TSharedRef<const FMassifHabitatField> Hab
 
 	TerrainManager = GetWorld()->SpawnActor<AMassifTerrainManager>();
 	TerrainManager->Initialize(TerrainField, LoadTerrainMaterial());
-	TerrainManager->ApplySurfaceMap(HabitatField.Get(), GetMasterSeed());
+	TerrainManager->ApplySurfaceMap(HabitatField.Get(), MasterSeed);
 
 	FoliageManager = GetWorld()->SpawnActor<AMassifFoliageManager>();
-	FoliageManager->Initialize(TerrainField, Environment, GetMasterSeed());
+	FoliageManager->Initialize(TerrainField, Environment, MasterSeed, ObjectStore);
 
 	RockManager = GetWorld()->SpawnActor<AMassifRockManager>();
 	RockManager->Initialize(ObjectStore);

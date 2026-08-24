@@ -37,9 +37,21 @@ namespace MassifObjectStoreBuilder
 		const FMassifObjectTypeRegistry& Registry, FMassifObjectStore& Store);
 
 	/**
-	 * Drains every point set the builtin mappings cover and finalizes the result.
-	 * A set with no mapping is skipped rather than guessed at.
+	 * Drains every point set the builtin mappings cover into an open store. A set
+	 * with no mapping is skipped rather than guessed at.
+	 *
+	 * Does not finalize, because the environment's point sets are not the only
+	 * producer: the tree pass runs off the carved terrain rather than inside the
+	 * graph, so it plants into the same store afterwards.
 	 */
+	MASSIFWORLDGEN_API void FillFromEnvironment(
+		const FMassifEnvironmentState& Environment, const FMassifObjectTypeRegistry& Registry,
+		FMassifObjectStore& Store);
+
+	/** A store holding nothing but the environment's own placements, closed to writes. */
 	MASSIFWORLDGEN_API FMassifObjectStore BuildFromEnvironment(
 		const FMassifEnvironmentState& Environment, const FMassifObjectTypeRegistry& Registry);
+
+	/** The chunk grid a store over this world uses, so a caller can open one itself. */
+	MASSIFWORLDGEN_API FMassifObjectStore MakeEmptyStore(const FMassifEnvironmentState& Environment);
 }

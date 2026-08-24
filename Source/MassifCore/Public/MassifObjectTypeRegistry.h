@@ -89,4 +89,28 @@ namespace MassifObjectTypes
 	 * the band is the whole range the solve can produce rather than a subset.
 	 */
 	inline constexpr uint16 GraniteBoulder = 1;
+
+	/**
+	 * The trees the vegetation pass plants, one type per species.
+	 *
+	 * Trees are stored because a player can fell one, which is the test that puts
+	 * an object in the store at all (OBJECT_STORE.md §2). Everything shorter — the
+	 * shrubs, grasses and flowers of the same table — is scattered at view time
+	 * from the seed and never written anywhere.
+	 *
+	 * These ids are save data and are written down rather than counted out, so
+	 * adding an eleventh species cannot renumber the ten already in saves. Growth
+	 * stages, when they exist, take further ids in this range rather than becoming
+	 * a field on these.
+	 */
+	inline constexpr uint16 PiceaAbies = 256;
+	inline constexpr uint16 LarixDecidua = 257;
+	inline constexpr uint16 PinusSylvestris = 258;
+	inline constexpr uint16 AbiesAlba = 259;
+	inline constexpr uint16 AcerPseudoplatanus = 260;
+	inline constexpr uint16 SorbusAucuparia = 261;
+	inline constexpr uint16 BetulaPendula = 262;
+	inline constexpr uint16 PopulusTremula = 263;
+	inline constexpr uint16 PinusCembra = 264;
+	inline constexpr uint16 AlnusIncana = 265;
 }

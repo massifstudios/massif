@@ -259,7 +259,14 @@ avoid:
 |---|---|---|---|
 | **Continuous fields** | height, slope | **never per-tile.** Always the global field | none by construction |
 | **Derived grids** | flow accumulation, masks, snow | per tile, computed *from* the field with an apron of neighbouring cells that is discarded after | none, provided the apron is at least the widest kernel used |
-| **Discrete scatter** | trees, rocks, scree | per-tile seed, each tile also sampling its 8 neighbours so objects near a border appear in both | none; a seam is not a concept for point sets |
+| **Stored objects** | trees, boulders | **never per-tile.** Placed once by a world pass at generation and written to the object store, which is chunked for storage and streaming only | none; nothing is decided per chunk |
+| **Discrete scatter** | shrubs, grass, flowers, gravel | per-tile seed, each tile also sampling its 8 neighbours so objects near a border appear in both | none; a seam is not a concept for point sets |
+
+The line between the two object rows is `OBJECT_STORE.md` §2: **can the player
+interact with this object as an individual?** A boulder can be blasted for a
+piste and a tree can be felled, so both need an identity that survives a save. A
+tussock cannot, and there are billions of them, so it is re-derived from the seed
+and the position every time it is drawn and never written anywhere.
 
 Terrain shape must never be generated per tile from a tile seed. Adjacent
 tiles would not agree at their shared edge, which is exactly the stitching

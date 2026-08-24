@@ -4,9 +4,13 @@ Design, captured 2026-08-24. Same standing as `ARCHITECTURE.md`: changes are
 deliberate decisions, not side effects of implementation work.
 
 Built as of 2026-08-24: the record and type registry (§3), the chunk store
-(§5), the rockfall drain and the boulder reader (§8), the overlay (§7) and the
-save file (§6). Still design only: the tree world pass (§4) and the main menu
-(§9).
+(§5), the rockfall drain and the boulder reader (§8), the overlay (§7), the
+save file (§6), the tree world pass (§4) and the main menu (§9).
+
+Measured on the Ötztal window: **691 787 trees and 10 481 boulders, 16.1 MB
+resident, a 16.9 MB save**, planted in 1.25 s of a 35 s generation. Far under
+§2's 50–75 MB estimate, for the reason §2 gave — most of this window is above
+the treeline, so its 11.4 M tree candidates come out nearer 0.7 M than 2–4 M.
 
 Related: `ARCHITECTURE.md` §5.4 (resident tiles), §5.5 (masks and PCG), §9
 (save data); `DESIGN.md` (UI design system); `ROADMAP.md` M11 (playable loop and
@@ -165,10 +169,32 @@ forest the graph simulated (`Vegetation.Cover`, `Height`, `Canopy`,
 `VegetationClass` from E11) and the trees actually drawn into the same forest —
 the same argument that keeps `RockfallDeposit` and the boulders honest.
 
-Shape: `Vegetation.TreePlacements`, a point set produced by a process
-downstream of the vegetation relaxation group, a leaf of the graph exactly as
-the rockfall is. Cost should be well under the rockfall's 3.6 s — 11.4 M
-candidates, but one habitat evaluation each rather than a 400-step fall.
+**Shape, as built: a whole-world pass after the solve, not a process inside the
+graph.** This document specified `Vegetation.TreePlacements`, a point set from a
+leaf of the graph downstream of the vegetation relaxation group. It cannot be
+one, and the reason is ordering rather than preference.
+
+Habitat is read off the *carved* terrain field, and the rivers it is carved with
+are traced out of the solved environment. A graph process therefore runs before
+any channel exists, and `FMassifHabitatSample::ChannelDistanceMeters` — the term
+that keeps trees out of rivers — would be unavailable to it. Planting a forest
+down the middle of every watercourse to gain fidelity control over the pass is
+the wrong trade. `MassifExtractRivers` is a whole-world step outside the graph
+for exactly the same reason and says so in the same words.
+
+What the graph would have given up is real and should be recorded: the tree pass
+has no fidelity setting, is not dirty-tracked, and does not re-run when an
+upstream channel changes. It runs once, at generation.
+
+What it keeps is everything the four bullets above are about — it sees the whole
+world at once, and it can read `Snow.AvalanchePath` and the vegetation channels
+directly from the solved state. **None of competition, stand structure or seed
+dispersal is implemented yet.** The pass is currently the same jittered-grid
+habitat scatter, run over the whole world at once instead of per tile behind the
+camera. That is what makes the four possible; it is not them.
+
+Cost, measured: 1.25 s over the 20 × 20 km world, parallel over tiles, against
+the rockfall's 0.9 s.
 
 **This supersedes part of `ARCHITECTURE.md` §5.4.** Its table puts "trees, rocks,
 scree" under *discrete scatter*, seeded per tile with the eight neighbours also

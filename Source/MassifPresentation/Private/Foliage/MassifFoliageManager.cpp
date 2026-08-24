@@ -9,6 +9,8 @@
 #include "MassifFoliageSpecies.h"
 #include "MassifEnvironmentState.h"
 #include "MassifHabitat.h"
+#include "MassifObjectStore.h"
+#include "MassifObjectTypeRegistry.h"
 #include "MassifTerrainField.h"
 #include "UObject/SoftObjectPath.h"
 
@@ -42,6 +44,55 @@ namespace
 		return FVector(-Bounds.Origin.X, -Bounds.Origin.Y, Bounds.BoxExtent.Z - Bounds.Origin.Z);
 	}
 
+	uint64 PackTreeChunkKey(int32 ChunkColumn, int32 ChunkRow)
+	{
+		return (static_cast<uint64>(static_cast<uint32>(ChunkRow)) << 32)
+			| static_cast<uint64>(static_cast<uint32>(ChunkColumn));
+	}
+
+	double DistanceToTreeChunkMeters(
+		const FMassifObjectChunkGrid& Grid, int32 Column, int32 Row, const FVector& ViewMeters)
+	{
+		const FVector2d CentreMeters = Grid.ChunkCentreMeters(Column, Row);
+		return FVector2d(CentreMeters.X - ViewMeters.X, CentreMeters.Y - ViewMeters.Y).Length();
+	}
+
+	/** How far out trees are drawn: the furthest any stored species asks to be seen from. */
+	double TreeVisibleRadiusMeters()
+	{
+		static const double RadiusMeters = []
+		{
+			double Furthest = 0.0;
+			for (const FMassifFoliageSpecies& Species : MassifFoliage::Species)
+			{
+				if (Species.ObjectTypeId != MassifInvalidObjectTypeId)
+				{
+					Furthest = FMath::Max(Furthest, Species.VisibleRadiusMeters);
+				}
+			}
+			return Furthest;
+		}();
+		return RadiusMeters;
+	}
+
+	/**
+	 * Where one stored tree is drawn.
+	 *
+	 * The record keeps a crown radius rather than a mesh scale, because a scale is
+	 * meaningless without the mesh it multiplies and the mesh is going to be
+	 * replaced. The species' own radius at scale 1 is what turns it back.
+	 */
+	FTransform MakeTreeTransform(
+		const FMassifObjectPlacement& Tree, const FMassifFoliageSpecies& Species,
+		const FVector& BaseOffsetCentimeters)
+	{
+		const float Scale = static_cast<float>(Tree.RadiusMeters / Species.CrownRadiusMeters);
+		const FRotator Rotation(0.0f, Tree.Rotation.Yaw, 0.0f);
+		const FVector GroundCentimeters = FVector(Tree.PositionMeters) * MetersToCentimeters;
+		const FVector OffsetCentimeters = Rotation.RotateVector(BaseOffsetCentimeters * Scale);
+		return FTransform(Rotation, GroundCentimeters + OffsetCentimeters, FVector(Scale));
+	}
+
 	TArray<FTransform> MakeInstanceTransforms(
 		const TArray<MassifFoliageScatter::FInstance>& Instances, const FVector& BaseOffsetCentimeters)
 	{
@@ -67,22 +118,41 @@ AMassifFoliageManager::AMassifFoliageManager()
 void AMassifFoliageManager::Initialize(
 	TSharedPtr<const FMassifTerrainField> InField,
 	TSharedPtr<const FMassifEnvironmentState> InEnvironment,
-	uint32 InMasterSeed)
+	uint32 InMasterSeed,
+	TSharedPtr<const FMassifObjectStore> InObjectStore)
 {
 	LoadSpeciesMeshes();
-	ResetField(InField, InEnvironment, InMasterSeed);
+	MapStoredSpecies();
+	ResetField(InField, InEnvironment, InMasterSeed, InObjectStore);
 }
 
 void AMassifFoliageManager::ResetField(
 	TSharedPtr<const FMassifTerrainField> InField,
 	TSharedPtr<const FMassifEnvironmentState> InEnvironment,
-	uint32 InMasterSeed)
+	uint32 InMasterSeed,
+	TSharedPtr<const FMassifObjectStore> InObjectStore)
 {
-	check(InField.IsValid() && InEnvironment.IsValid());
+	check(InField.IsValid() && InEnvironment.IsValid() && InObjectStore.IsValid());
 	DropAllTiles();
+	DropAllTreeChunks();
 	Habitat = MakeShared<const FMassifHabitatField>(
 		InField.ToSharedRef(), InEnvironment.ToSharedRef(), InMasterSeed);
+	ObjectStore = InObjectStore;
 	MasterSeed = InMasterSeed;
+}
+
+void AMassifFoliageManager::MapStoredSpecies()
+{
+	SpeciesIndexByObjectTypeId.Reset();
+	const int32 SpeciesCount = UE_ARRAY_COUNT(MassifFoliage::Species);
+	for (int32 SpeciesIndex = 0; SpeciesIndex < SpeciesCount; ++SpeciesIndex)
+	{
+		const uint16 TypeId = MassifFoliage::Species[SpeciesIndex].ObjectTypeId;
+		if (TypeId != MassifInvalidObjectTypeId)
+		{
+			SpeciesIndexByObjectTypeId.Add(TypeId, SpeciesIndex);
+		}
+	}
 }
 
 void AMassifFoliageManager::LoadSpeciesMeshes()
@@ -180,6 +250,11 @@ void AMassifFoliageManager::Tick(float DeltaSeconds)
 		GatherSpecies(SpeciesIndex, ViewMeters);
 	}
 	BuildRequestedTiles();
+
+	TreeChunkRequests.Reset();
+	DropDistantTreeChunks(ViewMeters);
+	GatherTreeChunks(ViewMeters);
+	BuildRequestedTreeChunks();
 }
 
 FVector AMassifFoliageManager::GetViewLocationMeters() const
@@ -216,7 +291,10 @@ void AMassifFoliageManager::DropDistantTiles(const FVector& ViewMeters)
 
 void AMassifFoliageManager::GatherSpecies(int32 SpeciesIndex, const FVector& ViewMeters)
 {
-	if (SpeciesMeshes[SpeciesIndex] == nullptr)
+	// A stored species is not scattered: where its trees stand was settled once by
+	// the vegetation pass, and re-deriving it here would be a second opinion.
+	if (SpeciesMeshes[SpeciesIndex] == nullptr
+		|| MassifFoliage::Species[SpeciesIndex].ObjectTypeId != MassifInvalidObjectTypeId)
 	{
 		return;
 	}
@@ -275,6 +353,131 @@ void AMassifFoliageManager::PlantTile(const FTileRequest& Request)
 			MakeInstanceTransforms(Instances, SpeciesBaseOffsets[Request.SpeciesIndex]), false, true);
 	}
 	PlantedTiles.Add(PackTileKey(Request.SpeciesIndex, Request.TileX, Request.TileY), Tile);
+}
+
+void AMassifFoliageManager::GatherTreeChunks(const FVector& ViewMeters)
+{
+	const FMassifObjectChunkGrid& Grid = ObjectStore->GetChunkGrid();
+	const int32 ChunkReach = FMath::CeilToInt32(TreeVisibleRadiusMeters() / Grid.ChunkSizeMeters);
+	const FIntPoint CentreChunk = Grid.ContainingChunk(FVector2d(ViewMeters.X, ViewMeters.Y));
+
+	const int32 SideChunkCount = 2 * ChunkReach + 1;
+	for (int32 ChunkIndex = 0; ChunkIndex < SideChunkCount * SideChunkCount; ++ChunkIndex)
+	{
+		const int32 Column = CentreChunk.X - ChunkReach + ChunkIndex % SideChunkCount;
+		const int32 Row = CentreChunk.Y - ChunkReach + ChunkIndex / SideChunkCount;
+		const bool bWanted =
+			DistanceToTreeChunkMeters(Grid, Column, Row, ViewMeters) <= TreeVisibleRadiusMeters()
+			&& !DrawnTreeChunks.Contains(PackTreeChunkKey(Column, Row));
+		if (bWanted)
+		{
+			TreeChunkRequests.Add(FIntPoint(Column, Row));
+		}
+	}
+}
+
+void AMassifFoliageManager::DropDistantTreeChunks(const FVector& ViewMeters)
+{
+	const FMassifObjectChunkGrid& Grid = ObjectStore->GetChunkGrid();
+
+	TArray<uint64> Departed;
+	for (TPair<uint64, FDrawnTreeChunk>& Entry : DrawnTreeChunks)
+	{
+		const double DistanceMeters =
+			DistanceToTreeChunkMeters(Grid, Entry.Value.ChunkColumn, Entry.Value.ChunkRow, ViewMeters);
+		if (DistanceMeters > TreeVisibleRadiusMeters() * 1.1)
+		{
+			ReleaseTreeChunk(Entry.Value);
+			Departed.Add(Entry.Key);
+		}
+	}
+	for (const uint64 Key : Departed)
+	{
+		DrawnTreeChunks.Remove(Key);
+	}
+}
+
+void AMassifFoliageManager::BuildRequestedTreeChunks()
+{
+	const int32 BuildCount = FMath::Min(TreeChunkRequests.Num(), MaxTreeChunkBuildsPerFrame);
+	for (int32 RequestIndex = 0; RequestIndex < BuildCount; ++RequestIndex)
+	{
+		DrawTreeChunk(TreeChunkRequests[RequestIndex].X, TreeChunkRequests[RequestIndex].Y);
+	}
+}
+
+/**
+ * One pass over the chunk, sorting its records into the species they belong to.
+ *
+ * A chunk holds every stored object in its square, boulders included, so the
+ * records this does not recognise are another reader's — not an error.
+ */
+void AMassifFoliageManager::DrawTreeChunk(int32 ChunkColumn, int32 ChunkRow)
+{
+	const int32 SpeciesCount = UE_ARRAY_COUNT(MassifFoliage::Species);
+	TArray<TArray<FTransform>> TransformsBySpecies;
+	TransformsBySpecies.SetNum(SpeciesCount);
+
+	const FMassifObjectTypeRegistry& Registry = FMassifObjectTypeRegistry::Get();
+	for (const FMassifObjectRecord& Record : ObjectStore->GetChunkRecords(ChunkColumn, ChunkRow))
+	{
+		const int32* SpeciesIndex = SpeciesIndexByObjectTypeId.Find(Record.TypeId);
+		if (SpeciesIndex == nullptr || SpeciesMeshes[*SpeciesIndex] == nullptr)
+		{
+			continue;
+		}
+
+		FMassifObjectPlacement Tree;
+		if (!MassifObjectRecordCodec::Decode(Record, Registry, Tree))
+		{
+			continue;
+		}
+		TransformsBySpecies[*SpeciesIndex].Add(
+			MakeTreeTransform(Tree, MassifFoliage::Species[*SpeciesIndex], SpeciesBaseOffsets[*SpeciesIndex]));
+	}
+
+	FDrawnTreeChunk Chunk;
+	Chunk.ChunkColumn = ChunkColumn;
+	Chunk.ChunkRow = ChunkRow;
+	AddTreeComponents(TransformsBySpecies, Chunk);
+
+	// A chunk that grew nothing is still recorded, or it would be rescanned every frame.
+	DrawnTreeChunks.Add(PackTreeChunkKey(ChunkColumn, ChunkRow), MoveTemp(Chunk));
+}
+
+void AMassifFoliageManager::AddTreeComponents(
+	const TArray<TArray<FTransform>>& TransformsBySpecies, FDrawnTreeChunk& OutChunk)
+{
+	for (int32 SpeciesIndex = 0; SpeciesIndex < TransformsBySpecies.Num(); ++SpeciesIndex)
+	{
+		if (TransformsBySpecies[SpeciesIndex].IsEmpty())
+		{
+			continue;
+		}
+		const int32 ComponentIndex = AcquireComponent(SpeciesIndex);
+		ComponentPool[ComponentIndex]->AddInstances(TransformsBySpecies[SpeciesIndex], false, true);
+		OutChunk.ComponentIndices.Add(ComponentIndex);
+	}
+}
+
+void AMassifFoliageManager::ReleaseTreeChunk(FDrawnTreeChunk& Chunk)
+{
+	for (const int32 ComponentIndex : Chunk.ComponentIndices)
+	{
+		ComponentPool[ComponentIndex]->ClearInstances();
+		FreeComponentIndices.Add(ComponentIndex);
+	}
+	Chunk.ComponentIndices.Reset();
+}
+
+void AMassifFoliageManager::DropAllTreeChunks()
+{
+	for (TPair<uint64, FDrawnTreeChunk>& Entry : DrawnTreeChunks)
+	{
+		ReleaseTreeChunk(Entry.Value);
+	}
+	DrawnTreeChunks.Reset();
+	TreeChunkRequests.Reset();
 }
 
 int32 AMassifFoliageManager::AcquireComponent(int32 SpeciesIndex)

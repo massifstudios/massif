@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "MassifHabitat.h"
+#include "MassifObjectTypeRegistry.h"
 
 /**
  * One kind of plant and the habitat it grows in. Presentation data only:
@@ -77,6 +78,26 @@ struct FMassifFoliageSpecies
 
 	float MinScale = 0.8f;
 	float MaxScale = 1.35f;
+
+	/**
+	 * The stored type this species is planted as, or invalid where it is not stored.
+	 *
+	 * Only trees have one. They are placed once by the vegetation world pass and
+	 * written into the object store, because a player can fell an individual tree
+	 * and the store is what gives one an identity to fell (OBJECT_STORE.md §2).
+	 * Everything shorter is scattered at view time from the seed, as all of this
+	 * table used to be, and is never written anywhere.
+	 */
+	uint16 ObjectTypeId = MassifInvalidObjectTypeId;
+
+	/**
+	 * Crown radius at scale 1, for a stored species.
+	 *
+	 * The record keeps a size rather than a scale, because a scale means nothing
+	 * without the mesh it multiplies. The type's size band in the registry is this
+	 * radius over MinScale to MaxScale, and a test asserts the two have not drifted.
+	 */
+	double CrownRadiusMeters = 0.0;
 };
 
 /**
@@ -152,6 +173,8 @@ namespace MassifFoliage
 			.GroundTypeMask = MassifGround::Soil,
 			.MinScale = 0.85f,
 			.MaxScale = 1.60f,
+			.ObjectTypeId = MassifObjectTypes::PiceaAbies,
+			.CrownRadiusMeters = 2.2,
 		},
 		{
 			.Name = TEXT("LarixDecidua"),
@@ -174,6 +197,8 @@ namespace MassifFoliage
 			.GroundTypeMask = MassifGround::Soil | MassifGround::Scree,
 			.MinScale = 0.80f,
 			.MaxScale = 1.50f,
+			.ObjectTypeId = MassifObjectTypes::LarixDecidua,
+			.CrownRadiusMeters = 2.4,
 		},
 		{
 			.Name = TEXT("PinusSylvestris"),
@@ -197,6 +222,8 @@ namespace MassifFoliage
 			.GroundTypeMask = MassifGround::Soil | MassifGround::Scree,
 			.MinScale = 0.85f,
 			.MaxScale = 1.40f,
+			.ObjectTypeId = MassifObjectTypes::PinusSylvestris,
+			.CrownRadiusMeters = 2.6,
 		},
 		{
 			.Name = TEXT("AbiesAlba"),
@@ -221,6 +248,8 @@ namespace MassifFoliage
 			.GroundTypeMask = MassifGround::Soil,
 			.MinScale = 0.90f,
 			.MaxScale = 1.55f,
+			.ObjectTypeId = MassifObjectTypes::AbiesAlba,
+			.CrownRadiusMeters = 2.3,
 		},
 		{
 			.Name = TEXT("AcerPseudoplatanus"),
@@ -242,6 +271,8 @@ namespace MassifFoliage
 			.GroundTypeMask = MassifGround::Soil,
 			.MinScale = 0.85f,
 			.MaxScale = 1.45f,
+			.ObjectTypeId = MassifObjectTypes::AcerPseudoplatanus,
+			.CrownRadiusMeters = 3.6,
 		},
 		{
 			.Name = TEXT("SorbusAucuparia"),
@@ -264,6 +295,8 @@ namespace MassifFoliage
 			.GroundTypeMask = MassifGround::Soil | MassifGround::Scree,
 			.MinScale = 0.70f,
 			.MaxScale = 1.30f,
+			.ObjectTypeId = MassifObjectTypes::SorbusAucuparia,
+			.CrownRadiusMeters = 1.8,
 		},
 		{
 			.Name = TEXT("BetulaPendula"),
@@ -285,6 +318,8 @@ namespace MassifFoliage
 			.GroundTypeMask = MassifGround::Soil | MassifGround::Scree,
 			.MinScale = 0.75f,
 			.MaxScale = 1.35f,
+			.ObjectTypeId = MassifObjectTypes::BetulaPendula,
+			.CrownRadiusMeters = 2.2,
 		},
 		{
 			.Name = TEXT("PopulusTremula"),
@@ -309,6 +344,8 @@ namespace MassifFoliage
 			.GroundTypeMask = MassifGround::Soil,
 			.MinScale = 0.75f,
 			.MaxScale = 1.30f,
+			.ObjectTypeId = MassifObjectTypes::PopulusTremula,
+			.CrownRadiusMeters = 2.4,
 		},
 
 		// --- Subalpine, the larch-cembra treeline woodland --------------------
@@ -334,6 +371,8 @@ namespace MassifFoliage
 			.GroundTypeMask = MassifGround::Soil | MassifGround::Scree,
 			.MinScale = 0.70f,
 			.MaxScale = 1.40f,
+			.ObjectTypeId = MassifObjectTypes::PinusCembra,
+			.CrownRadiusMeters = 2.8,
 		},
 
 		// --- Riparian and avalanche ------------------------------------------
@@ -359,6 +398,8 @@ namespace MassifFoliage
 			.GroundTypeMask = MassifGround::Soil | MassifGround::Wetland,
 			.MinScale = 0.75f,
 			.MaxScale = 1.30f,
+			.ObjectTypeId = MassifObjectTypes::AlnusIncana,
+			.CrownRadiusMeters = 2.0,
 		},
 		{
 			.Name = TEXT("AlnusAlnobetula"),

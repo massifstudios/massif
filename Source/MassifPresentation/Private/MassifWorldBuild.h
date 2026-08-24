@@ -120,6 +120,9 @@ struct FMassifWorldBuildResult
 	double EnvironmentSeconds = 0.0;
 	double ObjectStoreSeconds = 0.0;
 
+	/** Zero on a load: the trees came out of the save rather than being planted. */
+	int32 PlantedTreeCount = 0;
+
 	/** Empty on success; what went wrong otherwise, already logged. */
 	FString Error;
 
