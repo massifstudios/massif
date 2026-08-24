@@ -35,10 +35,10 @@ struct FMassifSurfaceLayer
 	double TileMeters = 4.0;
 
 	/**
-	 * Metres of relief the height map stands for, which is what the parallax
-	 * raymarch offsets by and what the layer boundary is cut against. Measured,
-	 * not a look control: pebbles are a couple of centimetres deep and a rock
-	 * face is a third of a metre.
+	 * Metres of relief the height map stands for. Measured, not a look control:
+	 * pebbles are a couple of centimetres deep and a rock face is a third of a
+	 * metre. Nothing reads it while the surface has no displacement on it; the
+	 * layer boundary is cut against the height map's own 0-1 range.
 	 */
 	double ReliefMeters = 0.03;
 

@@ -1,6 +1,6 @@
 // Terrain surface sampling: which two ground layers a pixel wears, projected on
-// three world axes, bent by a slow noise so the repeat does not read as a grid,
-// and offset by a parallax raymarch so the relief in the height map stands up.
+// three world axes, and bent by a slow noise so the repeat does not read as a
+// grid.
 //
 // The layers themselves are chosen on the CPU (MassifSurfaceMap.h) and arrive as
 // two world-wide lookup textures. Everything here is about drawing the two it
@@ -61,39 +61,6 @@ static const float MassifMacroVariation = 0.14f;
 static const float MassifMacroWavelengthMeters = 17.0f;
 
 /**
- * How far the parallax ray is allowed to travel between height samples, as a
- * fraction of the texture. A few texels of the 2k arrays: finer buys nothing the
- * height map can resolve, coarser draws the hit as steps.
- */
-static const float MassifParallaxStepUv = 4.0f / 2048.0f;
-
-/**
- * The longest sweep the march can resolve: the whole step budget spent at the
- * spacing above. Past it the ray is stepping over the features it is meant to be
- * hitting, and near-edge-on ground draws as streaks along the view.
- */
-static const float MassifParallaxMaxSweepUv = MassifParallaxStepUv * 32.0f;
-
-/**
- * Halvings of the step the surface was crossed in. Six put the hit within a
- * sixtieth of a step, which is finer than the height map can say anything about;
- * fewer leave the facets of the walk visible on steep ground.
- */
-static const int MassifParallaxRefineSteps = 6;
-
-/**
- * How high the sun has to stand over a face before the relief is allowed to
- * shadow itself, as the cosine between the light and the face. A sun on the
- * horizon of a surface throws shadows the length of the whole tile out of a
- * couple of centimetres of relief.
- */
-static const float MassifParallaxFullSlope = 0.5f;
-
-/** Steps taken up through the relief toward the sun, and how hard what blocks it reads. */
-static const int MassifParallaxShadowSteps = 8;
-static const float MassifParallaxShadowHardness = 6.0f;
-
-/**
  * Bends the projected coordinate by a noise slow enough to be continuous
  * everywhere, so the straight lines the repeat would otherwise draw wander.
  *
@@ -127,131 +94,7 @@ float2 MassifPlanarUv(float2 Planar, float TileMeters)
 	return Planar / max(TileMeters, 0.01f);
 }
 
-/**
- * Walks the view ray through the height map until it passes below the surface,
- * then bisects the step it crossed in and returns the coordinate of the meeting.
- * This is what makes a flat triangle read as gravel with depth between the
- * stones rather than as a photograph of gravel.
- *
- * SweepUv is the whole crossing the ray would make through the relief, so it
- * already carries how obliquely the surface is seen and how much relief the
- * distance leaves worth drawing.
- */
-float2 MassifParallaxUv(
-	Texture2DArray HeightArray,
-	SamplerState HeightSampler,
-	float Slice,
-	float2 TileUv,
-	float2 SweepUv)
-{
-	float SweepLength = length(SweepUv);
-	if (SweepLength < MassifParallaxStepUv)
-	{
-		return TileUv;
-	}
-
-	// A ray asked to cross further than the budget can resolve steps over features
-	// instead of landing on them, and the surface smears along the view. Cutting
-	// the sweep back gives up depth where the surface is nearly edge-on, which is
-	// where it was least readable anyway.
-	float SweptLength = min(SweepLength, MassifParallaxMaxSweepUv);
-	float2 Sweep = SweepUv * (SweptLength / SweepLength);
-
-	// Steps are spent in proportion to how far the ray actually travels across the
-	// texture, which is what decides how coarsely the hit is quantised. Spending
-	// them on anything else — the distance to the camera, say — leaves a short
-	// sweep oversampled and a long one drawing as steps.
-	float StepCount = floor(clamp(SweptLength / MassifParallaxStepUv, 1.0f, 32.0f));
-	float StepHeight = 1.0f / StepCount;
-	float2 StepUv = Sweep * StepHeight;
-
-	float RayHeight = 1.0f;
-	float2 CurrentUv = TileUv;
-	float CurrentHeight = HeightArray.SampleLevel(HeightSampler, float3(CurrentUv, Slice), 0).r;
-
-	// Fixed trip count: a while loop over a texture-dependent condition cannot be
-	// unrolled, and the compiler needs a bound to keep the gradient valid.
-	for (int Step = 0; Step < 32; ++Step)
-	{
-		if (Step >= (int)StepCount || CurrentHeight >= RayHeight)
-		{
-			break;
-		}
-		RayHeight -= StepHeight;
-		CurrentUv += StepUv;
-		CurrentHeight = HeightArray.SampleLevel(HeightSampler, float3(CurrentUv, Slice), 0).r;
-	}
-
-	// The walk above only says which step the surface was crossed in. Reading the
-	// crossing off a straight line between that step's two ends rebuilds the
-	// relief as one flat facet per step, and those facets draw as terraces across
-	// anything steep. Halving the interval instead converges on where the ray
-	// really met the height field, wherever inside the step that is.
-	float2 AboveUv = CurrentUv - StepUv;
-	float AboveRay = RayHeight + StepHeight;
-	float2 BelowUv = CurrentUv;
-	float BelowRay = RayHeight;
-
-	for (int Refine = 0; Refine < MassifParallaxRefineSteps; ++Refine)
-	{
-		float2 MidUv = 0.5f * (AboveUv + BelowUv);
-		float MidRay = 0.5f * (AboveRay + BelowRay);
-		float MidHeight = HeightArray.SampleLevel(HeightSampler, float3(MidUv, Slice), 0).r;
-		if (MidHeight >= MidRay)
-		{
-			BelowUv = MidUv;
-			BelowRay = MidRay;
-			continue;
-		}
-		AboveUv = MidUv;
-		AboveRay = MidRay;
-	}
-	return BelowUv;
-}
-
-/**
- * How much of the sun reaching the point the ray landed on is cut off by the
- * relief standing between it and the sky.
- *
- * Offsetting the texture on its own only moves it about, and a shallow relief
- * moved about reads as the ground sliding rather than as ground with depth in
- * it. What says a stone stands up is the shadow it throws into the hollow beside
- * it, so the march is run a second time, from the hit upward along the light.
- *
- * LightSweepUv is the crossing a ray would make climbing the whole relief; the
- * hit only has to climb what is left above it.
- */
-float MassifParallaxShadow(
-	Texture2DArray HeightArray,
-	SamplerState HeightSampler,
-	float Slice,
-	float2 HitUv,
-	float HitHeight,
-	float2 LightSweepUv)
-{
-	float Climb = 1.0f - HitHeight;
-	if (Climb <= 0.0f)
-	{
-		return 1.0f;
-	}
-
-	float StepHeight = Climb / MassifParallaxShadowSteps;
-	float2 StepUv = LightSweepUv * (Climb / MassifParallaxShadowSteps);
-
-	float RayHeight = HitHeight;
-	float2 Uv = HitUv;
-	float Blocked = 0.0f;
-	for (int Step = 0; Step < MassifParallaxShadowSteps; ++Step)
-	{
-		RayHeight += StepHeight;
-		Uv += StepUv;
-		Blocked = max(Blocked,
-			HeightArray.SampleLevel(HeightSampler, float3(Uv, Slice), 0).r - RayHeight);
-	}
-	return saturate(1.0f - Blocked * MassifParallaxShadowHardness);
-}
-
-/** One layer sampled on one axis, with the tile bend and the parallax already applied. */
+/** One layer sampled on one axis, with the tile bend already applied. */
 FMassifSurfaceSample MassifSampleAxis(
 	Texture2DArray ColorArray, SamplerState ColorSampler,
 	Texture2DArray NormalArray, SamplerState NormalSampler,
@@ -263,44 +106,17 @@ FMassifSurfaceSample MassifSampleAxis(
 	float2 PlanarDdy,
 	float3 TangentU,
 	float3 TangentV,
-	float3 ViewDirection,
-	float3 LightDirection,
-	float TileMeters,
-	float ReliefMeters,
-	float ParallaxScale)
+	float TileMeters)
 {
-	float2 Uv = MassifTileUv(MassifPlanarUv(Planar, TileMeters));
-
-	// How fast the coordinate moves between neighbouring pixels, taken from where
-	// the pixel is rather than from where the raymarch left it. The march stops at
-	// whatever feature the ray met, so its result jumps between pixels that landed
-	// on different ones; a gradient measured from that asks for a mip far coarser
-	// than the ground needs, and the texture goes to mush along the view.
+	// How fast the coordinate moves between neighbouring pixels, carried in rather
+	// than measured here. Which layers a pixel wears decides which of the branches
+	// below it runs, and a pixel that took a different branch than its neighbour
+	// has no implicit derivative worth reading.
 	float2 UvDdx = PlanarDdx / max(TileMeters, 0.01f);
 	float2 UvDdy = PlanarDdy / max(TileMeters, 0.01f);
 
 	float3 AxisNormal = cross(TangentU, TangentV);
-	float3 ViewTangent = float3(
-		dot(ViewDirection, TangentU), dot(ViewDirection, TangentV), dot(ViewDirection, AxisNormal));
-
-	// What a ray crossing the whole relief covers, in tiles.
-	//
-	// ParallaxScale shortens the sweep rather than the march. It stands for how
-	// much relief is worth drawing at this distance, and relief that is being
-	// given up has to leave the offset, not the sampling of it: dropping the
-	// march while the offset stays its full size is what draws the ground as
-	// bands that slide over each other.
-	//
-	// How obliquely the surface is seen is left to stretch the sweep as it
-	// actually does, and the length clamp in the march is what bounds it. Fading
-	// the relief itself by the angle instead makes the depth of a patch of ground
-	// a function of where it sits on the screen, so it flattens out toward the
-	// edges and swims as the view turns.
-	float ReliefUv = ReliefMeters * ParallaxScale / max(TileMeters, 0.01f);
-	float2 SweepUv = -ViewTangent.xy / max(abs(ViewTangent.z), 0.05f) * ReliefUv;
-
-	float3 TileUv = float3(
-		MassifParallaxUv(HeightArray, HeightSampler, Slice, Uv, SweepUv), Slice);
+	float3 TileUv = float3(MassifTileUv(MassifPlanarUv(Planar, TileMeters)), Slice);
 
 	FMassifSurfaceSample Result;
 	Result.BaseColor = ColorArray.SampleGrad(ColorSampler, TileUv, UvDdx, UvDdy).rgb;
@@ -314,22 +130,6 @@ FMassifSurfaceSample MassifSampleAxis(
 		NormalArray.SampleGrad(NormalSampler, TileUv, UvDdx, UvDdy).xyz * 2.0f - 1.0f;
 	Result.NormalWorld =
 		TangentU * TangentNormal.x + TangentV * TangentNormal.y + AxisNormal * TangentNormal.z;
-
-	if (ReliefUv <= 0.0f)
-	{
-		return Result;
-	}
-
-	float3 LightTangent = float3(
-		dot(LightDirection, TangentU), dot(LightDirection, TangentV), dot(LightDirection, AxisNormal));
-	float2 LightSweepUv = LightTangent.xy / max(LightTangent.z, MassifParallaxFullSlope) * ReliefUv;
-	float Shadow = MassifParallaxShadow(
-		HeightArray, HeightSampler, Slice, TileUv.xy, Result.Height, LightSweepUv);
-
-	// A material has no way to hold light off a pixel, so the shadow goes into the
-	// colour. Faded out as the sun comes down to the surface, where the relief
-	// would otherwise throw shadows the length of the tile.
-	Result.BaseColor *= lerp(1.0f, Shadow, saturate(LightTangent.z / MassifParallaxFullSlope));
 	return Result;
 }
 
@@ -354,33 +154,23 @@ FMassifSurfaceSample MassifSampleLayer(
 	float3 PositionMeters,
 	float3 PositionDdx,
 	float3 PositionDdy,
-	float3 ViewDirection,
-	float3 LightDirection,
 	float3 TriplanarWeights,
-	float TileMeters,
-	float ReliefMeters,
-	float ParallaxScale)
+	float TileMeters)
 {
-	// Parallax only on the axis that carries the pixel: raymarching the two
-	// projections that are nearly edge-on costs as much as the one being looked
-	// at and moves almost nothing.
 	FMassifSurfaceSample AxisX = MassifSampleAxis(
 		ColorArray, ColorSampler, NormalArray, NormalSampler, ArmArray, ArmSampler,
 		HeightArray, HeightSampler, Slice, PositionMeters.yz, PositionDdx.yz, PositionDdy.yz,
-		float3(0.0f, 1.0f, 0.0f), float3(0.0f, 0.0f, 1.0f), ViewDirection, LightDirection,
-		TileMeters, ReliefMeters, ParallaxScale * step(0.5f, TriplanarWeights.x));
+		float3(0.0f, 1.0f, 0.0f), float3(0.0f, 0.0f, 1.0f), TileMeters);
 
 	FMassifSurfaceSample AxisY = MassifSampleAxis(
 		ColorArray, ColorSampler, NormalArray, NormalSampler, ArmArray, ArmSampler,
 		HeightArray, HeightSampler, Slice, PositionMeters.zx, PositionDdx.zx, PositionDdy.zx,
-		float3(0.0f, 0.0f, 1.0f), float3(1.0f, 0.0f, 0.0f), ViewDirection, LightDirection,
-		TileMeters, ReliefMeters, ParallaxScale * step(0.5f, TriplanarWeights.y));
+		float3(0.0f, 0.0f, 1.0f), float3(1.0f, 0.0f, 0.0f), TileMeters);
 
 	FMassifSurfaceSample AxisZ = MassifSampleAxis(
 		ColorArray, ColorSampler, NormalArray, NormalSampler, ArmArray, ArmSampler,
 		HeightArray, HeightSampler, Slice, PositionMeters.xy, PositionDdx.xy, PositionDdy.xy,
-		float3(1.0f, 0.0f, 0.0f), float3(0.0f, 1.0f, 0.0f), ViewDirection, LightDirection,
-		TileMeters, ReliefMeters, ParallaxScale * step(0.5f, TriplanarWeights.z));
+		float3(1.0f, 0.0f, 0.0f), float3(0.0f, 1.0f, 0.0f), TileMeters);
 
 	FMassifSurfaceSample Result;
 	Result.BaseColor =
@@ -599,7 +389,11 @@ float2 MassifWarpMapUv(
 	return MapUv + OffsetMeters * MapUvPerMeter;
 }
 
-/** One layer's tiling and relief, from the row of constants that mirrors the layer table. */
+/**
+ * One layer's row of constants, from the texture that mirrors the layer table.
+ * Red is the tiling distance; the relief in green is not read while the surface
+ * has no displacement on it.
+ */
 float4 MassifLoadLayerParams(Texture2D LayerParams, float Slice)
 {
 	return LayerParams.Load(int3((int)Slice, 0, 0));
@@ -624,10 +418,7 @@ FMassifSurfaceSample MassifSampleGround(
 	float2 MapUv,
 	float2 MapUvPerMeter,
 	float3 PositionMeters,
-	float3 ViewDirection,
-	float3 LightDirection,
 	float3 VertexNormal,
-	float ParallaxScale,
 	float BlendContrast,
 	float WarpMeters,
 	float WarpWavelengthMeters,
@@ -655,7 +446,7 @@ FMassifSurfaceSample MassifSampleGround(
 	FMassifSurfaceSample Ground = MassifSampleLayer(
 		ColorArray, ColorSampler, NormalArray, NormalSampler, ArmArray, ArmSampler,
 		HeightArray, HeightSampler, Pair.NearSlice, PositionMeters, PositionDdx, PositionDdy,
-		ViewDirection, LightDirection, Weights, NearParams.r, NearParams.g, ParallaxScale);
+		Weights, NearParams.r);
 
 	if (Pair.FarWeight > 0.002f)
 	{
@@ -663,7 +454,7 @@ FMassifSurfaceSample MassifSampleGround(
 		FMassifSurfaceSample Far = MassifSampleLayer(
 			ColorArray, ColorSampler, NormalArray, NormalSampler, ArmArray, ArmSampler,
 			HeightArray, HeightSampler, Pair.FarSlice, PositionMeters, PositionDdx, PositionDdy,
-			ViewDirection, LightDirection, Weights, FarParams.r, FarParams.g, ParallaxScale);
+			Weights, FarParams.r);
 		float Weight = MassifHeightBlendWeight(Ground.Height, Far.Height, Pair.FarWeight, BlendContrast);
 		Ground = MassifBlendSamples(Ground, Far, Weight);
 	}
@@ -686,7 +477,7 @@ FMassifSurfaceSample MassifSampleGround(
 	FMassifSurfaceSample Snow = MassifSampleLayer(
 		ColorArray, ColorSampler, NormalArray, NormalSampler, ArmArray, ArmSampler,
 		HeightArray, HeightSampler, SnowSlice, PositionMeters, PositionDdx, PositionDdy,
-		ViewDirection, LightDirection, Weights, SnowParams.r, SnowParams.g, ParallaxScale);
+		Weights, SnowParams.r);
 
 	// Height-blended like any other boundary, so a thin cover fills the hollows
 	// between stones first and leaves their tops bare, the way settling snow does.

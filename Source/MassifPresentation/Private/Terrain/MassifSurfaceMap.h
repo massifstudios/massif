@@ -70,7 +70,7 @@ namespace MassifSurfaceMap
 	/**
 	 * The per-layer constants the shader needs once it knows which layer it is
 	 * drawing, as a LayerCount x 1 float texture: red is the tiling in metres,
-	 * green the relief the parallax offsets by. A texture rather than an array
+	 * green the relief the height map stands for. A texture rather than an array
 	 * of material parameters because the layer index is only known per pixel,
 	 * and a material graph cannot index a parameter with it.
 	 */

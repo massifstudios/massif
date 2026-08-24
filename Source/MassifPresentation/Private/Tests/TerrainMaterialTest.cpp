@@ -8,8 +8,8 @@
 /**
  * A terrain material that fails to translate is replaced by the engine default,
  * which draws as plausible grey ground: the massif still renders, so nothing
- * looks broken enough to notice, and every texture, layer blend and parallax
- * step silently stops existing. The engine says so once, at warning level,
+ * looks broken enough to notice, and every texture and layer blend silently
+ * stops existing. The engine says so once, at warning level,
  * among thousands of lines.
  *
  * Loading the material is enough to translate it, which is where a bad custom

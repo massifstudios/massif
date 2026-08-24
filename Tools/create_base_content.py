@@ -2,10 +2,9 @@
 
 M_Terrain draws the two ground layers the classification chose for each point
 (MassifSurfaceMap.h), out of the texture arrays Tools/create_terrain_arrays.py
-builds. The sampling itself — triplanar projection, the bend that breaks the
-repeat, and the parallax raymarch — lives in Shaders/MassifTerrainSurface.ush;
-this wires a custom node to it and hangs the debug channel overlay off the
-result.
+builds. The sampling itself — triplanar projection and the bend that breaks the
+repeat — lives in Shaders/MassifTerrainSurface.ush; this wires a custom node to
+it and hangs the debug channel overlay off the result.
 
 Run Tools/fetch_polyhaven_textures.py and Tools/create_terrain_arrays.py first.
 
@@ -30,11 +29,6 @@ GROUND_ARRAYS = {
 }
 
 WHITE_TEXTURE = "/Engine/EngineResources/WhiteSquareTexture"
-
-# Where the parallax raymarch is worth paying for. Past the far distance the
-# offset is smaller than a pixel and the steps buy nothing, so it fades out.
-PARALLAX_FADE_START_METERS = 40.0
-PARALLAX_FADE_END_METERS = 220.0
 
 # How wide, in classification weight, the band the two layers swap over is.
 # Outside it one of them takes the pixel outright, so this is what decides how
@@ -187,40 +181,6 @@ def make_world_uv(material, position_meters, x, y):
     return placed, scale
 
 
-def make_sun_direction(material, x, y):
-    """
-    Which way the sun lies, for the relief to cast into itself. The atmosphere
-    light is the one MassifGameMode marks as the sun, so the material reads it
-    from there rather than being told separately and drifting out of step.
-    """
-    node = expr(material, unreal.MaterialExpressionSkyAtmosphereLightDirection, x, y)
-    node.set_editor_property("light_index", 0)
-    return node
-
-
-def make_parallax_scale(material, x, y):
-    """1 where the raymarch is worth its steps, falling to 0 where its offset is sub-pixel."""
-    depth = expr(material, unreal.MaterialExpressionPixelDepth, x, y)
-
-    offset = expr(material, unreal.MaterialExpressionSubtract, x + 200, y)
-    offset.set_editor_property("const_a", PARALLAX_FADE_END_METERS * 100.0)
-    connect(depth, "", offset, "B")
-
-    scale = expr(material, unreal.MaterialExpressionMultiply, x + 400, y)
-    scale.set_editor_property(
-        "const_b", 1.0 / ((PARALLAX_FADE_END_METERS - PARALLAX_FADE_START_METERS) * 100.0))
-    connect(offset, "", scale, "A")
-
-    saturate = expr(material, unreal.MaterialExpressionSaturate, x + 600, y)
-    connect(scale, "", saturate, "")
-
-    strength = scalar_parameter(material, "ParallaxStrength", 1.0, x + 400, y + 150)
-    scaled = expr(material, unreal.MaterialExpressionMultiply, x + 800, y)
-    connect(saturate, "", scaled, "A")
-    connect(strength, "", scaled, "B")
-    return scaled
-
-
 SURFACE_CODE = """
 FMassifSurfaceSample Ground = MassifSampleGround(
 	IndexMap,
@@ -230,8 +190,8 @@ FMassifSurfaceSample Ground = MassifSampleGround(
 	NormalArray, NormalArraySampler,
 	ArmArray, ArmArraySampler,
 	HeightArray, HeightArraySampler,
-	MapUv, MapUvPerMeter, PositionMeters, ViewDirection, LightDirection, VertexNormal,
-	ParallaxScale, BlendContrast, WarpMeters, WarpWavelengthMeters, SnowSlice);
+	MapUv, MapUvPerMeter, PositionMeters, VertexNormal,
+	BlendContrast, WarpMeters, WarpWavelengthMeters, SnowSlice);
 
 Normal = Ground.NormalWorld;
 Roughness = Ground.Roughness;
@@ -250,10 +210,7 @@ SURFACE_INPUT_NAMES = (
     "MapUv",
     "MapUvPerMeter",
     "PositionMeters",
-    "ViewDirection",
-    "LightDirection",
     "VertexNormal",
-    "ParallaxScale",
     "BlendContrast",
     "WarpMeters",
     "WarpWavelengthMeters",
@@ -308,15 +265,9 @@ def build_surface_graph(material):
     for index, (input_name, asset_path) in enumerate(GROUND_ARRAYS.items()):
         connect(texture_object(material, asset_path, -600, 600 + index * 120), "", node, input_name)
 
-    camera_vector = expr(material, unreal.MaterialExpressionCameraVectorWS, -600, 1100)
-    connect(camera_vector, "", node, "ViewDirection")
-
-    connect(make_sun_direction(material, -600, 1150), "", node, "LightDirection")
-
     vertex_normal = expr(material, unreal.MaterialExpressionVertexNormalWS, -600, 1200)
     connect(vertex_normal, "", node, "VertexNormal")
 
-    connect(make_parallax_scale(material, -1600, 1300), "", node, "ParallaxScale")
     connect(scalar_parameter(material, "LayerBlendContrast", LAYER_BLEND_CONTRAST, -600, 1400), "", node, "BlendContrast")
     connect(
         scalar_parameter(material, "SurfaceWarpMeters", SURFACE_WARP_METERS, -600, 1500),
