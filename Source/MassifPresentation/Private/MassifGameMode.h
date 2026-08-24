@@ -8,9 +8,11 @@ class AMassifDebugChannelView;
 class AMassifDaylightManager;
 class AMassifFogManager;
 class AMassifFoliageManager;
+class AMassifRockManager;
 class AMassifWaterBodyManager;
 class AMassifTerrainManager;
 class FMassifEnvironmentScheduler;
+class FMassifEnvironmentState;
 class FMassifHeightmap;
 class FMassifRiverField;
 class FMassifRiverNetwork;
@@ -64,6 +66,7 @@ private:
 	bool BuildEnvironment(TSharedRef<const FMassifHeightmap> Heightmap);
 
 	void LogEnvironmentSummary(double SolveSeconds) const;
+	void LogRockfallSummary(const FMassifEnvironmentState& Environment) const;
 	void LogRiverSummary(const FMassifRiverNetwork& Rivers) const;
 
 	/** The elevation model with the solved rivers cut into it. Needs the environment to have run. */
@@ -98,6 +101,9 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<AMassifFoliageManager> FoliageManager;
+
+	UPROPERTY()
+	TObjectPtr<AMassifRockManager> RockManager;
 
 	UPROPERTY()
 	TObjectPtr<AMassifWaterBodyManager> WaterBodyManager;

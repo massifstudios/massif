@@ -175,22 +175,6 @@ namespace
 
 	constexpr double DegreesPerTurn = 360.0;
 
-	/** Cell a world position falls inside, clamped to the grid. Not the cell-centre lattice. */
-	FIntPoint ContainingCell(const FMassifChannelGrid& Grid, FVector2d PositionMeters)
-	{
-		const int32 Column = FMath::FloorToInt32((PositionMeters.X + 0.5 * Grid.WorldSizeXMeters) / Grid.CellSizeMeters);
-		const int32 Row = FMath::FloorToInt32((0.5 * Grid.WorldSizeYMeters - PositionMeters.Y) / Grid.CellSizeMeters);
-		return FIntPoint(FMath::Clamp(Column, 0, Grid.Width - 1), FMath::Clamp(Row, 0, Grid.Height - 1));
-	}
-
-	/** North-west corner of a cell, which is what a stored offset is measured from. */
-	FVector2d CellCornerMeters(const FMassifChannelGrid& Grid, FIntPoint Cell)
-	{
-		return FVector2d(
-			Cell.X * Grid.CellSizeMeters - 0.5 * Grid.WorldSizeXMeters,
-			0.5 * Grid.WorldSizeYMeters - Cell.Y * Grid.CellSizeMeters);
-	}
-
 	uint16 QuantiseFraction(double Fraction)
 	{
 		return static_cast<uint16>(FMath::RoundToInt32(FMath::Clamp(Fraction, 0.0, 1.0) * Uint16QuantisationSteps));
@@ -691,8 +675,8 @@ void FMassifEnvironmentState::StorePoint(FPointSetStorage& Storage, const FMassi
 	}
 
 	const FVector2d PositionMeters(Point.PositionMeters.X, Point.PositionMeters.Y);
-	const FIntPoint Cell = ContainingCell(Storage.TileGrid, PositionMeters);
-	const FVector2d Corner = CellCornerMeters(Storage.TileGrid, Cell);
+	const FIntPoint Cell = Storage.TileGrid.ContainingCell(PositionMeters);
+	const FVector2d Corner = Storage.TileGrid.CellCornerMeters(Cell.X, Cell.Y);
 	const FVector2d Range = Storage.Descriptor.RadiusRangeMeters;
 
 	FStoredPoint Stored;
@@ -723,7 +707,7 @@ void FMassifEnvironmentState::ReadTilePoints(
 		return;
 	}
 
-	const FVector2d Corner = CellCornerMeters(Storage.TileGrid, FIntPoint(TileColumn, TileRow));
+	const FVector2d Corner = Storage.TileGrid.CellCornerMeters(TileColumn, TileRow);
 	const FVector2d Range = Storage.Descriptor.RadiusRangeMeters;
 
 	OutPoints.Reserve(Storage.Buckets[BucketIndex].Num());

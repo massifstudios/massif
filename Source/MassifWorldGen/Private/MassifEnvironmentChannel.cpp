@@ -72,6 +72,19 @@ FVector2d FMassifChannelGrid::CellCentreMeters(int32 Column, int32 Row) const
 	return FVector2d(X, Y);
 }
 
+FIntPoint FMassifChannelGrid::ContainingCell(FVector2d PositionMeters) const
+{
+	const int32 Column = FMath::FloorToInt32((PositionMeters.X + 0.5 * WorldSizeXMeters) / CellSizeMeters);
+	const int32 Row = FMath::FloorToInt32((0.5 * WorldSizeYMeters - PositionMeters.Y) / CellSizeMeters);
+	return FIntPoint(FMath::Clamp(Column, 0, Width - 1), FMath::Clamp(Row, 0, Height - 1));
+}
+
+FVector2d FMassifChannelGrid::CellCornerMeters(int32 Column, int32 Row) const
+{
+	return FVector2d(
+		Column * CellSizeMeters - 0.5 * WorldSizeXMeters, 0.5 * WorldSizeYMeters - Row * CellSizeMeters);
+}
+
 FMassifChannelGrid FMassifChannelGrid::FromWorldSize(FVector2d WorldSizeMeters, double CellSizeMeters)
 {
 	FMassifChannelGrid Grid;

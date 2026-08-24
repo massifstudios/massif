@@ -111,5 +111,11 @@ struct FMassifChannelGrid
 	/** Column 0 is west, row 0 north, origin at the world centre. */
 	MASSIFWORLDGEN_API FVector2d CellCentreMeters(int32 Column, int32 Row) const;
 
+	/** Cell a world position falls inside, clamped to the grid. Not the cell-centre lattice. */
+	MASSIFWORLDGEN_API FIntPoint ContainingCell(FVector2d PositionMeters) const;
+
+	/** North-west corner of a cell, which is the origin an offset inside it is measured from. */
+	MASSIFWORLDGEN_API FVector2d CellCornerMeters(int32 Column, int32 Row) const;
+
 	MASSIFWORLDGEN_API static FMassifChannelGrid FromWorldSize(FVector2d WorldSizeMeters, double CellSizeMeters);
 };

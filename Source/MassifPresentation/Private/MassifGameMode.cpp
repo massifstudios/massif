@@ -26,12 +26,14 @@
 #include "MassifHeightmap.h"
 #include "MassifRiverField.h"
 #include "MassifRiverNetwork.h"
+#include "MassifRockfallProcesses.h"
 #include "MassifTerrainField.h"
 #include "MaterialShared.h"
 #include "Materials/MaterialInterface.h"
 #include "Misc/Paths.h"
 #include "Player/MassifFlyPawn.h"
 #include "Player/MassifPlayerController.h"
+#include "Terrain/MassifRockManager.h"
 #include "Terrain/MassifTerrainManager.h"
 #include "UObject/SoftObjectPath.h"
 #include "GameFramework/PlayerController.h"
@@ -402,6 +404,9 @@ void AMassifGameMode::LoadTerrainAndSpawnManagers()
 	FoliageManager = GetWorld()->SpawnActor<AMassifFoliageManager>();
 	FoliageManager->Initialize(TerrainField, Environment, GetMasterSeed());
 
+	RockManager = GetWorld()->SpawnActor<AMassifRockManager>();
+	RockManager->Initialize(Environment);
+
 	SpawnWaterBodies();
 
 	DebugChannelView = GetWorld()->SpawnActor<AMassifDebugChannelView>();
@@ -486,6 +491,27 @@ void AMassifGameMode::LogEnvironmentSummary(double SolveSeconds) const
 		GetChannelMaximum(Environment, MassifEnvironmentChannels::StandingWaterDepth()),
 		GetChannelMaximum(Environment, MassifEnvironmentChannels::FlowAccumulation()),
 		GetChannelMaximum(Environment, MassifEnvironmentChannels::SoilDepth()));
+
+	LogRockfallSummary(Environment);
+}
+
+void AMassifGameMode::LogRockfallSummary(const FMassifEnvironmentState& Environment) const
+{
+	const FMassifPointSetHandle Placements =
+		Environment.FindPointSet(MassifEnvironmentPointSets::RockPlacements());
+	if (!Placements.IsValid())
+	{
+		return;
+	}
+
+	UE_LOG(LogTemp, Display,
+		TEXT("Rockfall: %d boulders placed, deepest deposit %.2f m, largest block %.1f m across, "
+			"solved in %.2f s (environment %.1f MB resident)"),
+		Environment.GetPointCount(Placements),
+		GetChannelMaximum(Environment, MassifEnvironmentChannels::RockfallDeposit()),
+		2.0 * GetChannelMaximum(Environment, MassifEnvironmentChannels::RockfallBlockRadius()),
+		EnvironmentScheduler->GetLastExecutionSeconds(MassifEnvironmentProcesses::Rockfall()),
+		Environment.GetResidentByteCount() / (1024.0 * 1024.0));
 }
 
 void AMassifGameMode::LogRiverSummary(const FMassifRiverNetwork& Rivers) const

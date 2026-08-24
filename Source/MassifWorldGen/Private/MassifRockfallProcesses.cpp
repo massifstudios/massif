@@ -409,11 +409,9 @@ namespace
 			return INDEX_NONE;
 		}
 
-		const int32 Column = FMath::FloorToInt32(
-			(Block.PositionMeters.X + 0.5 * Grid.WorldSizeXMeters) / Grid.CellSizeMeters);
-		const int32 Row = FMath::FloorToInt32(
-			(0.5 * Grid.WorldSizeYMeters - Block.PositionMeters.Y) / Grid.CellSizeMeters);
-		return Grid.CellIndex(Column, Row);
+		const FIntPoint Cell =
+			Grid.ContainingCell(FVector2d(Block.PositionMeters.X, Block.PositionMeters.Y));
+		return Grid.CellIndex(Cell.X, Cell.Y);
 	}
 
 	/**
