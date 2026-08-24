@@ -34,15 +34,15 @@ never written anywhere.
 
 The rule is not arbitrary — the counts force it. Over the 20 × 20 km world:
 
-| tier | species | candidates | at 16 B each | stored |
+| tier | species | candidates | at 24 B each | stored |
 |---|---|---|---|---|
-| trees | 10 | 11.4 M | 182 MB | **yes** |
-| boulders | — | 0.64 M (measured) | 10 MB | **yes** |
-| shrubs | 10 | 377 M | 6.0 GB | no |
-| grass, flowers, cushion, rosette | 34 | 2.4 B | 38 GB | no |
+| trees | 10 | 11.4 M | 274 MB | **yes** |
+| boulders | — | 0.64 M (measured) | 15 MB | **yes** |
+| shrubs | 10 | 377 M | 9.0 GB | no |
+| grass, flowers, cushion, rosette | 34 | 2.4 B | 58 GB | no |
 
 Candidates are before habitat rejection; most of this window is above the
-treeline, so placed trees should land nearer 2–4 M. **Expected save: 50–75 MB
+treeline, so placed trees should land nearer 2–4 M. **Expected save: 65–110 MB
 uncompressed**, and positions within a chunk are spatially coherent, so it
 compresses well.
 
@@ -55,15 +55,38 @@ The test for the boundary: **can the player interact with this object as an
 individual?** A boulder can be blasted for a piste; a tree can be felled. A
 tussock cannot, and the moment one could, it would move tiers.
 
-## 3. The record — 16 bytes
+## 3. The record — 24 bytes
 
 ```
- 0  x            4 bytes
- 4  y            4 bytes
- 8  z            4 bytes
-12  type         2 bytes
-14  metadata     2 bytes
+ 0  x        int32   millimetres, absolute world
+ 4  y        int32
+ 8  z        int32
+12  type     uint16  append-only registry id
+14  size     uint8   over the type's own band
+15  flags    uint8   variant 0-3, felled 4, dead 5
+16  yaw      uint16  1/65536 turn
+18  pitch    uint8   1/256 turn
+19  roll     uint8
+20  planted  int16   half-months from world start; negative is before it
+22  vigour   uint8   255 healthy, 0 dead standing
+23  buried   uint8   0 resting on the ground, 255 level with it
 ```
+
+Four-byte aligned with no padding, so a chunk is a flat array a reader can
+`memcpy`. No bitfield packing beyond `flags`, and no field that means a
+different thing per type — that is the version of this format nobody can read
+back in two years.
+
+### Why not 16 bytes
+
+The narrow version squeezed rotation out entirely and **derived it from a hash
+of the position**. That is only sound while rotation is immutable, and it is
+not: a felled tree lies in the direction the cut chose, and a boulder blasted
+off a piste both moves and would therefore spin for no reason. Storing rotation
+closes a hole rather than buying comfort.
+
+The extra eight bytes cost 21–37 MB over the whole world (§2). Cheap for a
+format that stops needing exceptions.
 
 ### Position: int32 millimetres, not float32
 
@@ -88,29 +111,33 @@ renumbered; retiring a type leaves a hole. The registry is append-only, maps id
 → mesh path plus per-type defaults (size band, whether it collides), and lives
 in `MassifCore` so both sim and presentation reach it.
 
-### Metadata: 2 bytes, and the one tight spot
+### Size: 1 byte over the type's band
 
-This is where the design has to give something up, and it is worth being
-explicit about it. The rockfall currently carries per block: radius, yaw, pitch,
-roll, buried fraction — about 8 bytes of real information. It does not fit.
+Genuinely not derivable, which is why it is stored: the rockfall *sorted* blocks
+by size, so size correlates with position without being a function of it. 256
+steps over a 0.5–4 m band is 14 mm.
 
-The resolution is to **derive what is derivable from the position, and store
-only what is not**:
+Because the band belongs to the type, a record alone does not yield a radius —
+decoding needs the registry. That is deliberate. Retuning a species' size range
+then reshapes every tree of it without rewriting a save.
 
-- **Rotation — stored in 0 bytes.** Hash the quantised position; yaw, pitch and
-  roll fall out of it. Deterministic, free, and identical on every machine.
-  A tumbled boulder's orientation is arbitrary and a tree's yaw is arbitrary, so
-  nothing is lost. The one thing that does go is the rockfall aiming a block's
-  yaw along its travel direction, which is not visible on a tumbled block.
-- **Size — 1 byte**, over the type's own size band. Genuinely not derivable: the
-  fall *sorted* blocks by size, so size correlates with position without being a
-  function of it. 256 steps over a 0.5–4 m band is 14 mm.
-- **Flags and variant — 1 byte.** Buried fraction, mesh variant, and later state
-  like felled, damaged, snow-laden.
+### Age is not stored; the planting date is
 
-If a future object type needs more than this, **the record grows to 20 bytes**.
-It does not get solved by overloading what the two bytes mean per type — that is
-the version of this decision that cannot be read back in two years.
+`planted` is fixed the moment the object exists and never moves again, so age
+advances with the calendar rather than by touching 3 M records. Signed, because
+every generated tree was planted before the world started, and ±32767
+half-months is ±1365 years.
+
+Growth *rate* is the one intrinsic that has to be stored rather than derived: it
+is a function of site quality, site quality lives in the bake, and the bake is
+never serialized (§5.6). It folds into `size`, which already means size at
+planting — drawn size is `f(band, size, planted, now)`.
+
+### What boulders leave empty
+
+`planted`, `vigour` and most of `flags`. 0.64 M boulders × 8 unused bytes is
+5 MB, which does not justify a second record layout, a second array and a second
+code path on every reader.
 
 ## 4. Both stored tiers come from world passes
 
@@ -148,7 +175,7 @@ deliberate edit, not a silent one — it is a locked-decisions document.
 
 - A chunk is **512 m**, matching the resident tiles (§5.4) and the buckets the
   rockfall point set already uses.
-- A chunk holds a flat array of 16-byte records. No per-record header; the chunk
+- A chunk holds a flat array of 24-byte records. No per-record header; the chunk
   header carries the count.
 - **Chunks are not generated lazily.** With both stored tiers coming from world
   passes (§4), the store is filled once at world gen by draining the two point
@@ -171,7 +198,7 @@ argument for it is stronger than the size argument against:
   instead, then retuning the rockfall or editing the flora table silently
   changes the world inside every existing save. Storing the objects decouples a
   save from generator tuning entirely.
-- 50–75 MB is affordable for a single-player game in 2026.
+- 65–110 MB is affordable for a single-player game in 2026.
 
 Against, recorded so the decision is revisitable: it duplicates what the seed
 already determines, and it is roughly a thousand times the size of the sim state
@@ -182,7 +209,46 @@ Required in the header, extending §9: the format version
 against a different model a hard error — and the master seed. A chunk index, so
 loading a region does not read the whole file.
 
-## 7. What this changes in what exists
+## 7. Mutable state lives beside the store, not in it
+
+A tree's vigour falls, a tree gets felled, a boulder gets blasted off a piste.
+That is state changing during play, and the naive answer — write it back into
+the record — would make the store savegame state that presentation reads
+directly, which is the pattern `CLAUDE.md`'s separation invariant exists to
+forbid.
+
+So the store is **immutable once written**, and what the record holds is the
+*initial* condition the generator produced. A generator-placed windthrow or dead
+standing snag is initial condition and belongs in the record; a tree the player
+felled is not.
+
+Deviations live in a **sparse overlay** the sim owns and saves:
+
+```
+TMap<FMassifObjectIndex, FMassifObjectState>
+```
+
+keyed by (chunk, index within chunk). Almost no object ever deviates — a resort
+fells thousands of trees, not millions — so the overlay is small enough that
+storing full state per entry costs nothing, and it stays empty for the entire
+boulder tier until the first blast.
+
+This buys three things beyond the invariant:
+
+- **Reads stay branch-free where it matters.** Drawing a chunk walks a flat
+  array; the overlay is consulted once per chunk, not once per instance, because
+  an absent chunk key means no instance in it deviates.
+- **A regenerated world diffs cleanly against a played one.** The immutable half
+  is a pure function of the seed, so what the player changed is exactly the
+  overlay.
+- **Presentation never reads sim state.** It reads the store, plus whatever the
+  sim publishes about the overlay through the existing mask (§5.5) and response
+  table (§5.6.6) paths.
+
+The cost is one indirection on every gameplay query about a specific object, and
+a rule that has to hold: **nothing writes a record after the store is built.**
+
+## 8. What this changes in what exists
 
 - **Rockfall.** `Geology.RockPlacements` stays the solve's output. The store
   becomes its consumer, converting placements to records once. The environment
@@ -192,12 +258,11 @@ loading a region does not read the whole file.
   present view-time path unchanged, so `ScatterTile` stays, with a smaller job.
 - **`AMassifRockManager` and `AMassifFoliageManager`** both become readers of
   the store rather than of their own sources.
-- **Sim separation.** The store is world data, not sim state; presentation reads
-  it directly. If an object ever becomes gameplay-relevant — a boulder blocking
-  a piste — that must reach the sim through masks (§5.5) and the response table
-  (§5.6.6), never by the sim reading instances.
+- **Sim separation.** The store is immutable world data; the sim's overlay (§7)
+  holds everything that changes. Presentation reads the store directly and never
+  the overlay.
 
-## 8. Main menu
+## 9. Main menu
 
 There is no way into the game but PIE, and the store above needs a load path, so
 the menu is what the save work hangs off.
@@ -219,14 +284,14 @@ cannot be an unexplained pause. The scheduler already reports per-process
 timings to the graph inspector, which is enough to drive a real progress bar
 rather than a fake one.
 
-## 9. Open questions
+## 10. Open questions
 
-1. **Compression.** Worth it at 50–75 MB, and if so per chunk (so a region can
+1. **Compression.** Worth it at 65–110 MB, and if so per chunk (so a region can
    be read alone) rather than over the whole file.
-2. **Does the store hold anything but scattered content?** Lifts, stations and
-   pistes are placed objects too, but they are sim state and belong in the sim's
-   own save section. The line is probably: the store holds what generation
-   produced, the sim holds what the player built.
-3. **What happens to a save whose generator has changed?** Storing everything
+2. **What happens to a save whose generator has changed?** Storing everything
    means the old world loads correctly. Confirm that is wanted, rather than a
    warning that the world is stale.
+
+Settled since first writing: the store holds only what generation produced —
+lifts, stations and pistes are what the player built and belong to the sim's own
+save section, on the same line §7 draws for object state.
