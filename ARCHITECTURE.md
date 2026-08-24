@@ -328,9 +328,10 @@ sixty-fourth of the cost, and sampling interpolates between the two. Habitat is
 read at species scale, and the DEM's own detail stays available through the
 terrain field for anything that needs finer.
 
-The bake is not saved. It is a pure function of the elevation source, the
-georeference and the master seed, so it is rebuilt at load like the mip chain
-(§9).
+The bake is a pure function of the elevation source, the georeference and the
+master seed, so it *could* be rebuilt at load like the mip chain. It is saved
+anyway, because rebuilding it costs 32 s of a 37 s load and the mip chain costs
+0.3 s (§9).
 
 #### 5.6.1 Map independence
 
@@ -738,8 +739,27 @@ finishes", which is wall-clock entering sim state.
 ## 9. Save Games
 
 - Save = master seed + elevation model name and content hash + response table
-  content hash (§5.6.6) + engine version tag + full `FMassifSimState` + modified
-  resident tiles (§5.4, compressed) + save format version.
+  content hash (§5.6.6) + engine version tag + full `FMassifSimState` + the
+  object store + the solved environment + modified resident tiles (§5.4,
+  compressed) + save format version.
+- **The solved environment is saved**, though it is derivable. Deriving it is
+  32 s of a 37 s load against 5 s with it in the file, and the file grows from
+  17 MB to 248 MB to buy that. It rides as a length-prefixed section
+  (`IMassifSaveSection`) so `MassifSim` carries it without depending on
+  `MassifWorldGen`, and so a reader that wants none of it — a save list, or a
+  load asked to re-solve — steps over the block.
+- Layout comes from the graph and never from the file: a bake is matched channel
+  by channel by name against the graph the load has just scheduled, and refused
+  whole if any grid, encoding or slice count disagrees. Refusing costs the solve
+  and nothing else, which is what makes a bake safe to keep across a graph that
+  is still being changed.
+- Consequences, both deliberate: a loaded world is the world that was saved, so
+  retuning a process does nothing to it — `massif.RebuildEnvironment` (or
+  `-MassifRebuildEnvironment`) forces the solve while tuning. And the whole bake
+  is saved, all 44 channels rather than the nine the running game samples, so
+  the debug channel views work on a loaded world as they do on a generated one.
+- Rivers, the river field, the terrain field and the habitat field stay out. All
+  four are derived from the bake in about 4 s, and would add 64 MB.
 - The response table hash is recorded for the same reason the elevation hash is:
   the sim ran against it, it is not saved, and it is rebuilt at load. A build
   whose table would come out different refuses the save rather than resuming the

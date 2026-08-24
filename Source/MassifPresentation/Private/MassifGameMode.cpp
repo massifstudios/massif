@@ -19,6 +19,7 @@
 #include "MassifElevationSource.h"
 #include "MassifEnvironmentBakeParams.h"
 #include "MassifEnvironmentGraph.h"
+#include "MassifEnvironmentSaveSection.h"
 #include "MassifEnvironmentScheduler.h"
 #include "MassifEnvironmentState.h"
 #include "MassifHabitat.h"
@@ -56,6 +57,12 @@ namespace
 	TAutoConsoleVariable<FString> CVarMassifDem(
 		TEXT("massif.Dem"), TEXT("oetztal"),
 		TEXT("Elevation model under Data/Terrain, without the .massifdem suffix."));
+
+	TAutoConsoleVariable<int32> CVarMassifRebuildEnvironment(
+		TEXT("massif.RebuildEnvironment"), 0,
+		TEXT("Solve the environment on load rather than reading the save's bake. ")
+		TEXT("For tuning: with the bake in place a loaded world keeps what it was saved with. ")
+		TEXT("-MassifRebuildEnvironment does the same from the command line."));
 
 	/** Gap between posing the camera and shooting, so the quadtree can stream the new view in. */
 	constexpr float DebugScreenshotSettleSeconds = 3.0f;
@@ -283,6 +290,16 @@ namespace
 		return SaveName;
 	}
 
+	/** The switch as well as the cvar, so a headless run can ask for a solve too. */
+	bool ShouldRebuildEnvironment()
+	{
+		if (FParse::Param(FCommandLine::Get(), TEXT("MassifRebuildEnvironment")))
+		{
+			return true;
+		}
+		return CVarMassifRebuildEnvironment.GetValueOnGameThread() != 0;
+	}
+
 	uint32 GetMasterSeed()
 	{
 		int32 MasterSeed = CVarMassifSeed.GetValueOnGameThread();
@@ -440,6 +457,7 @@ void AMassifGameMode::BeginWorldBuild(const FString& SaveName)
 	Inputs.Params = GetEnvironmentParams();
 	Inputs.SavedFidelities = MassifEnvironmentSettings::ReadSaved();
 	Inputs.SaveName = SaveName;
+	Inputs.bRebuildEnvironment = ShouldRebuildEnvironment();
 
 	const TWeakObjectPtr<AMassifGameMode> WeakThis(this);
 	const TSharedRef<FMassifWorldBuildProgress> Progress = BuildProgress.ToSharedRef();
@@ -483,7 +501,7 @@ void AMassifGameMode::FinishWorldBuild(FMassifWorldBuildResult Result)
 	bGBusiestNodeFound = Result.bBusiestNodeFound;
 	SpawnAltitudeMeters = static_cast<float>(TerrainField->GetMaxAltitudeMeters()) + 2200.0f;
 
-	LogEnvironmentSummary(Result.EnvironmentSeconds);
+	LogEnvironmentSummary(Result);
 	LogRiverSummary(*RiverNetwork);
 	LogObjectStoreSummary(Result);
 
@@ -545,6 +563,8 @@ bool AMassifGameMode::SaveGame(const FString& SaveName, FString& OutError)
 	Save.Header.SavedAtUtc = FDateTime::UtcNow();
 	Save.SimState = GetGameInstance()->GetSubsystem<UMassifSimSubsystem>()->GetState();
 	Save.ObjectStore = *ObjectStore;
+	Save.Environment =
+		MakeShared<FMassifEnvironmentSaveSection>(EnvironmentScheduler->GetMutableSharedState());
 
 	return MassifWriteWorldSave(MassifWorldSavePath(SaveName), Save, OutError);
 }
@@ -636,24 +656,30 @@ void AMassifGameMode::LogObjectStoreSummary(const FMassifWorldBuildResult& Resul
 		ObjectStore->GetResidentByteCount() / (1024.0 * 1024.0), *Origin);
 }
 
-void AMassifGameMode::LogEnvironmentSummary(double SolveSeconds) const
+void AMassifGameMode::LogEnvironmentSummary(const FMassifWorldBuildResult& Result) const
 {
 	const FMassifEnvironmentState& Environment = EnvironmentScheduler->GetState();
 	const FMassifChannelGrid& Grid =
 		Environment.GetGrid(Environment.FindChannel(MassifEnvironmentChannels::Wetness()));
 
+	FString Origin = FString::Printf(TEXT("solved in %.2f s"), Result.EnvironmentSeconds);
+	if (Result.bEnvironmentFromSave)
+	{
+		Origin = TEXT("read from the save");
+	}
+
 	UE_LOG(LogTemp, Display,
-		TEXT("Environment: %d x %d cells at %.0f m, %d channels, solved in %.2f s "
+		TEXT("Environment: %d x %d cells at %.0f m, %d channels, %s "
 			"(water to %.1f m, flow to %.0f m2, soil to %.2f m)"),
-		Grid.Width, Grid.Height, Grid.CellSizeMeters, Environment.GetChannelCount(), SolveSeconds,
+		Grid.Width, Grid.Height, Grid.CellSizeMeters, Environment.GetChannelCount(), *Origin,
 		GetChannelMaximum(Environment, MassifEnvironmentChannels::StandingWaterDepth()),
 		GetChannelMaximum(Environment, MassifEnvironmentChannels::FlowAccumulation()),
 		GetChannelMaximum(Environment, MassifEnvironmentChannels::SoilDepth()));
 
-	LogRockfallSummary(Environment);
+	LogRockfallSummary(Environment, Result.bEnvironmentFromSave);
 }
 
-void AMassifGameMode::LogRockfallSummary(const FMassifEnvironmentState& Environment) const
+void AMassifGameMode::LogRockfallSummary(const FMassifEnvironmentState& Environment, bool bFromSave) const
 {
 	const FMassifPointSetHandle Placements =
 		Environment.FindPointSet(MassifEnvironmentPointSets::RockPlacements());
@@ -662,14 +688,20 @@ void AMassifGameMode::LogRockfallSummary(const FMassifEnvironmentState& Environm
 		return;
 	}
 
+	FString RockfallOrigin = FString::Printf(TEXT("solved in %.2f s"),
+		EnvironmentScheduler->GetLastExecutionSeconds(MassifEnvironmentProcesses::Rockfall()));
+	if (bFromSave)
+	{
+		RockfallOrigin = TEXT("read from the save");
+	}
+
 	UE_LOG(LogTemp, Display,
 		TEXT("Rockfall: %d boulders placed, deepest deposit %.2f m, largest block %.1f m across, "
-			"solved in %.2f s (environment %.1f MB resident)"),
+			"%s (environment %.1f MB resident)"),
 		Environment.GetPointCount(Placements),
 		GetChannelMaximum(Environment, MassifEnvironmentChannels::RockfallDeposit()),
 		2.0 * GetChannelMaximum(Environment, MassifEnvironmentChannels::RockfallBlockRadius()),
-		EnvironmentScheduler->GetLastExecutionSeconds(MassifEnvironmentProcesses::Rockfall()),
-		Environment.GetResidentByteCount() / (1024.0 * 1024.0));
+		*RockfallOrigin, Environment.GetResidentByteCount() / (1024.0 * 1024.0));
 }
 
 void AMassifGameMode::LogRiverSummary(const FMassifRiverNetwork& Rivers) const

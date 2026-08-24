@@ -92,8 +92,8 @@ private:
 	/** Honours -MassifSaveAfter, which is how the save path is exercised without hands. */
 	void WriteRequestedSave();
 
-	void LogEnvironmentSummary(double SolveSeconds) const;
-	void LogRockfallSummary(const FMassifEnvironmentState& Environment) const;
+	void LogEnvironmentSummary(const FMassifWorldBuildResult& Result) const;
+	void LogRockfallSummary(const FMassifEnvironmentState& Environment, bool bFromSave) const;
 	void LogRiverSummary(const FMassifRiverNetwork& Rivers) const;
 	void LogObjectStoreSummary(const FMassifWorldBuildResult& Result) const;
 

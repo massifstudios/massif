@@ -28,7 +28,7 @@ neither survives a save:
 | where positions come from | `MassifFoliageScatter::ScatterTile`, a pure function of habitat and tile | the fall itself, solved world-wide |
 | when | every time a tile comes into view | once, at world gen |
 | stored | nothing | `Geology.RockPlacements`, in the environment state |
-| survives a save | no | no (the bake is never serialized) |
+| survives a save | no | yes, twice over: as records in the object store, and in the saved bake they were drained from (ARCHITECTURE §9) |
 
 A third system would be a third mechanism. The point set built for the rockfall
 is the prototype of the thing this document describes, and should be folded into
@@ -137,9 +137,12 @@ every generated tree was planted before the world started, and ±32767
 half-months is ±1365 years.
 
 Growth *rate* is the one intrinsic that has to be stored rather than derived: it
-is a function of site quality, site quality lives in the bake, and the bake is
-never serialized (§5.6). It folds into `size`, which already means size at
-planting — drawn size is `f(band, size, planted, now)`.
+is a function of site quality, and site quality lives in the bake. The bake is
+saved now (ARCHITECTURE §9), so this could in principle be a lookup — but a
+bake is refused whenever the graph it was written by has changed, and a rate the
+world falls back to re-deriving is a forest that changes shape on a refusal. It
+stays stored, folded into `size`, which already means size at planting — drawn
+size is `f(band, size, planted, now)`.
 
 ### What boulders leave empty
 

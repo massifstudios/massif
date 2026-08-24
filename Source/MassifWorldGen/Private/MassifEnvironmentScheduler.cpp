@@ -608,6 +608,19 @@ void FMassifEnvironmentScheduler::MarkAllDirty()
 	GroupIsDirty.Init(true, Groups.Num());
 }
 
+bool FMassifEnvironmentScheduler::RestoreSolvedState(FMassifEnvironmentState& Saved, FString& OutError)
+{
+	checkf(bScheduleBuilt, TEXT("The schedule decides which channels there are to restore into."));
+
+	if (!State->TakeSolvedPayloadsFrom(Saved, OutError))
+	{
+		return false;
+	}
+
+	GroupIsDirty.Init(false, Groups.Num());
+	return true;
+}
+
 void FMassifEnvironmentScheduler::RunProcess(FProcessNode& Node)
 {
 	if (ProgressReporter)

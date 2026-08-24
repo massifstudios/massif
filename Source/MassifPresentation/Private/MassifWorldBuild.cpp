@@ -1,6 +1,7 @@
 #include "MassifWorldBuild.h"
 
 #include "MassifEnvironmentGraph.h"
+#include "MassifEnvironmentSaveSection.h"
 #include "MassifEnvironmentScheduler.h"
 #include "MassifEnvironmentState.h"
 #include "MassifHabitat.h"
@@ -105,6 +106,43 @@ namespace
 		};
 	}
 
+	/**
+	 * Puts a saved solve back into a freshly scheduled graph rather than running it.
+	 *
+	 * A bake the graph no longer matches is refused and solved instead: it is a
+	 * cache of a pure function, so falling back costs the solve and nothing else.
+	 */
+	bool RestoreEnvironment(
+		FMassifEnvironmentScheduler& Scheduler, FMassifWorldBuildProgress& Progress,
+		FMassifWorldBuildResult& OutResult)
+	{
+		if (!OutResult.SavedEnvironment.IsValid())
+		{
+			return false;
+		}
+		Progress.Report(EMassifWorldBuildStage::Environment, TEXT("Reading the solved environment"), 0.0f);
+
+		FString RestoreError;
+		if (!Scheduler.RestoreSolvedState(*OutResult.SavedEnvironment, RestoreError))
+		{
+			UE_LOG(LogTemp, Warning,
+				TEXT("Saved environment refused, solving instead: %s"), *RestoreError);
+			return false;
+		}
+
+		OutResult.SavedEnvironment.Reset();
+		OutResult.bEnvironmentFromSave = true;
+		return true;
+	}
+
+	void RunSolve(
+		FMassifEnvironmentScheduler& Scheduler, FMassifWorldBuildProgress& Progress)
+	{
+		Scheduler.SetProgressReporter(MakeSolveReporter(Scheduler, Progress));
+		Scheduler.Execute();
+		Scheduler.SetProgressReporter(nullptr);
+	}
+
 	bool SolveEnvironment(
 		TSharedRef<const FMassifHeightmap> Heightmap, const FMassifWorldBuildInputs& Inputs,
 		FMassifWorldBuildProgress& Progress, FMassifWorldBuildResult& OutResult)
@@ -126,9 +164,10 @@ namespace
 		// Before the first solve, so a world set to something other than the defaults
 		// is solved once at what it is set to rather than twice.
 		MassifEnvironmentSettings::Apply(*Scheduler, Inputs.SavedFidelities);
-		Scheduler->SetProgressReporter(MakeSolveReporter(*Scheduler, Progress));
-		Scheduler->Execute();
-		Scheduler->SetProgressReporter(nullptr);
+		if (!RestoreEnvironment(*Scheduler, Progress, OutResult))
+		{
+			RunSolve(*Scheduler, Progress);
+		}
 
 		OutResult.EnvironmentScheduler = MakeShareable(Scheduler.Release());
 		OutResult.EnvironmentSeconds = FPlatformTime::Seconds() - StartSeconds;
@@ -202,9 +241,10 @@ namespace
 	/**
 	 * Reads the save, if this is a load.
 	 *
-	 * The seed and the objects come out of it; the ground is checked against what
-	 * this build has before any of it is used, because a resort restored onto a
-	 * different mountain is worse than a refused load (ARCHITECTURE §9).
+	 * The seed, the objects and the solved environment come out of it; the ground
+	 * is checked against what this build has before any of it is used, because a
+	 * resort restored onto a different mountain is worse than a refused load
+	 * (ARCHITECTURE §9).
 	 */
 	bool ReadSave(
 		const FMassifWorldBuildInputs& Inputs, uint64 ElevationModelHash,
@@ -217,7 +257,15 @@ namespace
 
 		Progress.Report(EMassifWorldBuildStage::Save, Inputs.SaveName, 0.0f);
 
+		const TSharedRef<FMassifEnvironmentSaveSection> Environment =
+			MakeShared<FMassifEnvironmentSaveSection>();
+
 		FMassifWorldSave Save;
+		if (!Inputs.bRebuildEnvironment)
+		{
+			Save.Environment = Environment;
+		}
+
 		FString ReadError;
 		if (!MassifReadWorldSave(MassifWorldSavePath(Inputs.SaveName), Save, ReadError))
 		{
@@ -230,10 +278,16 @@ namespace
 			OutResult.Error = ReadError;
 			return false;
 		}
+		if (!Save.EnvironmentError.IsEmpty())
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Saved environment not read, solving instead: %s"),
+				*Save.EnvironmentError);
+		}
 
 		OutResult.MasterSeed = static_cast<uint32>(Save.Header.MasterSeed);
 		OutResult.ObjectStore = MakeShared<const FMassifObjectStore>(MoveTemp(Save.ObjectStore));
 		OutResult.LoadedSimState = MoveTemp(Save.SimState);
+		OutResult.SavedEnvironment = Environment->GetState();
 		return true;
 	}
 }

@@ -119,6 +119,17 @@ public:
 	/** Runs every dirty group in schedule order. */
 	void Execute();
 
+	/**
+	 * Fills the channels from a save instead of solving them, and marks every
+	 * group solved so the next Execute runs nothing.
+	 *
+	 * False where the bake was written by a graph this one no longer matches; the
+	 * caller solves instead, which costs the solve and nothing else. Must be
+	 * called after BuildSchedule, because the schedule is what decides which
+	 * channels there are to fill.
+	 */
+	bool RestoreSolvedState(FMassifEnvironmentState& Saved, FString& OutError);
+
 	const FMassifEnvironmentState& GetState() const
 	{
 		return State.Get();
@@ -126,6 +137,18 @@ public:
 
 	/** For handing the solved channels to anything that outlives the call. */
 	TSharedRef<const FMassifEnvironmentState> GetSharedState() const
+	{
+		return State;
+	}
+
+	/**
+	 * The same channels, non-const, for writing them to a save.
+	 *
+	 * Serialization is one layout for both directions, so even reading the state
+	 * out of it goes through a call that could fill it. A caller holding the
+	 * scheduler mutably can already Execute over these channels.
+	 */
+	TSharedRef<FMassifEnvironmentState> GetMutableSharedState()
 	{
 		return State;
 	}

@@ -830,3 +830,306 @@ int64 FMassifEnvironmentState::ChannelByteCount(const FChannelStorage& Storage)
 	}
 	return TotalBytes;
 }
+
+void FMassifEnvironmentState::Serialize(FArchive& Ar)
+{
+	Ar << WorldSizeMeters;
+	SerializeChannels(Ar);
+	SerializePointSets(Ar);
+}
+
+void FMassifEnvironmentState::SerializeChannels(FArchive& Ar)
+{
+	int32 ChannelCount = Channels.Num();
+	Ar << ChannelCount;
+	if (Ar.IsLoading())
+	{
+		ResetChannels(ChannelCount);
+	}
+
+	for (int32 ChannelIndex = 0; ChannelIndex < ChannelCount; ++ChannelIndex)
+	{
+		SerializeChannel(Ar, *Channels[ChannelIndex]);
+	}
+	if (Ar.IsLoading())
+	{
+		IndexChannelsByName();
+	}
+}
+
+void FMassifEnvironmentState::ResetChannels(int32 ChannelCount)
+{
+	Channels.Empty(ChannelCount);
+	ChannelIndexByName.Empty(ChannelCount);
+	for (int32 ChannelIndex = 0; ChannelIndex < ChannelCount; ++ChannelIndex)
+	{
+		Channels.Add(MakeUnique<FChannelStorage>());
+	}
+}
+
+void FMassifEnvironmentState::IndexChannelsByName()
+{
+	for (int32 ChannelIndex = 0; ChannelIndex < Channels.Num(); ++ChannelIndex)
+	{
+		ChannelIndexByName.Add(Channels[ChannelIndex]->Descriptor.Name, ChannelIndex);
+	}
+}
+
+void FMassifEnvironmentState::SerializeChannel(FArchive& Ar, FChannelStorage& Storage)
+{
+	FMassifChannelDescriptor& Descriptor = Storage.Descriptor;
+
+	// As a string, because a plain file archive drops FNames on the floor rather
+	// than failing on them.
+	FString Name = Descriptor.Name.ToString();
+	Ar << Name;
+	Descriptor.Name = FName(*Name);
+
+	uint8 Type = static_cast<uint8>(Descriptor.Type);
+	uint8 Encoding = static_cast<uint8>(Descriptor.Encoding);
+	Ar << Type;
+	Ar << Encoding;
+	Descriptor.Type = static_cast<EMassifChannelType>(Type);
+	Descriptor.Encoding = static_cast<EMassifChannelEncoding>(Encoding);
+
+	Ar << Descriptor.CellSizeMeters;
+	Ar << Descriptor.TimeSliceCount;
+
+	Ar << Storage.Grid.Width;
+	Ar << Storage.Grid.Height;
+	Ar << Storage.Grid.CellSizeMeters;
+	Ar << Storage.Grid.WorldSizeXMeters;
+	Ar << Storage.Grid.WorldSizeYMeters;
+
+	Ar << Storage.ComponentMinimum;
+	Ar << Storage.ComponentMaximum;
+	Ar << Storage.bWritten;
+
+	int32 SliceCount = Storage.ComponentSlices.Num();
+	Ar << SliceCount;
+	if (Ar.IsLoading())
+	{
+		Storage.ComponentSlices.SetNum(SliceCount);
+	}
+
+	for (FComponentSlice& Slice : Storage.ComponentSlices)
+	{
+		SerializeComponentSlice(Ar, Slice);
+	}
+}
+
+void FMassifEnvironmentState::SerializeComponentSlice(FArchive& Ar, FComponentSlice& Slice)
+{
+	Ar << Slice.MinValue;
+	Ar << Slice.MaxValue;
+
+	int32 ByteCount = Slice.Payload.Num();
+	Ar << ByteCount;
+	if (ByteCount == 0)
+	{
+		return;
+	}
+	if (Ar.IsLoading())
+	{
+		Slice.Payload.SetNumUninitialized(ByteCount);
+	}
+
+	// A slice at a time rather than the file in one block: the payloads are almost
+	// all of a save, and compressing them one by one keeps the working buffer to
+	// the size of a channel instead of the whole solved environment.
+	Ar.SerializeCompressedNew(Slice.Payload.GetData(), ByteCount);
+}
+
+void FMassifEnvironmentState::SerializePointSets(FArchive& Ar)
+{
+	int32 PointSetCount = PointSets.Num();
+	Ar << PointSetCount;
+	if (Ar.IsLoading())
+	{
+		ResetPointSets(PointSetCount);
+	}
+
+	for (int32 PointSetIndex = 0; PointSetIndex < PointSetCount; ++PointSetIndex)
+	{
+		SerializePointSet(Ar, *PointSets[PointSetIndex]);
+	}
+	if (Ar.IsLoading())
+	{
+		IndexPointSetsByName();
+	}
+}
+
+void FMassifEnvironmentState::ResetPointSets(int32 PointSetCount)
+{
+	PointSets.Empty(PointSetCount);
+	PointSetIndexByName.Empty(PointSetCount);
+	for (int32 PointSetIndex = 0; PointSetIndex < PointSetCount; ++PointSetIndex)
+	{
+		PointSets.Add(MakeUnique<FPointSetStorage>());
+	}
+}
+
+void FMassifEnvironmentState::IndexPointSetsByName()
+{
+	for (int32 PointSetIndex = 0; PointSetIndex < PointSets.Num(); ++PointSetIndex)
+	{
+		PointSetIndexByName.Add(PointSets[PointSetIndex]->Descriptor.Name, PointSetIndex);
+	}
+}
+
+void FMassifEnvironmentState::SerializePointSet(FArchive& Ar, FPointSetStorage& Storage)
+{
+	FMassifPointSetDescriptor& Descriptor = Storage.Descriptor;
+	FString Name = Descriptor.Name.ToString();
+	Ar << Name;
+	Descriptor.Name = FName(*Name);
+
+	Ar << Descriptor.TileSizeMeters;
+	Ar << Descriptor.RadiusRangeMeters;
+	Ar << Descriptor.ClassNames;
+
+	Ar << Storage.TileGrid.Width;
+	Ar << Storage.TileGrid.Height;
+	Ar << Storage.TileGrid.CellSizeMeters;
+	Ar << Storage.TileGrid.WorldSizeXMeters;
+	Ar << Storage.TileGrid.WorldSizeYMeters;
+
+	Ar << Storage.PointCount;
+	Ar << Storage.bWritten;
+
+	int32 BucketCount = Storage.Buckets.Num();
+	Ar << BucketCount;
+	if (Ar.IsLoading())
+	{
+		Storage.Buckets.SetNum(BucketCount);
+	}
+
+	for (TArray<FStoredPoint>& Bucket : Storage.Buckets)
+	{
+		SerializeBucket(Ar, Bucket);
+	}
+}
+
+void FMassifEnvironmentState::SerializeBucket(FArchive& Ar, TArray<FStoredPoint>& Bucket)
+{
+	int32 PointCount = Bucket.Num();
+	Ar << PointCount;
+	if (Ar.IsLoading())
+	{
+		Bucket.SetNum(PointCount);
+	}
+
+	// Field by field, because the struct's padding is not part of the format.
+	for (FStoredPoint& Point : Bucket)
+	{
+		Ar << Point.OffsetXMeters;
+		Ar << Point.OffsetYMeters;
+		Ar << Point.AltitudeMeters;
+		Ar << Point.Radius;
+		Ar << Point.Yaw;
+		Ar << Point.Pitch;
+		Ar << Point.Roll;
+		Ar << Point.BuriedFraction;
+		Ar << Point.ClassIndex;
+	}
+}
+
+bool FMassifEnvironmentState::TakeSolvedPayloadsFrom(FMassifEnvironmentState& Carrier, FString& OutError)
+{
+	if (!Carrier.WorldSizeMeters.Equals(WorldSizeMeters))
+	{
+		OutError = FString::Printf(
+			TEXT("The saved environment covers %.0f x %.0f m and this world is %.0f x %.0f m."),
+			Carrier.WorldSizeMeters.X, Carrier.WorldSizeMeters.Y, WorldSizeMeters.X, WorldSizeMeters.Y);
+		return false;
+	}
+
+	if (Carrier.Channels.Num() != Channels.Num() || Carrier.PointSets.Num() != PointSets.Num())
+	{
+		OutError = FString::Printf(
+			TEXT("The save holds %d channels and %d point sets; this graph has %d and %d."),
+			Carrier.Channels.Num(), Carrier.PointSets.Num(), Channels.Num(), PointSets.Num());
+		return false;
+	}
+
+	for (const TUniquePtr<FChannelStorage>& Stored : Carrier.Channels)
+	{
+		if (!TakeChannelPayload(*Stored, OutError))
+		{
+			return false;
+		}
+	}
+	for (const TUniquePtr<FPointSetStorage>& Stored : Carrier.PointSets)
+	{
+		if (!TakePointSetPayload(*Stored, OutError))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+bool FMassifEnvironmentState::TakeChannelPayload(FChannelStorage& Carrier, FString& OutError)
+{
+	const FMassifChannelHandle Handle = FindChannel(Carrier.Descriptor.Name);
+	if (!Handle.IsValid())
+	{
+		OutError = FString::Printf(TEXT("The save holds channel '%s', which this graph does not produce."),
+			*Carrier.Descriptor.Name.ToString());
+		return false;
+	}
+
+	FChannelStorage& Live = GetStorage(Handle);
+	if (!ChannelLayoutMatches(Live, Carrier))
+	{
+		OutError = FString::Printf(
+			TEXT("Channel '%s' is %d x %d %s over %d slices here and %d x %d %s over %d in the save."),
+			*Carrier.Descriptor.Name.ToString(),
+			Live.Grid.Width, Live.Grid.Height, MassifChannelEncodingName(Live.Descriptor.Encoding),
+			Live.Descriptor.TimeSliceCount,
+			Carrier.Grid.Width, Carrier.Grid.Height, MassifChannelEncodingName(Carrier.Descriptor.Encoding),
+			Carrier.Descriptor.TimeSliceCount);
+		return false;
+	}
+
+	Live.ComponentSlices = MoveTemp(Carrier.ComponentSlices);
+	Live.ComponentMinimum = MoveTemp(Carrier.ComponentMinimum);
+	Live.ComponentMaximum = MoveTemp(Carrier.ComponentMaximum);
+	Live.bWritten = Carrier.bWritten;
+	return true;
+}
+
+bool FMassifEnvironmentState::ChannelLayoutMatches(const FChannelStorage& Live, const FChannelStorage& Carrier)
+{
+	return Live.Grid.Width == Carrier.Grid.Width
+		&& Live.Grid.Height == Carrier.Grid.Height
+		&& Live.Descriptor.Type == Carrier.Descriptor.Type
+		&& Live.Descriptor.Encoding == Carrier.Descriptor.Encoding
+		&& Live.Descriptor.TimeSliceCount == Carrier.Descriptor.TimeSliceCount
+		&& Live.ComponentSlices.Num() == Carrier.ComponentSlices.Num();
+}
+
+bool FMassifEnvironmentState::TakePointSetPayload(FPointSetStorage& Carrier, FString& OutError)
+{
+	const FMassifPointSetHandle Handle = FindPointSet(Carrier.Descriptor.Name);
+	if (!Handle.IsValid())
+	{
+		OutError = FString::Printf(TEXT("The save holds point set '%s', which this graph does not produce."),
+			*Carrier.Descriptor.Name.ToString());
+		return false;
+	}
+
+	FPointSetStorage& Live = GetPointSetStorage(Handle);
+	if (Live.Buckets.Num() != Carrier.Buckets.Num())
+	{
+		OutError = FString::Printf(
+			TEXT("Point set '%s' is bucketed %d ways here and %d ways in the save."),
+			*Carrier.Descriptor.Name.ToString(), Live.Buckets.Num(), Carrier.Buckets.Num());
+		return false;
+	}
+
+	Live.Buckets = MoveTemp(Carrier.Buckets);
+	Live.PointCount = Carrier.PointCount;
+	Live.bWritten = Carrier.bWritten;
+	return true;
+}

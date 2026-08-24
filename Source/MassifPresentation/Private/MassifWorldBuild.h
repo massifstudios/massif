@@ -7,6 +7,7 @@
 #include "HAL/CriticalSection.h"
 
 class FMassifEnvironmentScheduler;
+class FMassifEnvironmentState;
 class FMassifHabitatField;
 class FMassifObjectStore;
 class FMassifRiverField;
@@ -84,13 +85,21 @@ struct FMassifWorldBuildInputs
 	/**
 	 * A save to load, or empty for a new game.
 	 *
-	 * Loading is the same build with two steps replaced: the seed comes off the
-	 * save rather than the command line, and the objects come out of it rather than
-	 * being generated. Everything between — the environment, the rivers, the terrain
-	 * field — is a pure function of the seed and is rebuilt, which is why no save
-	 * carries any of it (ARCHITECTURE §9).
+	 * Loading is the same build with its expensive steps read rather than run: the
+	 * seed, the solved environment and the objects all come off the save. What is
+	 * cheap to derive from them — the rivers, the terrain field, the habitat field
+	 * — is derived, which is why a save carries no copy of those (ARCHITECTURE §9).
 	 */
 	FString SaveName;
+
+	/**
+	 * Solves the environment even where the save carries one.
+	 *
+	 * For tuning: a bake is what the graph produced when the save was written, so
+	 * with it in place a change to a process or a parameter does nothing to a
+	 * loaded world until this is set.
+	 */
+	bool bRebuildEnvironment = false;
 };
 
 /** Everything it produced, handed back to the game thread to spawn a world from. */
@@ -116,6 +125,12 @@ struct FMassifWorldBuildResult
 
 	/** Set only on a load. The world the player left, to be put back on the subsystem. */
 	TOptional<FMassifSimState> LoadedSimState;
+
+	/** Read off a save and consumed by the solve stage; null once it has been taken. */
+	TSharedPtr<FMassifEnvironmentState> SavedEnvironment;
+
+	/** Whether the environment came off the save rather than out of the graph. */
+	bool bEnvironmentFromSave = false;
 
 	double EnvironmentSeconds = 0.0;
 	double ObjectStoreSeconds = 0.0;

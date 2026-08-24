@@ -50,6 +50,57 @@ namespace
 		Ar.ArNoDelta = true;
 	}
 
+	/**
+	 * Writes the block between a length and the bytes it measures, patched once the
+	 * length is known. The archive is seekable because a save is a plain file.
+	 */
+	void WriteSection(FArchive& Ar, const TSharedPtr<IMassifSaveSection>& Section)
+	{
+		int64 ByteCount = 0;
+		const int64 LengthPosition = Ar.Tell();
+		Ar << ByteCount;
+		if (!Section.IsValid())
+		{
+			return;
+		}
+
+		const int64 BlockPosition = Ar.Tell();
+		FString WriteError;
+		Section->Serialize(Ar, WriteError);
+
+		const int64 EndPosition = Ar.Tell();
+		ByteCount = EndPosition - BlockPosition;
+		Ar.Seek(LengthPosition);
+		Ar << ByteCount;
+		Ar.Seek(EndPosition);
+	}
+
+	void ReadSection(FArchive& Ar, const TSharedPtr<IMassifSaveSection>& Section, FString& OutError)
+	{
+		int64 ByteCount = 0;
+		Ar << ByteCount;
+
+		const int64 EndPosition = Ar.Tell() + ByteCount;
+		if (Section.IsValid() && ByteCount > 0)
+		{
+			Section->Serialize(Ar, OutError);
+		}
+
+		// Unconditionally: a section that refused its block stopped somewhere inside
+		// it, and this is the only thing that knows where the block ends.
+		Ar.Seek(EndPosition);
+	}
+
+	void SerializeSection(FArchive& Ar, const TSharedPtr<IMassifSaveSection>& Section, FString& OutError)
+	{
+		if (Ar.IsLoading())
+		{
+			ReadSection(Ar, Section, OutError);
+			return;
+		}
+		WriteSection(Ar, Section);
+	}
+
 	TUniquePtr<FArchive> OpenSaveReader(const FString& FilePath, FString& OutError)
 	{
 		TUniquePtr<FArchive> Reader(IFileManager::Get().CreateFileReader(*FilePath));
@@ -92,6 +143,13 @@ void FMassifWorldSave::Serialize(FArchive& Ar)
 	}
 
 	ObjectStore.Serialize(Ar);
+
+	// Last, because it is the largest by two orders of magnitude and the only part
+	// a reader is expected to skip.
+	if (Ar.CustomVer(FMassifCustomVersion::GUID) >= FMassifCustomVersion::BakedEnvironment)
+	{
+		SerializeSection(Ar, Environment, EnvironmentError);
+	}
 }
 
 FString MassifWorldSaveDirectory()

@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "MassifObjectStore.h"
+#include "MassifSaveSection.h"
 #include "MassifSimState.h"
 
 /**
@@ -36,11 +37,12 @@ struct MASSIFSIM_API FMassifWorldSaveHeader
 /**
  * A whole world on disk: what generation produced, and what play has done to it.
  *
- * The two halves are deliberately different in kind. The object store is bulk
- * immutable output that makes the save self-contained, so retuning the rockfall
- * or the flora table cannot silently rewrite a world someone is playing
- * (OBJECT_STORE.md §6). The sim state is small and mutable and carries the
- * overlay of everything the player has changed.
+ * The parts are deliberately different in kind. The object store and the solved
+ * environment are bulk immutable output that make the save self-contained, so
+ * retuning the rockfall, the flora table or an environment process cannot
+ * silently rewrite a world someone is playing (OBJECT_STORE.md §6). The sim
+ * state is small and mutable and carries the overlay of everything the player
+ * has changed.
  *
  * Not here yet, and named so their absence is deliberate rather than forgotten:
  * the response table hash (ARCHITECTURE §5.6.6) and modified resident tiles
@@ -51,6 +53,19 @@ struct MASSIFSIM_API FMassifWorldSave
 	FMassifWorldSaveHeader Header;
 	FMassifSimState SimState;
 	FMassifObjectStore ObjectStore;
+
+	/**
+	 * The solved environment, and the bulk of the file where one is carried.
+	 *
+	 * Opaque here: this module does not generate worlds and does not need to
+	 * understand a bake in order to carry it. Null writes no block and steps over
+	 * whatever block a file holds, which is what a save list reading headers, and
+	 * a load asked to re-solve, both want.
+	 */
+	TSharedPtr<IMassifSaveSection> Environment;
+
+	/** Why the environment block was not read, where one was there and refused. */
+	FString EnvironmentError;
 
 	/** One layout for both directions, so reading and writing cannot drift apart. */
 	void Serialize(FArchive& Ar);

@@ -168,3 +168,102 @@ bool FMassifWorldSaveRefusalTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+namespace
+{
+	/** A block of known bytes, standing in for whatever a module with a bake writes. */
+	class FCountingSection : public IMassifSaveSection
+	{
+	public:
+		explicit FCountingSection(int32 InByteCount)
+			: ByteCount(InByteCount)
+		{
+		}
+
+		virtual bool Serialize(FArchive& Ar, FString& OutError) override
+		{
+			++SerializeCount;
+			Ar << ByteCount;
+
+			Payload.SetNum(ByteCount);
+			for (int32 Index = 0; Index < ByteCount; ++Index)
+			{
+				Payload[Index] = static_cast<uint8>(Index % 251);
+			}
+			Ar.Serialize(Payload.GetData(), ByteCount);
+			return true;
+		}
+
+		int32 ByteCount = 0;
+		int32 SerializeCount = 0;
+		TArray<uint8> Payload;
+	};
+
+	/** A section that gives up part-way, to prove the reader still lands on the end of the block. */
+	class FRefusingSection : public IMassifSaveSection
+	{
+	public:
+		virtual bool Serialize(FArchive& Ar, FString& OutError) override
+		{
+			int32 ByteCount = 0;
+			Ar << ByteCount;
+			OutError = TEXT("Refused on purpose.");
+			return false;
+		}
+	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMassifWorldSaveSectionTest,
+	"Massif.Sim.WorldSave.CarriesASection",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMassifWorldSaveSectionTest::RunTest(const FString& Parameters)
+{
+	// The solved environment is two orders of magnitude larger than the rest of the
+	// save and belongs to a module this one does not depend on, so it travels as a
+	// block behind its own length. What that length buys is everything below: a
+	// reader that wants none of it, and one that refuses what it finds, both end up
+	// at the end of the file rather than inside the block.
+	const FString FilePath = MakeTestSavePath(TEXT("Section"));
+	const int32 SectionByteCount = 4096;
+
+	FMassifWorldSave Written = MakeTestSave(64);
+	const TSharedRef<FCountingSection> WrittenSection = MakeShared<FCountingSection>(SectionByteCount);
+	Written.Environment = WrittenSection;
+
+	FString Error;
+	if (!TestTrue(TEXT("A save with a section is written"),
+		MassifWriteWorldSave(FilePath, Written, Error)))
+	{
+		AddError(Error);
+		return false;
+	}
+
+	FMassifWorldSave Read;
+	const TSharedRef<FCountingSection> ReadSection = MakeShared<FCountingSection>(0);
+	Read.Environment = ReadSection;
+	TestTrue(TEXT("It is read back"), MassifReadWorldSave(FilePath, Read, Error));
+	TestEqual(TEXT("The section read its block"), ReadSection->ByteCount, SectionByteCount);
+	TestEqual(TEXT("The payload came back whole"), ReadSection->Payload, WrittenSection->Payload);
+	TestTrue(TEXT("Nothing was reported wrong"), Read.EnvironmentError.IsEmpty());
+
+	// What a save list does, and what massif.RebuildEnvironment does: read the save
+	// and step over the bake without ever decoding it.
+	FMassifWorldSave Skipped;
+	TestTrue(TEXT("A reader with no section still reads the save"),
+		MassifReadWorldSave(FilePath, Skipped, Error));
+	TestEqual(TEXT("It got every object"),
+		Skipped.ObjectStore.GetRecordCount(), Written.ObjectStore.GetRecordCount());
+	TestEqual(TEXT("It got the sim state"), Skipped.SimState.TickCount, Written.SimState.TickCount);
+
+	FMassifWorldSave Refused;
+	Refused.Environment = MakeShared<FRefusingSection>();
+	TestTrue(TEXT("A save whose section refuses its block still loads"),
+		MassifReadWorldSave(FilePath, Refused, Error));
+	TestEqual(TEXT("The rest of it is intact"),
+		Refused.ObjectStore.GetRecordCount(), Written.ObjectStore.GetRecordCount());
+	TestTrue(TEXT("The refusal is reported"), Refused.EnvironmentError.Contains(TEXT("purpose")));
+
+	IFileManager::Get().Delete(*FilePath);
+	return true;
+}

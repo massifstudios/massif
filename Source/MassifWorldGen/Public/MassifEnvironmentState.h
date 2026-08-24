@@ -85,8 +85,10 @@ private:
  * Thread-safe for reads once written: sampling touches only immutable state.
  * Writes go through FMassifChannelWriteScope, one scope per channel slice.
  *
- * Never serialized: a pure function of the source data, the georeference and
- * the seed, so it is rebuilt at load (ARCHITECTURE §5.6).
+ * A pure function of the source data, the georeference and the seed, and so
+ * derivable at load — but derivable in half a minute, which is why a save
+ * carries the solved payloads and reads them back into a graph it schedules
+ * fresh (ARCHITECTURE §9).
  */
 class MASSIFWORLDGEN_API FMassifEnvironmentState
 {
@@ -174,6 +176,29 @@ public:
 	/** Bytes held by all channel and point-set storage. For the debug panel. */
 	int64 GetResidentByteCount() const;
 
+	/**
+	 * Reads or writes every channel and point set, payloads compressed.
+	 *
+	 * A state read back this way is a carrier, not a world: it holds the solved
+	 * payloads and enough of each descriptor to identify what they belong to, but
+	 * not the unit, description or colour map, which are pointers to text a
+	 * process owns and cannot come off disk. Hand it to TakeSolvedPayloadsFrom on
+	 * a state the graph has just registered its channels into.
+	 */
+	void Serialize(FArchive& Ar);
+
+	/**
+	 * Moves a carrier's solved payloads into the channels this state already has.
+	 *
+	 * Layout comes from the graph and never from the file: every channel is
+	 * matched by name and refused unless its grid, encoding and slice count are
+	 * what the graph registered. A graph that has since gained, lost or resized
+	 * one refuses the whole bake rather than filling in the part that still fits,
+	 * because half a solve is not something the rest of the world can be derived
+	 * from. Refusing costs the solve and nothing else.
+	 */
+	bool TakeSolvedPayloadsFrom(FMassifEnvironmentState& Carrier, FString& OutError);
+
 private:
 	friend class FMassifChannelWriteScope;
 	friend class FMassifPointSetWriteScope;
@@ -229,6 +254,15 @@ private:
 	static void AppendChannelToHash(FMassifStateHash& Hash, const FChannelStorage& Storage);
 	static int64 ChannelByteCount(const FChannelStorage& Storage);
 
+	void SerializeChannels(FArchive& Ar);
+	void ResetChannels(int32 ChannelCount);
+	void IndexChannelsByName();
+	static void SerializeChannel(FArchive& Ar, FChannelStorage& Storage);
+	static void SerializeComponentSlice(FArchive& Ar, FComponentSlice& Slice);
+
+	bool TakeChannelPayload(FChannelStorage& Carrier, FString& OutError);
+	static bool ChannelLayoutMatches(const FChannelStorage& Live, const FChannelStorage& Carrier);
+
 	/**
 	 * One object as stored: position relative to its own bucket, so a float holds
 	 * a tile to a fraction of a millimetre where an absolute one would spend its
@@ -274,6 +308,14 @@ private:
 	static void AppendPointSetToHash(FMassifStateHash& Hash, const FPointSetStorage& Storage);
 	static void AppendStoredPointToHash(FMassifStateHash& Hash, const FStoredPoint& Stored);
 	static int64 PointSetByteCount(const FPointSetStorage& Storage);
+
+	void SerializePointSets(FArchive& Ar);
+	void ResetPointSets(int32 PointSetCount);
+	void IndexPointSetsByName();
+	static void SerializePointSet(FArchive& Ar, FPointSetStorage& Storage);
+	static void SerializeBucket(FArchive& Ar, TArray<FStoredPoint>& Bucket);
+
+	bool TakePointSetPayload(FPointSetStorage& Carrier, FString& OutError);
 
 	/** Held indirectly so registering a channel cannot move the storage a write scope is filling. */
 	TArray<TUniquePtr<FChannelStorage>> Channels;
