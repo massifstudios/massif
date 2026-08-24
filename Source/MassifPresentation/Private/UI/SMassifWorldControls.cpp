@@ -4,6 +4,7 @@
 #include "Engine/World.h"
 #include "HAL/IConsoleManager.h"
 #include "MassifSimSubsystem.h"
+#include "Style/MassifDesignTokens.h"
 #include "Styling/CoreStyle.h"
 #include "Widgets/Input/SSlider.h"
 #include "Widgets/Layout/SBorder.h"
@@ -18,8 +19,8 @@ namespace
 	constexpr float ControlsValueWidth = 52.0f;
 	constexpr float ControlsRowPadding = 3.0f;
 
-	const FLinearColor ControlsPanelBackground(0.02f, 0.03f, 0.05f, 0.82f);
-	const FLinearColor ControlsSectionColour(0.55f, 0.72f, 0.95f, 1.0f);
+	const FLinearColor& ControlsPanelBackground = MassifDesignTokens::PanelBackground;
+	const FLinearColor& ControlsSectionColour = MassifDesignTokens::Accent;
 
 	/** Days before the first of each month, so a day number reads back as a date. */
 	constexpr int32 DaysBeforeMonth[12] = { 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334 };
