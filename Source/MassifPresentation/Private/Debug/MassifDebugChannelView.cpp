@@ -4,7 +4,9 @@
 
 #include "HAL/IConsoleManager.h"
 #include "Kismet/GameplayStatics.h"
+#include "MassifDebugRiverOverlay.h"
 #include "MassifDebugVectorOverlay.h"
+#include "MassifGameMode.h"
 #include "MassifEnvironmentState.h"
 #include "MassifHabitat.h"
 #include "Terrain/MassifTerrainManager.h"
@@ -80,6 +82,23 @@ void AMassifDebugChannelView::Tick(float DeltaSeconds)
 	}
 
 	MassifDebugVectorOverlay::Draw(GetWorld(), *Habitat, Views, ViewIndexOfChannel(CurrentChannel));
+	DrawRiverOverlay();
+}
+
+/** The traced network, which the game mode holds and nothing else has a handle on. */
+void AMassifDebugChannelView::DrawRiverOverlay() const
+{
+	if (!MassifDebugRiverOverlay::IsEnabled())
+	{
+		return;
+	}
+
+	const AMassifGameMode* GameMode = GetWorld()->GetAuthGameMode<AMassifGameMode>();
+	if (GameMode == nullptr || !GameMode->GetRiverNetwork().IsValid())
+	{
+		return;
+	}
+	MassifDebugRiverOverlay::Draw(GetWorld(), *GameMode->GetRiverNetwork());
 }
 
 int32 AMassifDebugChannelView::GetSelectedTimeSliceCount() const

@@ -75,6 +75,9 @@ public:
 	}
 
 private:
+	/** Draws the traced river network over the ground, while massif.Rivers.Overlay is on. */
+	void DrawRiverOverlay() const;
+
 	/** Renders the view and hands it to the terrain, or restores the terrain material for Off. */
 	void ApplyChannel(EMassifDebugChannel Channel, int32 TimeSlice);
 
