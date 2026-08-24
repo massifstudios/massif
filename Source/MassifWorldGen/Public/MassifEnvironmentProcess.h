@@ -3,9 +3,11 @@
 #include "CoreMinimal.h"
 #include "MassifElevationSource.h"
 #include "MassifEnvironmentChannel.h"
+#include "MassifEnvironmentPointSet.h"
 
 class FMassifChannelWriteScope;
 class FMassifEnvironmentState;
+class FMassifPointSetWriteScope;
 
 /**
  * How faithfully a process models what it stands for, switchable at runtime
@@ -67,6 +69,17 @@ struct FMassifProcessDeclaration
 
 	/** Channels written. Registered with the state when the schedule is built. */
 	TArray<FMassifChannelDescriptor> OutputChannels;
+
+	/**
+	 * Discrete objects written, for what a grid cannot hold.
+	 *
+	 * A second kind of output rather than a channel encoding: two boulders in one
+	 * cell are two boulders, and the one that rolled further is not an average of
+	 * the pair. Nothing reads a point set as a process input — the grid reduction
+	 * beside it is what downstream systems coupled to, so the discrete set stays
+	 * a leaf of the graph and cannot join a relaxation group.
+	 */
+	TArray<FMassifPointSetDescriptor> OutputPointSets;
 
 	/** Levels implemented beyond `Off`, which every process supports by definition. */
 	TArray<EMassifFidelity> SupportedFidelities;
@@ -131,6 +144,9 @@ public:
 
 	/** Float scratch for one slice of a declared output. Quantised into the state on commit. */
 	TUniquePtr<FMassifChannelWriteScope> OpenOutput(FName ChannelName, int32 TimeSlice = 0) const;
+
+	/** Slot scratch for a declared point-set output. Bucketed into the state on commit. */
+	TUniquePtr<FMassifPointSetWriteScope> OpenPointSetOutput(FName PointSetName) const;
 
 	/**
 	 * A stream derived from the master seed, the process name and the purpose, so

@@ -91,6 +91,25 @@ TUniquePtr<FMassifChannelWriteScope> FMassifEnvironmentContext::OpenOutput(FName
 	return MakeUnique<FMassifChannelWriteScope>(State, Channel, TimeSlice);
 }
 
+TUniquePtr<FMassifPointSetWriteScope> FMassifEnvironmentContext::OpenPointSetOutput(FName PointSetName) const
+{
+	const bool bDeclared = Declaration.OutputPointSets.ContainsByPredicate(
+		[PointSetName](const FMassifPointSetDescriptor& Descriptor)
+		{
+			return Descriptor.Name == PointSetName;
+		});
+
+	checkf(
+		bDeclared, TEXT("Process %s wrote point set %s without declaring it as an output"),
+		*Declaration.Name.ToString(), *PointSetName.ToString());
+
+	const FMassifPointSetHandle PointSet = State.FindPointSet(PointSetName);
+	checkf(
+		PointSet.IsValid(), TEXT("Output point set %s of process %s was never registered"),
+		*PointSetName.ToString(), *Declaration.Name.ToString());
+	return MakeUnique<FMassifPointSetWriteScope>(State, PointSet);
+}
+
 FString FMassifEnvironmentContext::MakeStreamName(const TCHAR* Purpose) const
 {
 	return FString::Printf(TEXT("%s.%s"), *Declaration.Name.ToString(), Purpose);

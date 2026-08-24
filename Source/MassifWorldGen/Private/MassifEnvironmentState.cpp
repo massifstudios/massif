@@ -173,6 +173,40 @@ namespace
 		return TimeSlice * ComponentCount + ComponentIndex;
 	}
 
+	constexpr double DegreesPerTurn = 360.0;
+
+	/** Cell a world position falls inside, clamped to the grid. Not the cell-centre lattice. */
+	FIntPoint ContainingCell(const FMassifChannelGrid& Grid, FVector2d PositionMeters)
+	{
+		const int32 Column = FMath::FloorToInt32((PositionMeters.X + 0.5 * Grid.WorldSizeXMeters) / Grid.CellSizeMeters);
+		const int32 Row = FMath::FloorToInt32((0.5 * Grid.WorldSizeYMeters - PositionMeters.Y) / Grid.CellSizeMeters);
+		return FIntPoint(FMath::Clamp(Column, 0, Grid.Width - 1), FMath::Clamp(Row, 0, Grid.Height - 1));
+	}
+
+	/** North-west corner of a cell, which is what a stored offset is measured from. */
+	FVector2d CellCornerMeters(const FMassifChannelGrid& Grid, FIntPoint Cell)
+	{
+		return FVector2d(
+			Cell.X * Grid.CellSizeMeters - 0.5 * Grid.WorldSizeXMeters,
+			0.5 * Grid.WorldSizeYMeters - Cell.Y * Grid.CellSizeMeters);
+	}
+
+	uint16 QuantiseFraction(double Fraction)
+	{
+		return static_cast<uint16>(FMath::RoundToInt32(FMath::Clamp(Fraction, 0.0, 1.0) * Uint16QuantisationSteps));
+	}
+
+	uint16 QuantiseAngle(double Degrees)
+	{
+		return QuantiseFraction(FMath::Fmod(FMath::Fmod(Degrees, DegreesPerTurn) + DegreesPerTurn, DegreesPerTurn)
+			/ DegreesPerTurn);
+	}
+
+	double ExpandAngle(uint16 Entry)
+	{
+		return Entry / Uint16QuantisationSteps * DegreesPerTurn;
+	}
+
 	/** Continuous cell coordinate of a world position, clamped to the outermost cell centres. */
 	FVector2d CellCoordinateAt(const FMassifChannelGrid& Grid, FVector2d PositionMeters)
 	{
@@ -500,6 +534,220 @@ bool FMassifEnvironmentState::IsChannelWritten(FMassifChannelHandle Channel) con
 	return GetStorage(Channel).bWritten;
 }
 
+FMassifPointSetWriteScope::FMassifPointSetWriteScope(
+	FMassifEnvironmentState& InState, FMassifPointSetHandle InPointSet)
+	: State(InState)
+	, PointSet(InPointSet)
+{
+}
+
+FMassifPointSetWriteScope::~FMassifPointSetWriteScope()
+{
+	checkf(bCommitted, TEXT("Point set '%s' was written and never committed"),
+		*State.GetPointSetDescriptor(PointSet).Name.ToString());
+}
+
+TArrayView<FMassifEnvironmentPoint> FMassifPointSetWriteScope::Reserve(int32 CandidateCount)
+{
+	checkf(CandidateCount >= 0, TEXT("Point set '%s' was reserved for %d candidates"),
+		*State.GetPointSetDescriptor(PointSet).Name.ToString(), CandidateCount);
+	Scratch.Reset();
+	Scratch.SetNum(CandidateCount);
+	return Scratch;
+}
+
+void FMassifPointSetWriteScope::Commit()
+{
+	checkf(!bCommitted, TEXT("Point set '%s' was committed twice"),
+		*State.GetPointSetDescriptor(PointSet).Name.ToString());
+	State.CommitPoints(PointSet, Scratch);
+	bCommitted = true;
+}
+
+FMassifPointSetHandle FMassifEnvironmentState::RegisterPointSet(const FMassifPointSetDescriptor& Descriptor)
+{
+	const FMassifPointSetHandle Existing = FindPointSet(Descriptor.Name);
+	if (!Existing.IsValid())
+	{
+		return AddPointSet(Descriptor);
+	}
+
+	checkf(GetPointSetDescriptor(Existing) == Descriptor,
+		TEXT("Point set '%s' is already registered with a different descriptor"), *Descriptor.Name.ToString());
+	return Existing;
+}
+
+FMassifPointSetHandle FMassifEnvironmentState::AddPointSet(const FMassifPointSetDescriptor& Descriptor)
+{
+	checkf(!Descriptor.Name.IsNone(), TEXT("A point set must be registered under a name"));
+	checkf(Descriptor.TileSizeMeters > 0.0, TEXT("Point set '%s' must have a positive tile size"),
+		*Descriptor.Name.ToString());
+	checkf(Descriptor.RadiusRangeMeters.Y > Descriptor.RadiusRangeMeters.X,
+		TEXT("Point set '%s' must span a positive radius range"), *Descriptor.Name.ToString());
+
+	TUniquePtr<FPointSetStorage> Storage = MakeUnique<FPointSetStorage>();
+	Storage->Descriptor = Descriptor;
+	Storage->TileGrid = FMassifChannelGrid::FromWorldSize(WorldSizeMeters, Descriptor.TileSizeMeters);
+	Storage->Buckets.SetNum(Storage->TileGrid.CellCount());
+
+	const int32 PointSetIndex = PointSets.Add(MoveTemp(Storage));
+	PointSetIndexByName.Add(Descriptor.Name, PointSetIndex);
+	return FMassifPointSetHandle{ PointSetIndex };
+}
+
+FMassifPointSetHandle FMassifEnvironmentState::FindPointSet(FName Name) const
+{
+	const int32* PointSetIndex = PointSetIndexByName.Find(Name);
+	if (PointSetIndex == nullptr)
+	{
+		return FMassifPointSetHandle();
+	}
+	return FMassifPointSetHandle{ *PointSetIndex };
+}
+
+int32 FMassifEnvironmentState::GetPointSetCount() const
+{
+	return PointSets.Num();
+}
+
+FMassifEnvironmentState::FPointSetStorage& FMassifEnvironmentState::GetPointSetStorage(FMassifPointSetHandle PointSet)
+{
+	checkf(PointSets.IsValidIndex(PointSet.Index), TEXT("Point set handle %d is not registered"), PointSet.Index);
+	return *PointSets[PointSet.Index];
+}
+
+const FMassifEnvironmentState::FPointSetStorage& FMassifEnvironmentState::GetPointSetStorage(
+	FMassifPointSetHandle PointSet) const
+{
+	checkf(PointSets.IsValidIndex(PointSet.Index), TEXT("Point set handle %d is not registered"), PointSet.Index);
+	return *PointSets[PointSet.Index];
+}
+
+const FMassifPointSetDescriptor& FMassifEnvironmentState::GetPointSetDescriptor(FMassifPointSetHandle PointSet) const
+{
+	return GetPointSetStorage(PointSet).Descriptor;
+}
+
+const FMassifChannelGrid& FMassifEnvironmentState::GetPointSetTileGrid(FMassifPointSetHandle PointSet) const
+{
+	return GetPointSetStorage(PointSet).TileGrid;
+}
+
+TArray<FMassifPointSetHandle> FMassifEnvironmentState::GetAllPointSets() const
+{
+	TArray<FMassifPointSetHandle> Handles;
+	Handles.Reserve(PointSets.Num());
+	for (int32 PointSetIndex = 0; PointSetIndex < PointSets.Num(); ++PointSetIndex)
+	{
+		Handles.Add(FMassifPointSetHandle{ PointSetIndex });
+	}
+	return Handles;
+}
+
+TArray<FMassifPointSetHandle> FMassifEnvironmentState::GetPointSetsByName() const
+{
+	TArray<FMassifPointSetHandle> Handles = GetAllPointSets();
+	Handles.Sort([this](const FMassifPointSetHandle& Left, const FMassifPointSetHandle& Right)
+	{
+		return GetPointSetDescriptor(Left).Name.Compare(GetPointSetDescriptor(Right).Name) < 0;
+	});
+	return Handles;
+}
+
+int32 FMassifEnvironmentState::GetPointCount(FMassifPointSetHandle PointSet) const
+{
+	return GetPointSetStorage(PointSet).PointCount;
+}
+
+bool FMassifEnvironmentState::IsPointSetWritten(FMassifPointSetHandle PointSet) const
+{
+	return GetPointSetStorage(PointSet).bWritten;
+}
+
+void FMassifEnvironmentState::CommitPoints(
+	FMassifPointSetHandle PointSet, TArrayView<const FMassifEnvironmentPoint> Points)
+{
+	FPointSetStorage& Storage = GetPointSetStorage(PointSet);
+	for (TArray<FStoredPoint>& Bucket : Storage.Buckets)
+	{
+		Bucket.Reset();
+	}
+	Storage.PointCount = 0;
+
+	// Slot order within a bucket, so the stored set does not depend on which thread
+	// filled which slot first.
+	for (const FMassifEnvironmentPoint& Point : Points)
+	{
+		StorePoint(Storage, Point);
+	}
+	Storage.bWritten = true;
+}
+
+void FMassifEnvironmentState::StorePoint(FPointSetStorage& Storage, const FMassifEnvironmentPoint& Point)
+{
+	if (Point.RadiusMeters <= 0.0)
+	{
+		return;
+	}
+
+	const FVector2d PositionMeters(Point.PositionMeters.X, Point.PositionMeters.Y);
+	const FIntPoint Cell = ContainingCell(Storage.TileGrid, PositionMeters);
+	const FVector2d Corner = CellCornerMeters(Storage.TileGrid, Cell);
+	const FVector2d Range = Storage.Descriptor.RadiusRangeMeters;
+
+	FStoredPoint Stored;
+	Stored.OffsetXMeters = static_cast<float>(PositionMeters.X - Corner.X);
+	Stored.OffsetYMeters = static_cast<float>(Corner.Y - PositionMeters.Y);
+	Stored.AltitudeMeters = static_cast<float>(Point.PositionMeters.Z);
+	Stored.Radius = QuantiseFraction((Point.RadiusMeters - Range.X) / (Range.Y - Range.X));
+	Stored.Yaw = QuantiseAngle(Point.RotationDegrees.X);
+	Stored.Pitch = QuantiseAngle(Point.RotationDegrees.Y);
+	Stored.Roll = QuantiseAngle(Point.RotationDegrees.Z);
+	Stored.BuriedFraction =
+		static_cast<uint8>(FMath::RoundToInt32(FMath::Clamp(Point.BuriedFraction, 0.0, 1.0) * Uint8QuantisationSteps));
+	Stored.ClassIndex = static_cast<uint8>(FMath::Clamp(Point.ClassIndex, 0, 255));
+
+	Storage.Buckets[Storage.TileGrid.CellIndex(Cell.X, Cell.Y)].Add(Stored);
+	++Storage.PointCount;
+}
+
+void FMassifEnvironmentState::ReadTilePoints(
+	FMassifPointSetHandle PointSet, int32 TileColumn, int32 TileRow, TArray<FMassifEnvironmentPoint>& OutPoints) const
+{
+	OutPoints.Reset();
+
+	const FPointSetStorage& Storage = GetPointSetStorage(PointSet);
+	const int32 BucketIndex = Storage.TileGrid.CellIndex(TileColumn, TileRow);
+	if (BucketIndex == INDEX_NONE)
+	{
+		return;
+	}
+
+	const FVector2d Corner = CellCornerMeters(Storage.TileGrid, FIntPoint(TileColumn, TileRow));
+	const FVector2d Range = Storage.Descriptor.RadiusRangeMeters;
+
+	OutPoints.Reserve(Storage.Buckets[BucketIndex].Num());
+	for (const FStoredPoint& Stored : Storage.Buckets[BucketIndex])
+	{
+		OutPoints.Add(ExpandPoint(Stored, Corner, Range));
+	}
+}
+
+FMassifEnvironmentPoint FMassifEnvironmentState::ExpandPoint(
+	const FStoredPoint& Stored, FVector2d Corner, FVector2d RadiusRangeMeters)
+{
+	FMassifEnvironmentPoint Point;
+	Point.PositionMeters = FVector3d(
+		Corner.X + Stored.OffsetXMeters, Corner.Y - Stored.OffsetYMeters, Stored.AltitudeMeters);
+	Point.RadiusMeters = FMath::Lerp(
+		RadiusRangeMeters.X, RadiusRangeMeters.Y, Stored.Radius / Uint16QuantisationSteps);
+	Point.RotationDegrees =
+		FVector3d(ExpandAngle(Stored.Yaw), ExpandAngle(Stored.Pitch), ExpandAngle(Stored.Roll));
+	Point.BuriedFraction = Stored.BuriedFraction / Uint8QuantisationSteps;
+	Point.ClassIndex = Stored.ClassIndex;
+	return Point;
+}
+
 uint64 FMassifEnvironmentState::ComputeContentHash() const
 {
 	FMassifStateHash Hash;
@@ -507,7 +755,54 @@ uint64 FMassifEnvironmentState::ComputeContentHash() const
 	{
 		AppendChannelToHash(Hash, GetStorage(Channel));
 	}
+	for (FMassifPointSetHandle PointSet : GetPointSetsByName())
+	{
+		AppendPointSetToHash(Hash, GetPointSetStorage(PointSet));
+	}
 	return Hash.Finalize();
+}
+
+void FMassifEnvironmentState::AppendPointSetToHash(FMassifStateHash& Hash, const FPointSetStorage& Storage)
+{
+	const FString NameString = Storage.Descriptor.Name.ToString();
+	Hash.Append(*NameString, NameString.Len() * sizeof(TCHAR));
+	Hash.AppendInt(Storage.TileGrid.Width);
+	Hash.AppendInt(Storage.TileGrid.Height);
+	Hash.AppendInt(Storage.PointCount);
+
+	// Field by field rather than as bytes: the stored struct carries trailing
+	// padding, and padding is not initialised to anything a hash may depend on.
+	for (const TArray<FStoredPoint>& Bucket : Storage.Buckets)
+	{
+		Hash.AppendInt(Bucket.Num());
+		for (const FStoredPoint& Stored : Bucket)
+		{
+			AppendStoredPointToHash(Hash, Stored);
+		}
+	}
+}
+
+void FMassifEnvironmentState::AppendStoredPointToHash(FMassifStateHash& Hash, const FStoredPoint& Stored)
+{
+	Hash.Append(&Stored.OffsetXMeters, sizeof(float));
+	Hash.Append(&Stored.OffsetYMeters, sizeof(float));
+	Hash.Append(&Stored.AltitudeMeters, sizeof(float));
+	Hash.AppendInt(Stored.Radius);
+	Hash.AppendInt(Stored.Yaw);
+	Hash.AppendInt(Stored.Pitch);
+	Hash.AppendInt(Stored.Roll);
+	Hash.AppendInt(Stored.BuriedFraction);
+	Hash.AppendInt(Stored.ClassIndex);
+}
+
+int64 FMassifEnvironmentState::PointSetByteCount(const FPointSetStorage& Storage)
+{
+	int64 TotalBytes = 0;
+	for (const TArray<FStoredPoint>& Bucket : Storage.Buckets)
+	{
+		TotalBytes += Bucket.Num() * sizeof(FStoredPoint);
+	}
+	return TotalBytes;
 }
 
 void FMassifEnvironmentState::AppendChannelToHash(FMassifStateHash& Hash, const FChannelStorage& Storage)
@@ -534,6 +829,10 @@ int64 FMassifEnvironmentState::GetResidentByteCount() const
 	for (const TUniquePtr<FChannelStorage>& Storage : Channels)
 	{
 		TotalBytes += ChannelByteCount(*Storage);
+	}
+	for (const TUniquePtr<FPointSetStorage>& Storage : PointSets)
+	{
+		TotalBytes += PointSetByteCount(*Storage);
 	}
 	return TotalBytes;
 }

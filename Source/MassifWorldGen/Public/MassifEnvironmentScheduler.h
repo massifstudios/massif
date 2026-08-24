@@ -175,6 +175,7 @@ private:
 
 	bool ValidateNames(FString& OutError) const;
 	bool MapProducers(TMap<FName, int32>& OutProducerOfChannel, FString& OutError) const;
+	bool MapPointSetProducers(TMap<FName, int32>& ProducerOfChannel, FString& OutError) const;
 	bool ValidateFidelities(FString& OutError) const;
 	bool BuildDependencyEdges(const TMap<FName, int32>& ProducerOfChannel, FString& OutError);
 	void AddOptionalDependencies(const TMap<FName, int32>& ProducerOfChannel, int32 NodeIndex);

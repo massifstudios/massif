@@ -896,6 +896,16 @@ namespace
 		}
 		return Rivers;
 	}
+	/** Stations in the longest river, which is the trunk if the joining worked. */
+	int32 LongestStationCount(const TArray<FMassifRiverReach>& Rivers)
+	{
+		int32 Longest = 0;
+		for (const FMassifRiverReach& River : Rivers)
+		{
+			Longest = FMath::Max(Longest, River.Nodes.Num());
+		}
+		return Longest;
+	}
 }
 
 TSharedRef<const FMassifRiverNetwork> MassifBakeCpu::ExtractRivers(
@@ -915,7 +925,11 @@ TSharedRef<const FMassifRiverNetwork> MassifBakeCpu::ExtractRivers(
 	// Joined before anything is solved over them. Every stage below works a run at
 	// a time, and a run that stops at a confluence solves its water surface with
 	// no knowledge of the water it is about to meet.
-	TArray<FMassifRiverReach> Reaches = JoinReachesIntoRivers(Extraction.Run());
+	const TArray<FMassifRiverReach> Traced = Extraction.Run();
+	TArray<FMassifRiverReach> Reaches = JoinReachesIntoRivers(Traced);
+
+	UE_LOG(LogTemp, Display, TEXT("Rivers: joined %d traced reaches into %d rivers, longest %d stations"),
+		Traced.Num(), Reaches.Num(), LongestStationCount(Reaches));
 
 	// After the polylines are traced and resampled, so a section is taken across
 	// the line the water is actually drawn along rather than across the staircase

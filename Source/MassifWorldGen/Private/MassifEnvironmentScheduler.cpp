@@ -241,6 +241,33 @@ bool FMassifEnvironmentScheduler::MapProducers(TMap<FName, int32>& OutProducerOf
 			OutProducerOfChannel.Add(Output.Name, NodeIndex);
 		}
 	}
+	return MapPointSetProducers(OutProducerOfChannel, OutError);
+}
+
+/**
+ * Point sets share the channel namespace, so a set cannot take the name of a
+ * channel and a reader asking for one name cannot be handed the other. They add
+ * no dependency edges: nothing reads a point set as a process input.
+ */
+bool FMassifEnvironmentScheduler::MapPointSetProducers(
+	TMap<FName, int32>& ProducerOfChannel, FString& OutError) const
+{
+	for (int32 NodeIndex = 0; NodeIndex < Nodes.Num(); ++NodeIndex)
+	{
+		for (const FMassifPointSetDescriptor& Output : Nodes[NodeIndex].Declaration.OutputPointSets)
+		{
+			const int32* ExistingProducer = ProducerOfChannel.Find(Output.Name);
+			if (ExistingProducer != nullptr)
+			{
+				OutError = FString::Printf(
+					TEXT("Point set %s is produced by both %s and %s"), *Output.Name.ToString(),
+					*Nodes[*ExistingProducer].Declaration.Name.ToString(),
+					*Nodes[NodeIndex].Declaration.Name.ToString());
+				return false;
+			}
+			ProducerOfChannel.Add(Output.Name, NodeIndex);
+		}
+	}
 	return true;
 }
 
@@ -305,6 +332,10 @@ void FMassifEnvironmentScheduler::RegisterOutputChannels()
 		for (const FMassifChannelDescriptor& Output : Node.Declaration.OutputChannels)
 		{
 			State->RegisterChannel(Output);
+		}
+		for (const FMassifPointSetDescriptor& Output : Node.Declaration.OutputPointSets)
+		{
+			State->RegisterPointSet(Output);
 		}
 	}
 }
