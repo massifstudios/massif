@@ -24,8 +24,10 @@ namespace
 	}
 }
 
-FMassifEnvironmentSettingsModel::FMassifEnvironmentSettingsModel(FMassifEnvironmentScheduler& InScheduler)
+FMassifEnvironmentSettingsModel::FMassifEnvironmentSettingsModel(
+	FMassifEnvironmentScheduler& InScheduler, EMassifSettingsApplyMode InApplyMode)
 	: Scheduler(InScheduler)
+	, ApplyMode(InApplyMode)
 {
 	RefreshRows();
 }
@@ -108,11 +110,17 @@ double FMassifEnvironmentSettingsModel::Apply()
 		Scheduler.SetFidelity(Row.ProcessName, Row.Staged);
 	}
 
+	MassifEnvironmentSettings::Save(Scheduler);
+	if (ApplyMode == EMassifSettingsApplyMode::RecordForNextGeneration)
+	{
+		RefreshRows();
+		return 0.0;
+	}
+
 	const double StartedSeconds = FPlatformTime::Seconds();
 	Scheduler.Execute();
 	const double SolveSeconds = FPlatformTime::Seconds() - StartedSeconds;
 
-	MassifEnvironmentSettings::Save(Scheduler);
 	RefreshRows();
 	return SolveSeconds;
 }

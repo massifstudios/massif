@@ -72,6 +72,19 @@ public:
 		return MipLevels.Num();
 	}
 
+	/**
+	 * Content hash of the model this was read from.
+	 *
+	 * A save names its elevation model and carries this, so a world can refuse to
+	 * load onto ground that has been refetched or regenerated since (ARCHITECTURE §9).
+	 * Over the source bytes rather than the mip chain: the chain is derived, and a
+	 * change to how it is derived is not a change to the terrain.
+	 */
+	uint64 GetContentHash() const
+	{
+		return ContentHash;
+	}
+
 private:
 	/** One resolution of the same world box: coarser levels have fewer, wider samples. */
 	struct FMipLevel
@@ -99,4 +112,5 @@ private:
 	double FinestSpacingMeters = 1.0;
 	double MinAltitudeMeters = 0.0;
 	double MaxAltitudeMeters = 0.0;
+	uint64 ContentHash = 0;
 };

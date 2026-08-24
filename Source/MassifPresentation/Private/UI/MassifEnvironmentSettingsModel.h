@@ -30,6 +30,21 @@ struct FMassifFidelityRow
 };
 
 /**
+ * What an Apply does with the staged levels.
+ *
+ * Over a world that exists there is something to re-solve, and the screen pays
+ * for it there and then. From the main menu there is no world yet: the levels are
+ * recorded, and the generation the player is about to start runs at them. Solving
+ * a throwaway world to make the screen work would be wasted seconds and a set of
+ * channels nobody reads.
+ */
+enum class EMassifSettingsApplyMode : uint8
+{
+	Resolve,
+	RecordForNextGeneration,
+};
+
+/**
  * The settings screen's state, with no widget in it.
  *
  * Changes are staged rather than applied as they are picked. Three reasons, in
@@ -42,7 +57,14 @@ struct FMassifFidelityRow
 class FMassifEnvironmentSettingsModel
 {
 public:
-	explicit FMassifEnvironmentSettingsModel(FMassifEnvironmentScheduler& InScheduler);
+	explicit FMassifEnvironmentSettingsModel(
+		FMassifEnvironmentScheduler& InScheduler,
+		EMassifSettingsApplyMode InApplyMode = EMassifSettingsApplyMode::Resolve);
+
+	EMassifSettingsApplyMode GetApplyMode() const
+	{
+		return ApplyMode;
+	}
 
 	const TArray<FMassifFidelityRow>& GetRows() const
 	{
@@ -71,12 +93,17 @@ public:
 	 */
 	TArray<FString> GetAffectedDisplayNames() const;
 
-	/** Moves the graph to the staged levels, re-solves once, and saves. Seconds the solve took. */
+	/**
+	 * Moves the graph to the staged levels and saves them.
+	 *
+	 * Seconds the re-solve took, or zero where the mode only records.
+	 */
 	double Apply();
 
 private:
 	void RefreshRows();
 
 	FMassifEnvironmentScheduler& Scheduler;
+	EMassifSettingsApplyMode ApplyMode = EMassifSettingsApplyMode::Resolve;
 	TArray<FMassifFidelityRow> Rows;
 };

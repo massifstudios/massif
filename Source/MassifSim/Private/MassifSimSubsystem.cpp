@@ -10,6 +10,14 @@ void UMassifSimSubsystem::StartNewGame(int32 MasterSeed)
 	bSimulationStarted = true;
 }
 
+void UMassifSimSubsystem::RestoreGame(FMassifSimState LoadedState)
+{
+	State = MoveTemp(LoadedState);
+	PendingCommands.Reset();
+	Clock = FMassifSimClock();
+	bSimulationStarted = true;
+}
+
 void UMassifSimSubsystem::EnqueueCommand(const FMassifSimCommand& Command)
 {
 	PendingCommands.Add(Command);

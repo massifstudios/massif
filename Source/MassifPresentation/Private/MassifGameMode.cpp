@@ -22,7 +22,12 @@
 #include "MassifEnvironmentScheduler.h"
 #include "MassifEnvironmentState.h"
 #include "MassifHabitat.h"
+#include "MassifWorldBuild.h"
+#include "MassifWorldSave.h"
+#include "Misc/EngineVersion.h"
 #include "UI/MassifEnvironmentSettings.h"
+#include "UI/MassifLoadingScreen.h"
+#include "UI/MassifMainMenuScreen.h"
 #include "MassifHeightmap.h"
 #include "MassifObjectStore.h"
 #include "MassifObjectStoreBuilder.h"
@@ -125,43 +130,6 @@ namespace
 		return Summary;
 	}
 
-	/** The station carrying the most water in one reach, which is where its channel is widest. */
-	const FMassifRiverNode* BusiestNode(const FMassifRiverReach& Reach)
-	{
-		const FMassifRiverNode* Busiest = nullptr;
-		for (const FMassifRiverNode& Node : Reach.Nodes)
-		{
-			if (Busiest != nullptr
-				&& Node.DischargeCubicMetersPerSecond <= Busiest->DischargeCubicMetersPerSecond)
-			{
-				continue;
-			}
-			Busiest = &Node;
-		}
-		return Busiest;
-	}
-
-	/** The busiest station in the whole world, which is the one worth baking first. */
-	const FMassifRiverNode* BusiestNode(const FMassifRiverNetwork& Rivers)
-	{
-		const FMassifRiverNode* Busiest = nullptr;
-		for (const FMassifRiverReach& Reach : Rivers.GetReaches())
-		{
-			const FMassifRiverNode* Node = BusiestNode(Reach);
-			if (Node == nullptr)
-			{
-				continue;
-			}
-			if (Busiest != nullptr
-				&& Node->DischargeCubicMetersPerSecond <= Busiest->DischargeCubicMetersPerSecond)
-			{
-				continue;
-			}
-			Busiest = Node;
-		}
-		return Busiest;
-	}
-
 	/** The busiest station in the network, so the camera can be sent to the biggest river by name. */
 	FVector2d GBusiestNodeMeters = FVector2d::ZeroVector;
 	bool bGBusiestNodeFound = false;
@@ -223,6 +191,31 @@ namespace
 		TEXT("Move the camera to the busiest river in the network."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&TeleportToWaterCommand));
 
+	/** The name a save takes when none is given, so the common case needs no argument. */
+	const TCHAR* DefaultSaveName = TEXT("Massif");
+
+	FString SaveNameFrom(const TArray<FString>& Arguments)
+	{
+		if (Arguments.Num() == 0)
+		{
+			return DefaultSaveName;
+		}
+		return Arguments[0];
+	}
+
+	void SaveCommand(const TArray<FString>& Arguments, UWorld* World);
+	void LoadCommand(const TArray<FString>& Arguments, UWorld* World);
+
+	FAutoConsoleCommandWithWorldAndArgs GSaveCommand(
+		TEXT("massif.Save"),
+		TEXT("Write the world to Saved/SaveGames: massif.Save [name]"),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&SaveCommand));
+
+	FAutoConsoleCommandWithWorldAndArgs GLoadCommand(
+		TEXT("massif.Load"),
+		TEXT("Read a world back: massif.Load [name]"),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&LoadCommand));
+
 	/** Earth's surface gravity, 9.81 m/s down. */
 	constexpr float EarthGravityCentimetersPerSecondSquared = -981.0f;
 
@@ -268,6 +261,28 @@ namespace
 		return DelaySeconds;
 	}
 
+	/**
+	 * -MassifLoad=<name> loads that save instead of opening the menu, and
+	 * -MassifSaveAfter=<name> writes the world out once it is built.
+	 *
+	 * Command-line rather than cvars, for the same reason as -MassifScreenshotAfter:
+	 * -ExecCmds runs long before an asynchronous build has finished, so a console
+	 * command cannot reach either end of this loop.
+	 */
+	FString GetRequestedLoadName()
+	{
+		FString SaveName;
+		FParse::Value(FCommandLine::Get(), TEXT("MassifLoad="), SaveName);
+		return SaveName;
+	}
+
+	FString GetRequestedSaveName()
+	{
+		FString SaveName;
+		FParse::Value(FCommandLine::Get(), TEXT("MassifSaveAfter="), SaveName);
+		return SaveName;
+	}
+
 	uint32 GetMasterSeed()
 	{
 		int32 MasterSeed = CVarMassifSeed.GetValueOnGameThread();
@@ -275,11 +290,16 @@ namespace
 		return static_cast<uint32>(MasterSeed);
 	}
 
-	FString GetHeightmapPath()
+	FString GetElevationModelName()
 	{
 		FString DemName = CVarMassifDem.GetValueOnGameThread();
 		FParse::Value(FCommandLine::Get(), TEXT("MassifDem="), DemName);
-		return FPaths::ProjectDir() / TEXT("Data/Terrain") / DemName + TEXT(".massifdem");
+		return DemName;
+	}
+
+	FString GetHeightmapPath()
+	{
+		return FPaths::ProjectDir() / TEXT("Data/Terrain") / GetElevationModelName() + TEXT(".massifdem");
 	}
 
 	/**
@@ -343,19 +363,190 @@ void AMassifGameMode::BeginPlay()
 {
 	Super::BeginPlay();
 	ApplyEarthGravity();
-	StartSimulation();
-	LoadTerrainAndSpawnManagers();
+
+	const FString RequestedLoadName = GetRequestedLoadName();
+	if (!RequestedLoadName.IsEmpty())
+	{
+		LoadGame(RequestedLoadName);
+		return;
+	}
+
+	// A debug shot has nobody to click the menu, so it goes straight to the world.
+	if (GetAutoScreenshotDelaySeconds() > 0.0f)
+	{
+		StartNewGame();
+		return;
+	}
+	MassifMainMenuScreen::Open(GetWorld());
+}
+
+void AMassifGameMode::StartNewGame()
+{
+	BeginWorldBuild(FString());
+}
+
+void AMassifGameMode::LoadGame(const FString& SaveName)
+{
+	BeginWorldBuild(SaveName);
+}
+
+void AMassifGameMode::TearDownWorld()
+{
+	// Everything here reads the terrain field or the environment, so none of it
+	// survives a world being replaced. The sun, sky and atmosphere do: they are a
+	// function of the latitude and the clock, not of the ground.
+	AActor* WorldActors[] = {
+		TerrainManager, FoliageManager, RockManager, WaterBodyManager, DebugChannelView, FogManager };
+	for (AActor* Actor : WorldActors)
+	{
+		if (Actor != nullptr)
+		{
+			Actor->Destroy();
+		}
+	}
+
+	TerrainManager = nullptr;
+	FoliageManager = nullptr;
+	RockManager = nullptr;
+	WaterBodyManager = nullptr;
+	DebugChannelView = nullptr;
+	FogManager = nullptr;
+
+	EnvironmentScheduler.Reset();
+	RiverNetwork.Reset();
+	RiverField.Reset();
+	TerrainField.Reset();
+	ObjectStore.Reset();
+}
+
+void AMassifGameMode::BeginWorldBuild(const FString& SaveName)
+{
+	if (BuildProgress.IsValid())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("A world is already being built."));
+		return;
+	}
+	TearDownWorld();
+
+	BuildProgress = MakeShared<FMassifWorldBuildProgress>();
+	MassifLoadingScreen::Open(GetWorld(), BuildProgress.ToSharedRef());
+
+	// Everything a worker would otherwise have to reach a UObject for is read here,
+	// on the game thread, and carried across as plain data.
+	FMassifWorldBuildInputs Inputs;
+	Inputs.HeightmapPath = GetHeightmapPath();
+	Inputs.ElevationModelName = GetElevationModelName();
+	Inputs.MasterSeed = GetMasterSeed();
+	Inputs.Params = GetEnvironmentParams();
+	Inputs.SavedFidelities = MassifEnvironmentSettings::ReadSaved();
+	Inputs.SaveName = SaveName;
+
+	const TWeakObjectPtr<AMassifGameMode> WeakThis(this);
+	const TSharedRef<FMassifWorldBuildProgress> Progress = BuildProgress.ToSharedRef();
+
+	AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask, [Inputs, Progress, WeakThis]()
+	{
+		FMassifWorldBuildResult Result = MassifWorldBuild::Run(Inputs, Progress.Get());
+		AsyncTask(ENamedThreads::GameThread, [WeakThis, Result = MoveTemp(Result)]() mutable
+		{
+			if (!WeakThis.IsValid())
+			{
+				return;
+			}
+			WeakThis->FinishWorldBuild(MoveTemp(Result));
+		});
+	});
+}
+
+void AMassifGameMode::FinishWorldBuild(FMassifWorldBuildResult Result)
+{
+	if (!Result.Succeeded())
+	{
+		UE_LOG(LogTemp, Error, TEXT("World generation: %s"), *Result.Error);
+		MassifLoadingScreen::Close();
+		MassifMainMenuScreen::Open(GetWorld());
+		BuildProgress.Reset();
+		return;
+	}
+
+	StartSimulation(Result);
+
+	ElevationModelName = Result.ElevationModelName;
+	ElevationModelHash = Result.ElevationModelHash;
+	MasterSeed = Result.MasterSeed;
+	EnvironmentScheduler = Result.EnvironmentScheduler;
+	RiverNetwork = Result.RiverNetwork;
+	RiverField = Result.RiverField;
+	TerrainField = Result.TerrainField;
+	ObjectStore = Result.ObjectStore;
+	GBusiestNodeMeters = Result.BusiestNodeMeters;
+	bGBusiestNodeFound = Result.bBusiestNodeFound;
+	SpawnAltitudeMeters = static_cast<float>(TerrainField->GetMaxAltitudeMeters()) + 2200.0f;
+
+	LogEnvironmentSummary(Result.EnvironmentSeconds);
+	LogRiverSummary(*RiverNetwork);
+	LogObjectStoreSummary(Result);
+
+	SpawnWorldActors(Result.HabitatField.ToSharedRef());
 	SpawnEnvironmentActors();
 	ConfigureFlyPawn();
 	ScheduleDebugScreenshot();
+
+	MassifLoadingScreen::Close();
+	BuildProgress.Reset();
+	WriteRequestedSave();
 }
 
-void AMassifGameMode::StartSimulation()
+void AMassifGameMode::WriteRequestedSave()
+{
+	const FString SaveName = GetRequestedSaveName();
+	if (SaveName.IsEmpty())
+	{
+		return;
+	}
+
+	const double StartSeconds = FPlatformTime::Seconds();
+	FString SaveError;
+	if (!SaveGame(SaveName, SaveError))
+	{
+		UE_LOG(LogTemp, Error, TEXT("Save '%s': %s"), *SaveName, *SaveError);
+		return;
+	}
+	UE_LOG(LogTemp, Display, TEXT("Save '%s': written in %.2f s"),
+		*SaveName, FPlatformTime::Seconds() - StartSeconds);
+}
+
+void AMassifGameMode::StartSimulation(FMassifWorldBuildResult& Result)
 {
 	// The wall clock is derived from the tick count, so nothing that reads the time
 	// of day means anything until the simulation is running (ARCHITECTURE §6.1).
 	UMassifSimSubsystem* Sim = GetGameInstance()->GetSubsystem<UMassifSimSubsystem>();
-	Sim->StartNewGame(static_cast<int32>(GetMasterSeed()));
+	if (Result.LoadedSimState.IsSet())
+	{
+		Sim->RestoreGame(MoveTemp(*Result.LoadedSimState));
+		return;
+	}
+	Sim->StartNewGame(static_cast<int32>(Result.MasterSeed));
+}
+
+bool AMassifGameMode::SaveGame(const FString& SaveName, FString& OutError)
+{
+	if (!HasWorld())
+	{
+		OutError = TEXT("There is no world to save.");
+		return false;
+	}
+
+	FMassifWorldSave Save;
+	Save.Header.MasterSeed = static_cast<int32>(MasterSeed);
+	Save.Header.ElevationModelName = ElevationModelName;
+	Save.Header.ElevationModelHash = ElevationModelHash;
+	Save.Header.EngineVersion = FEngineVersion::Current().ToString();
+	Save.Header.SavedAtUtc = FDateTime::UtcNow();
+	Save.SimState = GetGameInstance()->GetSubsystem<UMassifSimSubsystem>()->GetState();
+	Save.ObjectStore = *ObjectStore;
+
+	return MassifWriteWorldSave(MassifWorldSavePath(SaveName), Save, OutError);
 }
 
 void AMassifGameMode::ApplyEarthGravity()
@@ -365,40 +556,9 @@ void AMassifGameMode::ApplyEarthGravity()
 	WorldSettings->GlobalGravityZ = EarthGravityCentimetersPerSecondSquared;
 }
 
-void AMassifGameMode::LoadTerrainAndSpawnManagers()
+void AMassifGameMode::SpawnWorldActors(TSharedRef<const FMassifHabitatField> HabitatField)
 {
-	const FString HeightmapPath = GetHeightmapPath();
-	const double StartSeconds = FPlatformTime::Seconds();
-
-	FString LoadError;
-	TSharedPtr<const FMassifHeightmap> Heightmap = FMassifHeightmap::LoadFromFile(HeightmapPath, LoadError);
-	if (!Heightmap.IsValid())
-	{
-		UE_LOG(LogTemp, Error, TEXT("Terrain: %s. Fetch one with Tools/fetch_tirol_dem.py."), *LoadError);
-		return;
-	}
-
-	UE_LOG(LogTemp, Display, TEXT("Terrain: %s, altitude %.0f-%.0f m, %d mips, loaded in %.2f s"),
-		*Heightmap->GetSourceInfo().Label, Heightmap->GetMinAltitudeMeters(), Heightmap->GetMaxAltitudeMeters(),
-		Heightmap->GetMipCount(), FPlatformTime::Seconds() - StartSeconds);
-
-	// The environment reads the elevation model, and the terrain field reads the
-	// rivers traced out of it. That order is what keeps the carve out of the solve
-	// that produced it.
-	if (!BuildEnvironment(Heightmap.ToSharedRef()))
-	{
-		return;
-	}
-	BuildTerrainField(Heightmap.ToSharedRef());
-	SpawnAltitudeMeters = static_cast<float>(TerrainField->GetMaxAltitudeMeters()) + 2200.0f;
-
-	// One habitat field for everything that reads the world: the terrain's
-	// textures, the plants standing on them and the debug views all have to
-	// answer the same about a given point, and they do so by construction when
-	// they read the same field.
 	const TSharedRef<const FMassifEnvironmentState> Environment = EnvironmentScheduler->GetSharedState();
-	const TSharedRef<const FMassifHabitatField> HabitatField = MakeShared<const FMassifHabitatField>(
-		TerrainField.ToSharedRef(), Environment, GetMasterSeed());
 
 	TerrainManager = GetWorld()->SpawnActor<AMassifTerrainManager>();
 	TerrainManager->Initialize(TerrainField, LoadTerrainMaterial());
@@ -407,7 +567,6 @@ void AMassifGameMode::LoadTerrainAndSpawnManagers()
 	FoliageManager = GetWorld()->SpawnActor<AMassifFoliageManager>();
 	FoliageManager->Initialize(TerrainField, Environment, GetMasterSeed());
 
-	BuildObjectStore(Environment.Get());
 	RockManager = GetWorld()->SpawnActor<AMassifRockManager>();
 	RockManager->Initialize(ObjectStore);
 
@@ -418,30 +577,6 @@ void AMassifGameMode::LoadTerrainAndSpawnManagers()
 
 	FogManager = GetWorld()->SpawnActor<AMassifFogManager>();
 	FogManager->Initialize(Environment, TerrainField, FMassifGeoreference().LatitudeDegrees);
-
-}
-
-void AMassifGameMode::BuildTerrainField(TSharedRef<const FMassifHeightmap> Heightmap)
-{
-	const TSharedRef<const FMassifRiverNetwork> Rivers =
-		MassifExtractRivers(
-			EnvironmentScheduler->GetState(), EnvironmentScheduler->GetElevation(),
-			GetEnvironmentParams().Rivers);
-	LogRiverSummary(Rivers.Get());
-
-	RiverNetwork = Rivers;
-	RiverField = FMassifRiverField::Build(Rivers.Get(), MassifDefaultBankReachMeters);
-	TerrainField = MakeShared<const FMassifTerrainField>(MoveTemp(Heightmap), RiverField.ToSharedRef());
-
-	UE_LOG(LogTemp, Display, TEXT("Terrain field: %.0f m across, %d channel segments cut into it"),
-		TerrainField->GetWorldSizeMeters(), RiverField->GetSegmentCount());
-
-	const FMassifRiverNode* Node = BusiestNode(Rivers.Get());
-	if (Node != nullptr)
-	{
-		GBusiestNodeMeters = Node->PositionMeters;
-		bGBusiestNodeFound = true;
-	}
 }
 
 void AMassifGameMode::SpawnWaterBodies()
@@ -455,43 +590,50 @@ void AMassifGameMode::SpawnWaterBodies()
 	WaterBodyManager->Initialize(*RiverNetwork, GBusiestNodeMeters, MassifDrawnWaterTimeSlice());
 }
 
-bool AMassifGameMode::BuildEnvironment(TSharedRef<const FMassifHeightmap> Heightmap)
+namespace
 {
-	const double StartSeconds = FPlatformTime::Seconds();
-
-	FString BuildError;
-	TUniquePtr<FMassifEnvironmentScheduler> Scheduler = MassifPrepareEnvironment(
-		MakeShared<const FMassifHeightmapElevationSource>(MoveTemp(Heightmap)),
-		FMassifGeoreference(),
-		GetMasterSeed(),
-		GetEnvironmentParams(),
-		BuildError);
-	if (!Scheduler.IsValid())
+	void SaveCommand(const TArray<FString>& Arguments, UWorld* World)
 	{
-		UE_LOG(LogTemp, Error, TEXT("Environment: %s. Nothing downstream of the solve is built."), *BuildError);
-		return false;
+		AMassifGameMode* GameMode = World->GetAuthGameMode<AMassifGameMode>();
+		if (GameMode == nullptr)
+		{
+			return;
+		}
+
+		const FString SaveName = SaveNameFrom(Arguments);
+		const double StartSeconds = FPlatformTime::Seconds();
+		FString SaveError;
+		if (!GameMode->SaveGame(SaveName, SaveError))
+		{
+			UE_LOG(LogTemp, Error, TEXT("Save '%s': %s"), *SaveName, *SaveError);
+			return;
+		}
+		UE_LOG(LogTemp, Display, TEXT("Save '%s': written in %.2f s"),
+			*SaveName, FPlatformTime::Seconds() - StartSeconds);
 	}
 
-	// Before the first solve, so a world set to something other than the defaults
-	// is solved once at what it is set to rather than twice.
-	MassifEnvironmentSettings::ApplySaved(*Scheduler);
-	Scheduler->Execute();
-
-	EnvironmentScheduler = MakeShareable(Scheduler.Release());
-	LogEnvironmentSummary(FPlatformTime::Seconds() - StartSeconds);
-	return true;
+	void LoadCommand(const TArray<FString>& Arguments, UWorld* World)
+	{
+		AMassifGameMode* GameMode = World->GetAuthGameMode<AMassifGameMode>();
+		if (GameMode == nullptr)
+		{
+			return;
+		}
+		GameMode->LoadGame(SaveNameFrom(Arguments));
+	}
 }
 
-void AMassifGameMode::BuildObjectStore(const FMassifEnvironmentState& Environment)
+void AMassifGameMode::LogObjectStoreSummary(const FMassifWorldBuildResult& Result) const
 {
-	const double StartSeconds = FPlatformTime::Seconds();
-	ObjectStore = MakeShared<const FMassifObjectStore>(
-		MassifObjectStoreBuilder::BuildFromEnvironment(Environment, FMassifObjectTypeRegistry::Get()));
+	FString Origin = FString::Printf(TEXT("built in %.2f s"), Result.ObjectStoreSeconds);
+	if (Result.LoadedSimState.IsSet())
+	{
+		Origin = TEXT("read from the save");
+	}
 
-	UE_LOG(LogTemp, Display, TEXT("Object store: %d objects over %d chunks, %.1f MB resident, built in %.2f s"),
+	UE_LOG(LogTemp, Display, TEXT("Object store: %d objects over %d chunks, %.1f MB resident, %s"),
 		ObjectStore->GetRecordCount(), ObjectStore->GetChunkGrid().ChunkCount(),
-		ObjectStore->GetResidentByteCount() / (1024.0 * 1024.0),
-		FPlatformTime::Seconds() - StartSeconds);
+		ObjectStore->GetResidentByteCount() / (1024.0 * 1024.0), *Origin);
 }
 
 void AMassifGameMode::LogEnvironmentSummary(double SolveSeconds) const
@@ -537,6 +679,9 @@ void AMassifGameMode::LogRiverSummary(const FMassifRiverNetwork& Rivers) const
 			"largest %.1f m3/s and %.1f m wide"),
 		Rivers.GetReaches().Num(), Rivers.GetSourceCount(), Rivers.GetTotalLengthMeters() / 1000.0,
 		Rivers.GetMaxStrahlerOrder(), Rivers.GetMaxDischargeCubicMetersPerSecond(), Rivers.GetMaxWidthMeters());
+
+	UE_LOG(LogTemp, Display, TEXT("Terrain field: %.0f m across, %d channel segments cut into it"),
+		TerrainField->GetWorldSizeMeters(), RiverField->GetSegmentCount());
 
 	const FMassifRiverBedSummary Bed = MeasureRiverBed(Rivers);
 	UE_LOG(LogTemp, Display,
@@ -598,6 +743,12 @@ void AMassifGameMode::ScheduleDebugScreenshot()
 
 void AMassifGameMode::SpawnEnvironmentActors()
 {
+	// The sky outlives a world being replaced, so a second generation does not put a
+	// second sun in it.
+	if (SunLight != nullptr)
+	{
+		return;
+	}
 	SpawnSunAndSky();
 
 	// After the sun, not before it: the manager drives that light, and spawning it

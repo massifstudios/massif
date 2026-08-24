@@ -209,6 +209,11 @@ FText SMassifEnvironmentSettings::GetAffectedText() const
 	{
 		return NSLOCTEXT("Massif", "SettingsNoChanges", "No changes staged.");
 	}
+	if (Model->GetApplyMode() == EMassifSettingsApplyMode::RecordForNextGeneration)
+	{
+		return NSLOCTEXT("Massif", "SettingsNextGeneration",
+			"Applies to the next world generated.");
+	}
 	return FText::FromString(
 		FString::Printf(TEXT("Applying re-solves: %s"), *FString::Join(Affected, TEXT(", "))));
 }

@@ -34,6 +34,18 @@ struct FMassifRelaxationGroup
 };
 
 /**
+ * Called as each process run begins, so a progress screen can name what is being
+ * solved and how far through the solve it is.
+ *
+ * Diagnostic only, in the same sense as the per-process timings: it is never read
+ * by a solve and never reaches a channel, so it cannot make one machine's world
+ * differ from another's. A relaxed group reports once per member per iteration,
+ * because that is what the solve actually spends its time on.
+ */
+using FMassifSolveProgressReporter =
+	TFunction<void(FName ProcessName, int32 CompletedRunCount, int32 TotalRunCount)>;
+
+/**
  * Orders the environment processes and runs them (ARCHITECTURE §5.6.3).
  *
  * Order comes from what the processes declare they read and write, not from the
@@ -100,6 +112,9 @@ public:
 
 	/** What to call the process in front of a player. The process name where it declared nothing. */
 	FString GetDisplayName(FName ProcessName) const;
+
+	/** Where the next Execute reports its progress. Unset by default. */
+	void SetProgressReporter(FMassifSolveProgressReporter Reporter);
 
 	/** Runs every dirty group in schedule order. */
 	void Execute();
@@ -204,6 +219,9 @@ private:
 	void RunGroup(const FMassifRelaxationGroup& Group);
 	void RunProcess(FProcessNode& Node);
 
+	/** Process runs the dirty groups add up to, which is what a progress fraction is over. */
+	int32 CountPendingProcessRuns() const;
+
 	TSharedRef<const IMassifElevationSource> Elevation;
 	FMassifGeoreference Georeference;
 	uint32 MasterSeed = 0;
@@ -226,4 +244,10 @@ private:
 	int32 RelaxationIterationCount = 4;
 	bool bGpuEnabled = true;
 	bool bScheduleBuilt = false;
+
+	FMassifSolveProgressReporter ProgressReporter;
+
+	/** Reset at the top of each Execute, so a fraction is over that run's work and not the last one's. */
+	int32 CompletedProcessRunCount = 0;
+	int32 TotalProcessRunCount = 0;
 };

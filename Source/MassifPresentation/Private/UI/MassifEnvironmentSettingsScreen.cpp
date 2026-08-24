@@ -4,9 +4,17 @@
 #include "Engine/GameViewportClient.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
+#include "MassifElevationSource.h"
+#include "MassifEnvironmentBakeParams.h"
+#include "MassifEnvironmentGraph.h"
+#include "MassifEnvironmentScheduler.h"
+#include "MassifEnvironmentSettings.h"
 #include "MassifEnvironmentSettingsModel.h"
 #include "SMassifEnvironmentSettings.h"
+#include "Style/MassifWidgetStyles.h"
+#include "Widgets/Images/SImage.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/SOverlay.h"
 
 namespace
 {
@@ -14,6 +22,33 @@ namespace
 	TSharedPtr<SWidget> GScreenWidget;
 	TSharedPtr<FMassifEnvironmentSettingsModel> GModel;
 	TWeakObjectPtr<UGameViewportClient> GViewport;
+
+	/** Only set where there was no world to read, and dropped with the screen. */
+	TSharedPtr<FMassifEnvironmentScheduler> GMenuScheduler;
+
+	/**
+	 * A graph with nothing solved in it, for the screen opened from the main menu.
+	 *
+	 * The rows are a property of the process graph — which systems exist, which
+	 * levels each implements — and not of the ground underneath it, so an analytic
+	 * world two kilometres across lists exactly what the real one would. Nothing is
+	 * ever executed on it.
+	 */
+	TSharedPtr<FMassifEnvironmentScheduler> MakeMenuScheduler()
+	{
+		FString PrepareError;
+		TUniquePtr<FMassifEnvironmentScheduler> Scheduler = MassifPrepareEnvironment(
+			MakeShared<const FMassifAnalyticElevationSource>(FMassifAnalyticElevationSource::FParams()),
+			FMassifGeoreference(), 0, FMassifEnvironmentBakeParams(), PrepareError);
+		if (!Scheduler.IsValid())
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Settings: %s"), *PrepareError);
+			return nullptr;
+		}
+
+		MassifEnvironmentSettings::ApplySaved(*Scheduler);
+		return MakeShareable(Scheduler.Release());
+	}
 
 	/**
 	 * Takes the camera away from the screen while it is up, and gives it back after.
@@ -39,7 +74,15 @@ namespace
 
 	TSharedRef<SWidget> BuildScreen()
 	{
-		return SNew(SBox)
+		// The scrim is what makes this read as a screen rather than as a panel dropped
+		// on top of one: over a world it dims the terrain, and over the menu it puts
+		// the entries it covers plainly out of reach.
+		return SNew(SOverlay)
+			+ SOverlay::Slot()
+			[
+				SNew(SImage).Image(MassifWidgetStyles::ScrimBrush())
+			]
+			+ SOverlay::Slot()
 			.HAlign(HAlign_Center)
 			.VAlign(VAlign_Center)
 			[
@@ -74,6 +117,7 @@ void MassifEnvironmentSettingsScreen::Close()
 	}
 	GScreenWidget.Reset();
 	GModel.Reset();
+	GMenuScheduler.Reset();
 	GViewport.Reset();
 }
 
@@ -84,18 +128,31 @@ void MassifEnvironmentSettingsScreen::Toggle(UWorld* World)
 		Close();
 		return;
 	}
-
-	FMassifEnvironmentScheduler* Scheduler = MassifEnvironmentInspector::FindScheduler(World);
-	if (Scheduler == nullptr || World->GetGameViewport() == nullptr)
+	if (World == nullptr || World->GetGameViewport() == nullptr)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("massif.Env.Settings: no environment has been solved yet"));
 		return;
 	}
 
-	GModel = MakeShared<FMassifEnvironmentSettingsModel>(*Scheduler);
+	// Over a solved world the screen edits that world. From the menu there is none
+	// yet, so it edits what the next generation will be run at instead.
+	FMassifEnvironmentScheduler* Scheduler = MassifEnvironmentInspector::FindScheduler(World);
+	EMassifSettingsApplyMode ApplyMode = EMassifSettingsApplyMode::Resolve;
+	if (Scheduler == nullptr)
+	{
+		GMenuScheduler = MakeMenuScheduler();
+		if (!GMenuScheduler.IsValid())
+		{
+			return;
+		}
+		Scheduler = GMenuScheduler.Get();
+		ApplyMode = EMassifSettingsApplyMode::RecordForNextGeneration;
+	}
+
+	GModel = MakeShared<FMassifEnvironmentSettingsModel>(*Scheduler, ApplyMode);
 	GViewport = World->GetGameViewport();
 	GScreenWidget = BuildScreen();
-	GViewport->AddViewportWidgetContent(GScreenWidget.ToSharedRef(), 100);
+	// Over the main menu, under the loading screen.
+	GViewport->AddViewportWidgetContent(GScreenWidget.ToSharedRef(), 250);
 	HoldCameraStill(World, true);
 }
 

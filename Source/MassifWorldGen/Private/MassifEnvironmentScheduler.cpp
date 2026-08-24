@@ -610,6 +610,12 @@ void FMassifEnvironmentScheduler::MarkAllDirty()
 
 void FMassifEnvironmentScheduler::RunProcess(FProcessNode& Node)
 {
+	if (ProgressReporter)
+	{
+		ProgressReporter(Node.Declaration.Name, CompletedProcessRunCount, TotalProcessRunCount);
+	}
+	++CompletedProcessRunCount;
+
 	const double StartedSeconds = FPlatformTime::Seconds();
 
 	FMassifEnvironmentContext Context(State.Get(), Elevation.Get(), Georeference, MasterSeed, Node.Declaration);
@@ -666,9 +672,32 @@ void FMassifEnvironmentScheduler::RunGroup(const FMassifRelaxationGroup& Group)
 	}
 }
 
+void FMassifEnvironmentScheduler::SetProgressReporter(FMassifSolveProgressReporter Reporter)
+{
+	ProgressReporter = MoveTemp(Reporter);
+}
+
+int32 FMassifEnvironmentScheduler::CountPendingProcessRuns() const
+{
+	int32 RunCount = 0;
+	for (int32 GroupIndex = 0; GroupIndex < Groups.Num(); ++GroupIndex)
+	{
+		if (!GroupIsDirty[GroupIndex])
+		{
+			continue;
+		}
+		RunCount += Groups[GroupIndex].ProcessIndices.Num() * Groups[GroupIndex].IterationCount;
+	}
+	return RunCount;
+}
+
 void FMassifEnvironmentScheduler::Execute()
 {
 	checkf(bScheduleBuilt, TEXT("Execute called before BuildSchedule succeeded"));
+
+	CompletedProcessRunCount = 0;
+	TotalProcessRunCount = CountPendingProcessRuns();
+
 	for (int32 GroupIndex = 0; GroupIndex < Groups.Num(); ++GroupIndex)
 	{
 		if (GroupIsDirty[GroupIndex])

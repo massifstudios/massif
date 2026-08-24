@@ -29,6 +29,15 @@ public:
 	/** Resets to tick zero on the given seed and starts advancing. */
 	void StartNewGame(int32 MasterSeed);
 
+	/**
+	 * Puts a loaded world back and starts advancing from where it stopped.
+	 *
+	 * Queued commands are dropped rather than carried: they were issued against the
+	 * session that saved, and applying them to a restored state would advance it past
+	 * what the save says it is.
+	 */
+	void RestoreGame(FMassifSimState LoadedState);
+
 	/** Queued now, applied at the start of the next sim tick. Never immediately. */
 	void EnqueueCommand(const FMassifSimCommand& Command);
 

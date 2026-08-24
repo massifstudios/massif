@@ -8,12 +8,16 @@ UMassifEnvironmentSettings& UMassifEnvironmentSettings::Get()
 	return *GetMutableDefault<UMassifEnvironmentSettings>();
 }
 
-int32 MassifEnvironmentSettings::ApplySaved(FMassifEnvironmentScheduler& Scheduler)
+TMap<FName, FString> MassifEnvironmentSettings::ReadSaved()
 {
-	const UMassifEnvironmentSettings& Settings = UMassifEnvironmentSettings::Get();
+	return UMassifEnvironmentSettings::Get().ProcessFidelities;
+}
 
+int32 MassifEnvironmentSettings::Apply(
+	FMassifEnvironmentScheduler& Scheduler, const TMap<FName, FString>& Fidelities)
+{
 	int32 MovedCount = 0;
-	for (const TPair<FName, FString>& Saved : Settings.ProcessFidelities)
+	for (const TPair<FName, FString>& Saved : Fidelities)
 	{
 		const TOptional<EMassifFidelity> Fidelity = MassifFidelityLabels::Parse(Saved.Value);
 		if (Fidelity.IsSet())
@@ -22,6 +26,11 @@ int32 MassifEnvironmentSettings::ApplySaved(FMassifEnvironmentScheduler& Schedul
 		}
 	}
 	return MovedCount;
+}
+
+int32 MassifEnvironmentSettings::ApplySaved(FMassifEnvironmentScheduler& Scheduler)
+{
+	return Apply(Scheduler, ReadSaved());
 }
 
 void MassifEnvironmentSettings::Save(const FMassifEnvironmentScheduler& Scheduler)

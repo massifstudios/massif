@@ -42,6 +42,16 @@ namespace MassifEnvironmentSettings
 	 */
 	int32 ApplySaved(FMassifEnvironmentScheduler& Scheduler);
 
+	/**
+	 * The saved levels as plain data, for a build that runs off the game thread.
+	 *
+	 * The settings live on a UObject, so they are read here and carried across
+	 * rather than reached for from a worker.
+	 */
+	TMap<FName, FString> ReadSaved();
+
+	int32 Apply(FMassifEnvironmentScheduler& Scheduler, const TMap<FName, FString>& Fidelities);
+
 	/** Writes every process's current level. */
 	void Save(const FMassifEnvironmentScheduler& Scheduler);
 }

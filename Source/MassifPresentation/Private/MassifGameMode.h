@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/GameModeBase.h"
+#include "MassifWorldBuild.h"
 #include "MassifGameMode.generated.h"
 
 class AMassifDebugChannelView;
@@ -35,6 +36,26 @@ public:
 
 	virtual void BeginPlay() override;
 
+	/**
+	 * Solves the world from the seed and spawns everything that draws it.
+	 *
+	 * Called by the main menu rather than by BeginPlay, so a run opens on the menu
+	 * in a second instead of on a solve nobody asked for.
+	 */
+	void StartNewGame();
+
+	/** Same build, with the seed and the objects coming off the save instead. */
+	void LoadGame(const FString& SaveName);
+
+	/** Writes the world as it stands. False fills OutError with something the UI can show. */
+	bool SaveGame(const FString& SaveName, FString& OutError);
+
+	/** Whether there is a world to save. */
+	bool HasWorld() const
+	{
+		return TerrainField.IsValid();
+	}
+
 	/** The solved environment, for the debug inspector and the fidelity commands. Null until it is built. */
 	TSharedPtr<FMassifEnvironmentScheduler> GetEnvironmentScheduler() const
 	{
@@ -54,27 +75,27 @@ public:
 	}
 
 private:
-	/** Puts the simulation on the master seed and starts it ticking, so the wall clock runs. */
-	void StartSimulation();
+	/** Puts the simulation on the built world and starts it ticking, so the wall clock runs. */
+	void StartSimulation(FMassifWorldBuildResult& Result);
 
-	void LoadTerrainAndSpawnManagers();
+	/** Hands the solve to a worker. The game thread keeps ticking, so the loading screen moves. */
+	void BeginWorldBuild(const FString& SaveName);
 
-	/**
-	 * Solves water over the whole world, which is what habitat and foliage read
-	 * (ARCHITECTURE 5.6). False where the graph refused to schedule, in which case
-	 * nothing downstream of it is built.
-	 */
-	bool BuildEnvironment(TSharedRef<const FMassifHeightmap> Heightmap);
+	/** Takes the solved world back on the game thread and spawns everything that draws it. */
+	void FinishWorldBuild(FMassifWorldBuildResult Result);
 
-	/** Drains the bake's point sets into the store the world is drawn and saved from. */
-	void BuildObjectStore(const FMassifEnvironmentState& Environment);
+	void SpawnWorldActors(TSharedRef<const FMassifHabitatField> HabitatField);
+
+	/** Drops everything that reads the old terrain, so a second world does not stack on the first. */
+	void TearDownWorld();
+
+	/** Honours -MassifSaveAfter, which is how the save path is exercised without hands. */
+	void WriteRequestedSave();
 
 	void LogEnvironmentSummary(double SolveSeconds) const;
 	void LogRockfallSummary(const FMassifEnvironmentState& Environment) const;
 	void LogRiverSummary(const FMassifRiverNetwork& Rivers) const;
-
-	/** The elevation model with the solved rivers cut into it. Needs the environment to have run. */
-	void BuildTerrainField(TSharedRef<const FMassifHeightmap> Heightmap);
+	void LogObjectStoreSummary(const FMassifWorldBuildResult& Result) const;
 
 	/** Puts the baked fluid region on the largest channel the world traced. */
 	void SpawnWaterBodies();
@@ -127,6 +148,14 @@ private:
 	/** Kept so the daylight manager can aim it where the clock says the sun is. */
 	UPROPERTY()
 	TObjectPtr<ADirectionalLight> SunLight;
+
+	/** Shared with the worker and with the loading screen reading it. Null when no build is running. */
+	TSharedPtr<FMassifWorldBuildProgress> BuildProgress;
+
+	/** What a save written from this world records about the ground it stands on. */
+	FString ElevationModelName;
+	uint64 ElevationModelHash = 0;
+	uint32 MasterSeed = 0;
 
 	float SpawnAltitudeMeters = 0.0f;
 };

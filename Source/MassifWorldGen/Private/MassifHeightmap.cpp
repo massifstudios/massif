@@ -1,5 +1,6 @@
 #include "MassifHeightmap.h"
 
+#include "Hash/CityHash.h"
 #include "Misc/FileHelper.h"
 
 namespace
@@ -103,6 +104,9 @@ TSharedPtr<const FMassifHeightmap> FMassifHeightmap::LoadFromBytes(TArrayView<co
 	FinestLevel.Samples.SetNumUninitialized(Width * Height);
 	FMemory::Memcpy(FinestLevel.Samples.GetData(), Bytes.GetData() + DemHeaderBytes, SampleBytes);
 
+	Heightmap->ContentHash = CityHash64(
+		reinterpret_cast<const char*>(Bytes.GetData()), static_cast<uint32>(Bytes.Num()));
+
 	Heightmap->BuildMipChain();
 	Heightmap->ComputeAltitudeRange();
 	return Heightmap;
@@ -140,6 +144,10 @@ TSharedRef<const FMassifHeightmap> FMassifHeightmap::FromAltitudes(
 		const double Steps = (AltitudesMeters[Index] - Lowest) / Heightmap->QuantisationStepMeters;
 		FinestLevel.Samples[Index] = static_cast<uint16>(FMath::Clamp(FMath::RoundToDouble(Steps), 0.0, static_cast<double>(MAX_uint16)));
 	}
+
+	Heightmap->ContentHash = CityHash64(
+		reinterpret_cast<const char*>(AltitudesMeters.GetData()),
+		static_cast<uint32>(AltitudesMeters.Num() * sizeof(double)));
 
 	Heightmap->BuildMipChain();
 	Heightmap->ComputeAltitudeRange();
